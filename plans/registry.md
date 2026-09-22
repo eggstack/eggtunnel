@@ -35,7 +35,7 @@ Accepted architectural decisions:
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M001 repository and protocol foundation | ready | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | Execute against baseline 82fe121c208a6dd4c06acaaf1ab3b5ba03d7a847 plus later planning-only commits; inspect current head first and preserve user changes. |
+| Reverse session | M001 repository and protocol foundation | ready | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | Execute against baseline 43b761b14c9e1ee5a42a74ebe841dad875d9610e; later commits are planning-only baseline refreshes. Inspect current head first and preserve user changes. |
 
 ## Blocked implementation plans
 
