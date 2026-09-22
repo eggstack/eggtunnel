@@ -1,10 +1,10 @@
 # Reverse Session M004 — QUIC Transport
 
-Status: blocked — requires accepted M003 closure and baseline refresh before execution
+Status: active
 
-Planning baseline: 82fe121c208a6dd4c06acaaf1ab3b5ba03d7a847
+Planning baseline: 31458e83e543304d6b271898575bf2f6e98c7352
 
-Before this plan becomes ready, replace the planning baseline with the accepted M003 reviewed head and reconcile it against the implemented transport/session abstraction.
+M003 is closed at the baseline above. The public target stream and resource lifecycle boundaries were reconciled before starting QUIC work.
 
 Source roadmap:
 

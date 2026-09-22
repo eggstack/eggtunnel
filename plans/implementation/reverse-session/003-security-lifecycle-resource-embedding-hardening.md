@@ -1,8 +1,10 @@
 # Reverse Session M003 — Security, Lifecycle, Resource, and Embedding Hardening
 
-Status: active
+Status: closed
 
 Planning baseline: 13402200e51b46031a1a82240be1eb48027a09f4
+
+Closure: `plans/closure/reverse-session/003-status.md`; accepted reviewed head `31458e83e543304d6b271898575bf2f6e98c7352`.
 
 M002 is closed at the baseline above. M002 closure findings promoted into this milestone: exhaustive cancellation injection and repeated lifecycle/pending-expiry qualification.
 

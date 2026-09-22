@@ -29,18 +29,25 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M003 active | M002 is closed at `13402200e51b46031a1a82240be1eb48027a09f4`. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M004 active | M003 is closed at `31458e83e543304d6b271898575bf2f6e98c7352`. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M003 security/lifecycle/resource/embedding hardening | active | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | M002 is closed; lifecycle qualification gaps are promoted into this milestone. |
+| Reverse session | M004 QUIC transport | active | plans/implementation/reverse-session/004-quic-transport.md | M003 is closed; transport and stream lifecycle boundaries are qualified. |
+
+## Ready implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+|---|---|---|---|---|
+| Reverse session | M005 restricted-network transports/proxy traversal | ready | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | M003 is closed; execution is sequenced after M004. |
 
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / pending evidence |
 |---|---|---|---|---|
+| Reverse session | M003 security/lifecycle/resource/embedding hardening | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md; final head `31458e83e543304d6b271898575bf2f6e98c7352`. |
 | Reverse session | M002 TCP/TLS reverse-tunnel product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md; final head `13402200e51b46031a1a82240be1eb48027a09f4`. |
 | Reverse session | M001 repository and protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; final head `357480b942e95ef7087d86a043f26b7a3d175687`. |
 
@@ -48,13 +55,11 @@ Accepted architectural decisions:
 
 | Subsystem | Milestone | Status | Implementation plan | Blocker |
 |---|---|---|---|---|
-| Reverse session | M004 QUIC transport | blocked | plans/implementation/reverse-session/004-quic-transport.md | Requires strict M003 closure and execution-baseline refresh. |
-| Reverse session | M005 restricted-network transports/proxy traversal | blocked | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | Requires strict M003 closure and execution-baseline refresh. |
 | Reverse session | M006 distribution/downstream qualification | blocked | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Requires strict M003 closure plus closure of every optional transport intended for the first supported release matrix. |
 
 ## Closure work
 
-M001 and M002 are closed with executable local evidence recorded in their closure files. M003 is active against accepted M002 head `13402200e51b46031a1a82240be1eb48027a09f4`; it owns the promoted lifecycle qualification gaps.
+M001-M003 are closed with executable local evidence recorded in their closure files. M004 is active against accepted M003 head `31458e83e543304d6b271898575bf2f6e98c7352`; M005 is ready and sequenced after M004.
 
 M001 closure was completed as follows:
 

@@ -1,10 +1,10 @@
 # Reverse Session M005 — Restricted-Network Transports and Proxy Traversal
 
-Status: blocked — requires accepted M003 closure and baseline refresh before execution
+Status: ready
 
-Planning baseline: 82fe121c208a6dd4c06acaaf1ab3b5ba03d7a847
+Planning baseline: 31458e83e543304d6b271898575bf2f6e98c7352
 
-Before this plan becomes ready, replace the planning baseline with the accepted M003 reviewed head and reconcile all transport assumptions.
+M003 is closed at the baseline above. Execution is sequenced after M004 to keep the optional transport change sets isolated.
 
 Source roadmap:
 
