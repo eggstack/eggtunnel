@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M004/M005 closed; M006 ready for distribution qualification
+Status: active — M004/M005 closed; M006 distribution qualification in progress
 
 Canonical references:
 
@@ -474,4 +474,4 @@ Explicitly deferred until after M006 or a new ADR:
 | M003 hardening/embedding | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md | — |
 | M004 QUIC | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md | M003 closed at `31458e83e543304d6b271898575bf2f6e98c7352` |
 | M005 WSS/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md | M003/M004 closed |
-| M006 distribution/downstream | ready | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | M003 and all transport milestones closed |
+| M006 distribution/downstream | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | Hosted release-target and install evidence pending |

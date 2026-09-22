@@ -1,10 +1,10 @@
 # Reverse Session M006 — Distribution and Downstream Qualification
 
-Status: blocked — requires accepted M003 closure, selected transport closure, and baseline refresh before execution
+Status: active — M003–M005 are closed; distribution and downstream qualification is underway
 
-Planning baseline: 82fe121c208a6dd4c06acaaf1ab3b5ba03d7a847
+Planning baseline: 448c615 (accepted M005 head)
 
-Before this plan becomes ready, replace the planning baseline with the latest accepted reviewed head for all product transports intended in the first supported release matrix.
+The accepted M003–M005 closure records and the candidate transport matrix were reviewed before execution. The baseline above is the latest accepted reviewed head at M006 start.
 
 Source roadmap:
 
@@ -334,3 +334,76 @@ Stop and report if:
 - exact commands/results;
 - deferred targets/features;
 - final release-readiness disposition.
+
+## 21. Execution record (2026-09-22)
+
+### Implemented
+
+- Classified `eggtunnel-proto` and `eggtunnel` as publishable libraries and
+  kept `eggtunnel-cli` private. Added crate metadata and documented the required
+  `eggtunnel-proto` then `eggtunnel` publication order.
+- Added public API, distribution, and protocol compatibility guidance. The
+  protocol document distinguishes crate versioning from wire version 1.0 and
+  states that the current capability set is empty.
+- Added a deterministic dependency-notice generator, an install-only
+  Linux/macOS script, a local archive/install smoke script, and a tag-driven
+  release workflow for four candidate Linux/macOS targets. The release job
+  assembles versioned archives and SHA-256 checksums and generates GitHub build
+  provenance attestations.
+- Added CI coverage for all workspace features, generated docs, and the
+  downstream embedder fixture.
+- Eggup inspection found verified local staging and transaction primitives but
+  no released downloader, release selector, bootstrap installer, or service
+  manager interface. Self-update is explicitly deferred; Eggtunnel uses the
+  small install-only script.
+
+### Local verification
+
+Environment: Rust/Cargo 1.98.1; local Apple Silicon macOS host
+(`aarch64-apple-darwin`). Commands run against the working tree based on
+`448c6159696c7f2792e563622bc525c35028d24b`.
+
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+- `cargo test --locked --workspace --all-targets --all-features`: 31 tests
+  passed across 3 suites.
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D
+  warnings`: passed with no warnings.
+- `cargo doc --locked --workspace --all-features --no-deps`: passed.
+- `cargo check --locked --manifest-path fixtures/embedder/Cargo.toml`: passed.
+- Release-mode CLI `cargo check` passed for `x86_64-apple-darwin` and
+  `aarch64-apple-darwin`.
+- Local Linux cross-target checking could not run: the host lacks
+  `x86_64-linux-gnu-gcc`, required by `ring`. Linux release builds remain
+  assigned to their matching hosted runners.
+- `scripts/test-install.sh`: passed. It installed a local archive to a custom
+  destination, ran `eggtunnel version`, and confirmed checksum corruption and
+  an unsupported target are rejected.
+- `cargo package --locked --list -p eggtunnel --allow-dirty` and the equivalent
+  `eggtunnel-proto` command listed their package contents successfully.
+- `cargo publish --locked --dry-run -p eggtunnel-proto --allow-dirty` passed
+  earlier in M006. No package was published. Packaging/publishing `eggtunnel`
+  cannot complete until its versioned `eggtunnel-proto` dependency is available
+  from crates.io; do not bypass this ordering by publishing automatically.
+- The local aarch64 macOS archive path has install/runtime smoke evidence. No
+  hosted release workflow, other archive runtime, Linux runtime, or public
+  registry publication has been executed.
+
+### Open closure gates
+
+- Run the release workflow on hosted x86_64/arm64 Linux and Intel/arm64 macOS
+  runners; inspect each produced archive, checksum, and attestation, and run
+  install/version smoke on each target.
+- Complete advisory and license policy review before any crate publication.
+  The generated notice is a dependency inventory, not legal approval; this
+  repository has no established `cargo audit`/`cargo deny` workflow to claim.
+- Publish `eggtunnel-proto` and then `eggtunnel` only after review, then run the
+  embedder fixture against registry dependencies. No publish or release action
+  is authorized by this implementation work.
+- Decide supported-platform claims from the hosted evidence. Windows, musl,
+  armv7, Raspberry Pi-class runtime qualification, and Le Potato-class runtime
+  qualification remain deferred.
+
+Disposition: M006 implementation and local qualification are in place, but the
+acceptance criteria requiring hosted release artifacts, downstream registry
+consumption, and completed security/license review are still open. Keep M006
+active; do not declare the distribution qualified or publish a release yet.

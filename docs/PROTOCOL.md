@@ -1,5 +1,14 @@
 # Native protocol, version 1.0
 
+The wire version is distinct from the Rust crate version. The current crate
+release line is Eggtunnel `0.1.x` and uses wire version `1.0`. The crates are
+pre-1.0: Rust API compatibility is not promised across minor releases until a
+1.0 library release. Wire major-version mismatches are rejected. Minor
+versions are currently informational; there is no backward-peer support
+window or capability negotiation beyond exchanging the current empty
+capability set. Do not infer a long-term 1.x protocol guarantee from the
+current wire number.
+
 Each control frame has a 14-byte header followed by one postcard payload:
 
 | Offset | Size | Meaning |
@@ -25,6 +34,6 @@ Stable message IDs are: 1 ClientHello, 2 ServerHello, 3 Auth, 4 AuthOk,
 discriminants and are not derived from enum order.
 
 Credentials are represented only by the Auth payload and must only be sent
-after a secure transport is established. M001 does not implement TLS or
-authentication. Application payload frames are not part of the control
-protocol; after DataHello, data streams are intended to carry opaque bytes.
+after a secure transport is established. After DataHello, data streams carry
+opaque application bytes; application payload frames are not part of the
+control protocol.

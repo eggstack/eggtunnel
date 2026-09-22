@@ -21,5 +21,6 @@ QUIC is available with the optional `quic` feature and `transport = "quic"` CLI
 setting. Optional `websocket` support provides WSS, and `outbound-proxy` adds
 listener-free direct, HTTP CONNECT, and SOCKS5 traversal. Proxy credentials are
 read from an environment variable; see the configuration guide and support
-matrix for limitations and tested combinations. Release packaging remains a
-roadmap item.
+matrix for limitations and tested combinations. See the
+[distribution policy](docs/DISTRIBUTION.md) for the candidate release targets
+and qualification state.

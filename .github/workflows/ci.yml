@@ -14,5 +14,7 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo check --locked --workspace --all-targets
-      - run: cargo test --locked --workspace --all-targets
+      - run: cargo test --locked --workspace --all-targets --all-features
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --locked --workspace --all-features --no-deps
+      - run: cargo check --locked --manifest-path fixtures/embedder/Cargo.toml

@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/eggtunnel"
+readme = "README.md"
+keywords = ["reverse-tunnel", "proxy", "networking", "async"]
+categories = ["network-programming"]
 
 [features]
 default = ["client", "tls"]

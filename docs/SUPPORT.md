@@ -14,3 +14,16 @@ Session uses QUIC over UDP. WebSocket uses WSS and rejects mTLS. Outbound proxy
 credentials come from an environment variable; proxy+QUIC and proxy+mTLS are
 rejected. WebSocket half-close behavior is limited by WebSocket full-connection
 close semantics and is not qualified as TCP half-close equivalent.
+
+## Release target evidence
+
+| Target | Current evidence | Claim |
+|---|---|---|
+| `aarch64-apple-darwin` | Local host runs the workspace suite; local release archive/install smoke passed | Local smoke evidence only; hosted release qualification pending |
+| `x86_64-unknown-linux-gnu` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
+| `aarch64-unknown-linux-gnu` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
+| `x86_64-apple-darwin` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
+| Windows, musl, armv7, Raspberry Pi/Le Potato variants | No release runner/runtime evidence recorded | Unsupported/unevaluated |
+
+The release workflow produces archives, SHA-256 manifests, and build
+attestations for the four candidate targets. It does not publish Rust crates.

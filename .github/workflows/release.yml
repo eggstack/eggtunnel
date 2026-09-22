@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify release tag matches workspace version
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          manifest_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "$version" = "$manifest_version"
+      - name: Build CLI
+        run: cargo build --locked --release -p eggtunnel-cli
+      - name: Generate dependency notices
+        run: python3 scripts/generate-third-party-notices.py
+      - name: Assemble target archive
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          stage="$RUNNER_TEMP/eggtunnel-release"
+          mkdir -p "$stage"
+          cp target/release/eggtunnel "$stage/eggtunnel"
+          cp LICENSE-MIT THIRD_PARTY_NOTICES.md "$stage/"
+          printf '%s\n' "$version" > "$stage/VERSION"
+          archive="eggtunnel-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          tar -C "$stage" -czf "$RUNNER_TEMP/$archive" .
+          local_release="$RUNNER_TEMP/local-releases/$GITHUB_REF_NAME"
+          mkdir -p "$local_release"
+          cp "$RUNNER_TEMP/$archive" "$local_release/"
+          (cd "$local_release" && shasum -a 256 "$archive" > SHA256SUMS)
+          EGGTUNNEL_RELEASE_BASE_URL="file://$RUNNER_TEMP/local-releases" \
+          EGGTUNNEL_TARGET="${{ matrix.target }}" \
+            ./install.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/install-test"
+          "$RUNNER_TEMP/install-test/eggtunnel" version
+          echo "archive=$RUNNER_TEMP/$archive" >> "$GITHUB_OUTPUT"
+        id: package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+      - name: Create SHA-256 manifest
+        run: cd dist && LC_ALL=C sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
+          github-token: ${{ github.token }}
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS install.sh --verify-tag --generate-notes
