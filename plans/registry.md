@@ -29,71 +29,78 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M004 active | M003 is closed at `31458e83e543304d6b271898575bf2f6e98c7352`. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 active | M001-M005 historically closed; M006 strict closure additionally depends on post-closure C001 and M006 release-evidence gates. |
+| Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 ready | No implementation dependency; operates against current head and historical M004/M005 closure evidence. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M004 QUIC transport | active | plans/implementation/reverse-session/004-quic-transport.md | M003 is closed; transport and stream lifecycle boundaries are qualified. |
+| Reverse session | M006 distribution/downstream qualification | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Release-qualification foundation landed at fc19fe57a32d0c45be339ff3dd80044c4a8bc069. Strict closure waits on C001 plus hosted release-target, advisory/license, publication, and downstream-registry evidence. |
 
-## Ready implementation plans
+## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M005 restricted-network transports/proxy traversal | ready | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | M003 is closed; execution is sequenced after M004. |
+| Reverse session post-closure corrective | C001 optional-transport qualification and planning reconciliation | ready | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | Execute against baseline fc19fe57a32d0c45be339ff3dd80044c4a8bc069 or current descendant head after inspection; preserve non-conflicting M006 work. |
 
 ## Recently closed implementation plans
 
-| Subsystem | Milestone | Status | Implementation plan | Closure record / pending evidence |
+| Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
-| Reverse session | M003 security/lifecycle/resource/embedding hardening | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md; final head `31458e83e543304d6b271898575bf2f6e98c7352`. |
-| Reverse session | M002 TCP/TLS reverse-tunnel product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md; final head `13402200e51b46031a1a82240be1eb48027a09f4`. |
-| Reverse session | M001 repository and protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; final head `357480b942e95ef7087d86a043f26b7a3d175687`. |
-
-## Blocked implementation plans
-
-| Subsystem | Milestone | Status | Implementation plan | Blocker |
-|---|---|---|---|---|
-| Reverse session | M006 distribution/downstream qualification | blocked | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Requires strict M003 closure plus closure of every optional transport intended for the first supported release matrix. |
+| Reverse session | M005 restricted-network transports/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md; historical closure retains explicit proxy/WSS qualification limitations now owned by C001. |
+| Reverse session | M004 QUIC transport | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md; historical closure retains explicit QUIC qualification limitations now owned by C001. |
+| Reverse session | M003 security/lifecycle/resource/embedding hardening | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md; final reviewed head 31458e83e543304d6b271898575bf2f6e98c7352. |
+| Reverse session | M002 TCP/TLS reverse-tunnel product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md; implementation head 13402200e51b46031a1a82240be1eb48027a09f4. |
+| Reverse session | M001 repository and protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; implementation head 357480b942e95ef7087d86a043f26b7a3d175687. |
 
 ## Closure work
 
-M001-M003 are closed with executable local evidence recorded in their closure files. M004 is active against accepted M003 head `31458e83e543304d6b271898575bf2f6e98c7352`; M005 is ready and sequenced after M004.
+### C001 optional-transport corrective
 
-M001 closure was completed as follows:
+C001 must produce:
 
-1. committed and reviewed the implementation;
-2. recorded required tests and dependency evidence;
-3. closed M001 and unblocked M002;
-4. refreshed the M002 baseline to the accepted reviewed head.
+- plans/closure/reverse-session-post-closure-corrective/001-status.md
+
+Strict C001 closure requires direct evidence for the QUIC and WSS/proxy cases named in its implementation plan, feature/dependency isolation, full workspace verification, accurate adapter limitation classification, and reconciled planning/support documentation.
+
+M004/M005 historical closure records must not be rewritten to hide the limitations that motivated C001. C001 closure is supplemental evidence.
+
+### M006 distribution/downstream qualification
+
+M006 implementation/local qualification is active. Its own execution record currently identifies these open closure gates:
+
+- hosted candidate release-target workflow/archive/install evidence;
+- advisory/license review;
+- registry publication ordering and downstream registry-consumption evidence if publication is authorized;
+- final supported-platform claims based on actual evidence.
+
+M006 MUST NOT be declared strictly closed before C001 closes.
 
 ## Current architecture constraints
 
 The following are not optional implementation preferences:
 
 - Eggtunnel is a thin reverse-session layer, not another proxy/VPN stack.
-- Generic byte relay should use eggress-relay.
+- Generic byte relay uses the Eggress relay boundary rather than a duplicate data plane.
 - Optional Eggress QUIC/WebSocket/outbound transport components remain feature-gated.
 - eggress-embed is not the default dependency boundary.
 - Synvoid and i2pr are architecture references, not production dependencies.
 - Baseline TCP/TLS uses one persistent control Session plus separate reverse Data Connections.
 - No custom TCP stream multiplexer is authorized.
-- QUIC later uses transport-native bidirectional streams.
+- QUIC uses transport-native bidirectional streams.
+- WebSocket is not claimed to provide transparent TCP half-close unless direct evidence proves it.
 - Non-loopback operation is encrypted/authenticated and server bind policy is explicit.
-- ConnectionId is random, short-lived, single-use, and Session-bound.
+- ConnectionId is random, short-lived, single-use, Service-bound, and Session-bound.
 - No production unbounded channels/tasks.
 - Library APIs remain process-neutral for downstream embedding.
 
-## Blocked external/deferred dependencies
+## External/deferred work
 
-These are not blockers for M001-M003:
+These are not C001 implementation blockers:
 
-- eggup readiness affects M006 installer/updater integration only;
-- Eggchaos/Eggbench stable integration affects optional M006 qualification only;
-- CodeGG production adoption is a downstream project task, not an Eggtunnel core blocker;
-- QUIC/WebSocket support is not required to close the first TCP/TLS product.
-
-## Recently closed work
-
-None. The repository is in planning/bootstrap state.
+- hosted release-target evidence remains M006;
+- crates.io publication remains M006 and requires explicit release authorization;
+- eggup downloader/self-update integration remains deferred because the inspected interface does not provide the required released bootstrap/downloader surface;
+- Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain M006/deferred support work;
+- QUIC custom CA/mTLS and QUIC proxy traversal remain unsupported current profiles unless a later plan/ADR changes the transport boundary.
