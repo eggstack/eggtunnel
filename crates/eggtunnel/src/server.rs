@@ -301,6 +301,7 @@ async fn server_loop(
                 let auth_failures = auth_failures.clone();
                 let child_cancel = cancel.child_token();
                 let handshake_guard = HandshakeGuard::new(counters.clone());
+                let task_counters = counters.clone();
                 let connection_context = ConnectionContext {
                     sessions,
                     counters,
@@ -312,7 +313,11 @@ async fn server_loop(
                     handshake_guard: Some(handshake_guard),
                 };
                 handlers.spawn(async move {
-                    let _ = handle_connection(tcp, peer.ip(), tls, token, connection_context).await;
+                    if let Err(error) =
+                        handle_connection(tcp, peer.ip(), tls, token, connection_context).await
+                    {
+                        task_counters.record_termination(error.termination_category());
+                    }
                 });
             }
             Some(result) = handlers.join_next(), if !handlers.is_empty() => {
@@ -1503,7 +1508,10 @@ mod tests {
         .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if server.handle().snapshot().rejected_connections > 0 {
+                let snapshot = server.handle().snapshot();
+                if snapshot.rejected_connections > 0
+                    && snapshot.last_termination == Some(TerminationCategory::Authentication)
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2043,6 +2051,50 @@ mod tests {
         assert_eq!(handle.snapshot().active_sessions, 0);
         drop(control);
         drop(incomplete_tls);
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_handshake_admission_caps_at_limit_and_recovers() {
+        let (cert, key) = certificate();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"admission-cap-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let handle = server.handle();
+        let mut peers = Vec::new();
+        for _ in 0..(MAX_HANDSHAKES + 1) {
+            peers.push(TcpStream::connect(server.local_addr()).await.unwrap());
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = handle.snapshot();
+                if snapshot.active_handshakes == MAX_HANDSHAKES && snapshot.rejected_connections > 0
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(handle.snapshot().active_handshakes, MAX_HANDSHAKES);
+        drop(peers);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().active_handshakes == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.shutdown().await;
     }
 
     #[test]
