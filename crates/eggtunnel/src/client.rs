@@ -709,11 +709,14 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
         }
         Ok::<(), TunnelError>(())
     }.await;
-    if result.is_err() && !cancel.is_cancelled() {
-        let _ = out.try_send(Message::OpenReject(OpenReject {
-            connection_id: open.connection_id,
-            code: 1,
-        }));
+    if let Err(error) = result {
+        counters.record_termination(error.termination_category());
+        if !cancel.is_cancelled() {
+            let _ = out.try_send(Message::OpenReject(OpenReject {
+                connection_id: open.connection_id,
+                code: 1,
+            }));
+        }
     }
 }
 
