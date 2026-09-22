@@ -1,10 +1,12 @@
 # Reverse Session M003 — Security, Lifecycle, Resource, and Embedding Hardening
 
-Status: blocked — requires accepted M002 closure and baseline refresh before execution
+Status: active
 
-Planning baseline: 82fe121c208a6dd4c06acaaf1ab3b5ba03d7a847
+Planning baseline: 13402200e51b46031a1a82240be1eb48027a09f4
 
-Before this plan becomes ready, replace the planning baseline with the accepted M002 reviewed head and reconcile all current-state assumptions.
+M002 is closed at the baseline above. M002 closure findings promoted into this milestone: exhaustive cancellation injection and repeated lifecycle/pending-expiry qualification.
+
+The public API, feature graph, runtime ownership, and client/server resource ceilings were reconciled against M002 before execution.
 
 Source roadmap:
 

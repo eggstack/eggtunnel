@@ -1,8 +1,10 @@
 # Reverse Session M002 — TCP/TLS Reverse-Tunnel Product
 
-Status: active
+Status: closed
 
 Planning baseline: 357480b942e95ef7087d86a043f26b7a3d175687
+
+Closure: `plans/closure/reverse-session/002-status.md`; accepted reviewed head `13402200e51b46031a1a82240be1eb48027a09f4`.
 
 M001 dependency gate completed: closure is recorded in `plans/closure/reverse-session/001-status.md`, with accepted reviewed head `357480b942e95ef7087d86a043f26b7a3d175687`. The actual published Eggress 1.0.8 APIs were inspected before implementation: `eggress-transport-tls` provides `tls_connect`/`tls_accept` over `eggress_core::BoxStream` and explicit rustls configuration builders; `eggress-relay` provides bidirectional relay for Tokio streams. Neither requires `eggress-embed`.
 

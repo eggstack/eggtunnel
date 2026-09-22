@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M002 active; M003-M006 dependency-blocked
+Status: active — M003 active; M004-M006 dependency-blocked
 
 Canonical references:
 
@@ -98,7 +98,7 @@ It does not own:
 
 ## 3. Current state
 
-At the initial planning baseline the repository contained planning documents only. M001 is now closed with the Rust workspace and bounded protocol foundation. M002 is active: the TCP/TLS client/server runtime, CLI, and first product documentation are implemented in the working tree, with acceptance and closure evidence still in progress.
+At the initial planning baseline the repository contained planning documents only. M001 is closed with the Rust workspace and bounded protocol foundation. M002 is closed with the authenticated TCP/TLS client/server runtime, CLI, and first product documentation. M003 is active and promotes exhaustive cancellation injection and repeated lifecycle qualification.
 
 The current Eggress integration baseline is 1.0.8. The TLS, relay, and core stream APIs were inspected before adding dependencies.
 
@@ -231,7 +231,7 @@ Deliver the complete functional TCP/TLS reverse tunnel from external peer to pri
 
 ## 8. Milestone M003 — Security, lifecycle, resource, and embedding hardening
 
-Status: blocked on M002 closure
+Status: active
 
 Implementation plan:
 
@@ -470,8 +470,8 @@ Explicitly deferred until after M006 or a new ADR:
 | Milestone | Status | Plan | Closure | Blocker |
 |---|---|---|---|---|
 | M001 repository/protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | — |
-| M002 TCP/TLS product | active | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | — | Implementation and closure evidence in progress |
-| M003 hardening/embedding | blocked | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | — | M002 closure |
+| M002 TCP/TLS product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md | — |
+| M003 hardening/embedding | active | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | — | M002 closed at `13402200e51b46031a1a82240be1eb48027a09f4` |
 | M004 QUIC | blocked | plans/implementation/reverse-session/004-quic-transport.md | — | M003 closure |
 | M005 WSS/proxy traversal | blocked | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | — | M003 closure |
 | M006 distribution/downstream | blocked | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | M003 + selected transport closures |
