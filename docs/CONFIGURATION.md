@@ -7,7 +7,7 @@ named by `token_env`; the token is not stored in the configuration file.
 
 ```toml
 mode = "client"
-transport = "tcp_tls" # or "quic" (UDP)
+transport = "tcp_tls" # or "quic" (UDP) or "websocket_tls"
 server_addr = "tunnel.example.net:9443"
 tls_server_name = "tunnel.example.net"
 token_env = "EGGTUNNEL_TOKEN"
@@ -16,6 +16,10 @@ token_env = "EGGTUNNEL_TOKEN"
 # Optional mTLS identity. Configure both fields to require/use a client cert.
 # client_cert = "/etc/eggtunnel/client-chain.pem"
 # client_key = "/etc/eggtunnel/client-key.pem"
+# Optional outbound proxy chain, read from this environment variable. Supported
+# URI examples include http://proxy:3128 and socks5://proxy:1080. Chains use
+# Eggress's __ separator. Keep proxy credentials out of this file.
+# outbound_proxy_env = "EGGTUNNEL_OUTBOUND_PROXY"
 
 [[services]]
 id = 1
@@ -33,7 +37,7 @@ server cannot change the client's local destination.
 
 ```toml
 mode = "server"
-transport = "tcp_tls" # or "quic" (UDP; service listeners remain TCP)
+transport = "tcp_tls" # or "quic" (UDP; listeners remain TCP) or "websocket_tls"
 listen_addr = "0.0.0.0:9443"
 tls_cert = "/etc/eggtunnel/server-chain.pem"
 tls_key = "/etc/eggtunnel/server-key.pem"
@@ -53,6 +57,19 @@ authentication. The current Eggress QUIC adapter does not accept custom CA
 bundles or mTLS identity material; `eggtunnel check` rejects those combinations.
 The QUIC control endpoint uses UDP on `listen_addr`; approved service listeners
 continue to use TCP.
+
+The `websocket_tls` profile performs verified TLS first, then upgrades each
+control or data TCP connection to a binary WebSocket stream. It supports
+configured CA roots and bearer-token authentication. The current profile does
+not support mTLS. This is a non-browser tunnel endpoint; Origin is not a
+browser security boundary.
+
+For clients, `outbound_proxy_env` selects a listener-free Eggress outbound
+chain. Proxying establishes the TCP path before Eggtunnel TLS, so the tunnel
+still authenticates the configured server name end to end. Supported URI
+families in Eggress 1.0.8 include direct, HTTP CONNECT, and SOCKS5; chains use
+the `__` separator. Proxy traversal over QUIC and proxy+mTLS are rejected.
+Put proxy credentials in the named environment variable, not TOML.
 
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup

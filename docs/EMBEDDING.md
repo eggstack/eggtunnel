@@ -41,3 +41,11 @@ Enable the optional `quic` feature and call `Client::start_quic` to use one
 QUIC connection per Session. The current Eggress adapter uses platform trust
 roots and does not support custom CA bundles or mTLS; QUIC can still use a
 programmatic `TargetConnector` with `start_quic_with_connector`.
+
+Enable `websocket` to use `Client::start_websocket` or
+`Client::start_websocket_with_connector`. WSS verifies the server through the
+configured CA or system roots. Enable `outbound-proxy` to use
+`Client::start_with_outbound_proxy` (or its connector variant) with an Eggress
+proxy URI/chain. `Client::start_websocket_with_outbound_proxy` composes both
+adapters. Proxy credentials should be supplied by the embedding application's
+secret store. QUIC cannot currently be combined with outbound proxy traversal.

@@ -27,6 +27,9 @@ enum ClientDataTransport {
         server_addr: String,
         server_name: String,
         tls: Arc<rustls::ClientConfig>,
+        websocket: bool,
+        #[cfg(feature = "outbound-proxy")]
+        outbound: Option<Arc<eggress_outbound::OutboundConnector>>,
     },
     #[cfg(feature = "quic")]
     Quic(eggress_transport_quic::QuicConnection),
@@ -150,7 +153,85 @@ impl Client {
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
         let tls_config = build_tls_config(config.ca_pem.as_deref())?;
-        Self::start_with_tls_config(config, connector, tls_config).await
+        Self::start_with_tls_config(
+            config,
+            connector,
+            tls_config,
+            false,
+            #[cfg(feature = "outbound-proxy")]
+            None,
+        )
+        .await
+    }
+
+    #[cfg(feature = "websocket")]
+    pub async fn start_websocket(config: ClientConfig) -> Result<Self, TunnelError> {
+        Self::start_websocket_with_connector(config, Arc::new(TcpTargetConnector)).await
+    }
+
+    #[cfg(feature = "websocket")]
+    pub async fn start_websocket_with_connector(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
+        Self::start_with_tls_config(
+            config,
+            connector,
+            tls_config,
+            true,
+            #[cfg(feature = "outbound-proxy")]
+            None,
+        )
+        .await
+    }
+
+    #[cfg(feature = "outbound-proxy")]
+    pub async fn start_with_outbound_proxy(
+        config: ClientConfig,
+        proxy_chain: &str,
+    ) -> Result<Self, TunnelError> {
+        Self::start_with_outbound_proxy_and_connector(
+            config,
+            proxy_chain,
+            Arc::new(TcpTargetConnector),
+        )
+        .await
+    }
+
+    #[cfg(feature = "outbound-proxy")]
+    pub async fn start_with_outbound_proxy_and_connector(
+        config: ClientConfig,
+        proxy_chain: &str,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
+        let proxy = parse_outbound_proxy(proxy_chain)?;
+        Self::start_with_tls_config(config, connector, tls_config, false, Some(proxy)).await
+    }
+
+    #[cfg(all(feature = "outbound-proxy", feature = "websocket"))]
+    pub async fn start_websocket_with_outbound_proxy(
+        config: ClientConfig,
+        proxy_chain: &str,
+    ) -> Result<Self, TunnelError> {
+        Self::start_websocket_with_outbound_proxy_and_connector(
+            config,
+            proxy_chain,
+            Arc::new(TcpTargetConnector),
+        )
+        .await
+    }
+
+    #[cfg(all(feature = "outbound-proxy", feature = "websocket"))]
+    pub async fn start_websocket_with_outbound_proxy_and_connector(
+        config: ClientConfig,
+        proxy_chain: &str,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
+        let proxy = parse_outbound_proxy(proxy_chain)?;
+        Self::start_with_tls_config(config, connector, tls_config, true, Some(proxy)).await
     }
 
     #[cfg(feature = "quic")]
@@ -221,7 +302,15 @@ impl Client {
         identity: ClientIdentity,
     ) -> Result<Self, TunnelError> {
         let tls_config = build_mtls_tls_config(&config, identity)?;
-        Self::start_with_tls_config(config, Arc::new(TcpTargetConnector), tls_config).await
+        Self::start_with_tls_config(
+            config,
+            Arc::new(TcpTargetConnector),
+            tls_config,
+            false,
+            #[cfg(feature = "outbound-proxy")]
+            None,
+        )
+        .await
     }
 
     #[cfg(feature = "mtls")]
@@ -231,13 +320,25 @@ impl Client {
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
         let tls_config = build_mtls_tls_config(&config, identity)?;
-        Self::start_with_tls_config(config, connector, tls_config).await
+        Self::start_with_tls_config(
+            config,
+            connector,
+            tls_config,
+            false,
+            #[cfg(feature = "outbound-proxy")]
+            None,
+        )
+        .await
     }
 
     async fn start_with_tls_config(
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
         tls_config: Arc<rustls::ClientConfig>,
+        websocket: bool,
+        #[cfg(feature = "outbound-proxy")] outbound: Option<
+            Arc<eggress_outbound::OutboundConnector>,
+        >,
     ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Client::start requires a caller-owned Tokio runtime")
@@ -257,6 +358,9 @@ impl Client {
                 config,
                 tls_config,
                 connector,
+                websocket,
+                #[cfg(feature = "outbound-proxy")]
+                outbound,
                 task_cancel,
                 counters,
                 command_rx,
@@ -280,6 +384,20 @@ impl Client {
             let _ = task.await;
         }
     }
+}
+
+#[cfg(feature = "outbound-proxy")]
+pub fn validate_outbound_proxy(proxy_chain: &str) -> Result<(), TunnelError> {
+    parse_outbound_proxy(proxy_chain).map(|_| ())
+}
+
+#[cfg(feature = "outbound-proxy")]
+fn parse_outbound_proxy(
+    proxy_chain: &str,
+) -> Result<Arc<eggress_outbound::OutboundConnector>, TunnelError> {
+    eggress_outbound::OutboundConnector::from_pproxy_uri(proxy_chain)
+        .map(Arc::new)
+        .map_err(|_| TunnelError::Configuration("invalid outbound proxy chain"))
 }
 
 #[cfg(feature = "mtls")]
@@ -419,10 +537,13 @@ fn build_mtls_tls_config(
     Ok(Arc::new(tls))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reconnect_loop(
     mut config: ClientConfig,
     tls: Arc<rustls::ClientConfig>,
     connector: Arc<dyn TargetConnector>,
+    websocket: bool,
+    #[cfg(feature = "outbound-proxy")] outbound: Option<Arc<eggress_outbound::OutboundConnector>>,
     cancel: CancellationToken,
     counters: Counters,
     mut commands: mpsc::Receiver<ClientCommand>,
@@ -437,25 +558,53 @@ async fn reconnect_loop(
         }
         let outcome = tokio::select! {
             _ = cancel.cancelled() => break,
-            result = timeout(CONNECT_TIMEOUT, TcpStream::connect(config.server_addr.as_str())) => result,
+            result = connect_server(&config.server_addr, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result,
         };
         let result = match outcome {
-            Ok(Ok(tcp)) => {
-                let stream: BoxStream = Box::new(tcp);
+            Ok(stream) => {
                 let tls_result = tokio::select! {
                     _ = cancel.cancelled() => break 'reconnect,
                     result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls.clone(), &config.tls_server_name)) => result,
                 };
                 match tls_result {
                     Ok(Ok(stream)) => {
-                        tokio::select! {
-                            _ = cancel.cancelled() => Err(TunnelError::Cancelled),
-                            result = run_session(stream, SessionRun {
+                        let stream_result: Result<BoxStream, TunnelError> = async {
+                            #[allow(unused_mut)]
+                            let mut stream = stream;
+                            #[cfg(feature = "websocket")]
+                            if websocket {
+                                let url = format!("wss://{}", config.server_addr);
+                                let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                                    .max_message_size(Some(1024 * 1024))
+                                    .max_frame_size(Some(1024 * 1024));
+                                stream = timeout(
+                                    HANDSHAKE_TIMEOUT,
+                                    eggress_protocol_websocket::WebSocketTunnelClient::new(
+                                        1024 * 1024,
+                                    )
+                                    .connect_over_stream_with_config(&url, stream, ws_config),
+                                )
+                                .await
+                                .map_err(|_| TunnelError::Timeout)?
+                                .map_err(|_| TunnelError::Tls)?;
+                            }
+                            #[cfg(not(feature = "websocket"))]
+                            let _ = websocket;
+                            Ok(stream)
+                        }
+                        .await;
+                        match stream_result {
+                            Ok(stream) => tokio::select! {
+                                _ = cancel.cancelled() => Err(TunnelError::Cancelled),
+                                result = run_session(stream, SessionRun {
                                 token: &config.token,
                                 transport: ClientDataTransport::TcpTls {
                                     server_addr: config.server_addr.clone(),
                                     server_name: config.tls_server_name.clone(),
                                     tls: tls.clone(),
+                                    websocket,
+                                    #[cfg(feature = "outbound-proxy")]
+                                    outbound: outbound.clone(),
                                 },
                                 connector: connector.clone(),
                                 cancel: &cancel,
@@ -463,13 +612,15 @@ async fn reconnect_loop(
                                 reconnect_delay: &mut delay,
                                 services: &mut config.services,
                                 commands: &mut commands,
-                            }) => result,
+                                }) => result,
+                            },
+                            Err(error) => Err(error),
                         }
                     }
                     _ => Err(TunnelError::Tls),
                 }
             }
-            _ => Err(TunnelError::Disconnected),
+            Err(error) => Err(error),
         };
         if matches!(
             &result,
@@ -507,6 +658,35 @@ async fn reconnect_loop(
         }
         delay = (delay * 2).min(Duration::from_secs(30));
     }
+}
+
+async fn connect_server(
+    endpoint: &str,
+    #[cfg(feature = "outbound-proxy")] outbound: Option<&eggress_outbound::OutboundConnector>,
+) -> Result<BoxStream, TunnelError> {
+    #[cfg(feature = "outbound-proxy")]
+    if let Some(outbound) = outbound {
+        use eggress_outbound::OutboundConnectErrorKind;
+
+        let (host, port) = split_endpoint(endpoint).ok_or(TunnelError::Configuration(
+            "server_addr must be a host:port endpoint",
+        ))?;
+        let (stream, _) = outbound
+            .connect_tcp_timeout_detailed(host, port, CONNECT_TIMEOUT)
+            .await
+            .map_err(|error| match error.kind() {
+                OutboundConnectErrorKind::Authentication => TunnelError::Authentication,
+                OutboundConnectErrorKind::Policy => TunnelError::Authorization,
+                OutboundConnectErrorKind::Timeout => TunnelError::Timeout,
+                _ => TunnelError::Disconnected,
+            })?;
+        return Ok(stream);
+    }
+    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(endpoint))
+        .await
+        .map_err(|_| TunnelError::Timeout)?
+        .map_err(|_| TunnelError::Disconnected)?;
+    Ok(Box::new(tcp))
 }
 
 #[cfg(feature = "quic")]
@@ -629,7 +809,7 @@ async fn record_quic_reconnect(
     *delay = (*delay * 2).min(Duration::from_secs(30));
 }
 
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "outbound-proxy"))]
 fn split_endpoint(endpoint: &str) -> Option<(&str, u16)> {
     let (host, port) = if endpoint.starts_with('[') {
         let end = endpoint.find(']')?;
@@ -884,16 +1064,31 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
             result = timeout(CONNECT_TIMEOUT, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
         };
         let mut data = match transport {
-            ClientDataTransport::TcpTls { server_addr, server_name, tls } => {
-                let tcp = tokio::select! {
+            ClientDataTransport::TcpTls { server_addr, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
+                let stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = timeout(CONNECT_TIMEOUT, TcpStream::connect(server_addr.as_str())) => result.map_err(|_| TunnelError::Timeout)??,
+                    result = connect_server(&server_addr, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
                 };
-                let stream: BoxStream = Box::new(tcp);
-                tokio::select! {
+                #[allow(unused_mut)]
+                let mut stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
                     result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
+                };
+                #[cfg(feature = "websocket")]
+                if websocket {
+                    let url = format!("wss://{server_addr}");
+                    let ws_client = eggress_protocol_websocket::WebSocketTunnelClient::new(1024 * 1024);
+                    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                        .max_message_size(Some(1024 * 1024))
+                        .max_frame_size(Some(1024 * 1024));
+                    stream = tokio::select! {
+                        _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
+                        result = timeout(HANDSHAKE_TIMEOUT, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
+                    };
                 }
+                #[cfg(not(feature = "websocket"))]
+                let _ = websocket;
+                stream
             }
             #[cfg(feature = "quic")]
             ClientDataTransport::Quic(connection) => {

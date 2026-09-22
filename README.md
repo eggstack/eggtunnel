@@ -18,5 +18,8 @@ EGGTUNNEL_TOKEN='use-a-high-entropy-secret' eggtunnel client client.toml
 ```
 
 QUIC is available with the optional `quic` feature and `transport = "quic"` CLI
-setting. WebSocket, outbound-proxy traversal, and release packaging remain
-roadmap items.
+setting. Optional `websocket` support provides WSS, and `outbound-proxy` adds
+listener-free direct, HTTP CONNECT, and SOCKS5 traversal. Proxy credentials are
+read from an environment variable; see the configuration guide and support
+matrix for limitations and tested combinations. Release packaging remains a
+roadmap item.

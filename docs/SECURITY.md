@@ -46,3 +46,16 @@ The optional QUIC profile uses Eggress 1.0.8 with platform certificate roots
 and verified SNI. The adapter currently has no custom-root or client-certificate
 configuration, so QUIC rejects custom CA and mTLS settings instead of ignoring
 them. QUIC still requires the bearer token inside its encrypted control stream.
+
+The optional WebSocket profile establishes verified TLS before the WebSocket
+upgrade and uses binary messages with a 1 MiB message limit. It is intended for
+non-browser tunnel clients; the adapter does not validate Origin and makes no
+browser cross-site security claim. Its close operation closes the WebSocket
+connection as a whole, so TCP half-close equivalence is not promised.
+
+Outbound proxy chains are client-side only. Eggtunnel TLS and server-name
+verification run over the established proxy path, protecting authentication
+from a proxy that only forwards CONNECT or SOCKS traffic. Proxy credentials
+should be placed in the environment variable named by `outbound_proxy_env`.
+Proxy traversal with QUIC or mTLS is rejected. The client does not silently
+fall back to direct networking when a proxy path fails.

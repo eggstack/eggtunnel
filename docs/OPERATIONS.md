@@ -33,3 +33,9 @@ unauthenticated handshakes. These counters cover one process lifetime and do
 not persist across restart.
 The snapshot includes the most recent bounded termination category and a
 count of panicked owned tasks; it never retains event history or error text.
+
+For restricted egress networks, set `outbound_proxy_env` on the client to a
+variable containing an HTTP CONNECT or SOCKS5 proxy URI/chain. Eggtunnel TLS
+remains end to end and uses `tls_server_name` for verification. WebSocket mode
+uses WSS on the configured TCP endpoint. QUIC uses UDP and does not support
+outbound proxy traversal.

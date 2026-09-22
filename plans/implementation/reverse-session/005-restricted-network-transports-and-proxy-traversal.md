@@ -1,6 +1,6 @@
 # Reverse Session M005 — Restricted-Network Transports and Proxy Traversal
 
-Status: ready
+Status: closed
 
 Planning baseline: 31458e83e543304d6b271898575bf2f6e98c7352
 

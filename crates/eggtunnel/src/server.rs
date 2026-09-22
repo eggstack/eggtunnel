@@ -130,7 +130,30 @@ impl Server {
             .map_err(|_| TunnelError::Tls)?
             .build()
             .map_err(|_| TunnelError::Tls)?;
-        Self::bind_with_tls(config, bind_policy, ServerTls::Eggress(tls)).await
+        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Eggress(tls), false).await
+    }
+
+    #[cfg(feature = "websocket")]
+    pub async fn bind_websocket(config: ServerConfig) -> Result<Self, TunnelError> {
+        let bind_policy = BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        };
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            TunnelError::Configuration(
+                "Server::bind_websocket requires a caller-owned Tokio runtime",
+            )
+        })?;
+        validate_config(&config)?;
+        bind_policy.validate()?;
+        let tls = TlsServerConfigBuilder::new()
+            .with_certificate_pem(&config.certificate_pem)
+            .map_err(|_| TunnelError::Tls)?
+            .with_key_pem(&config.private_key_pem)
+            .map_err(|_| TunnelError::Tls)?
+            .build()
+            .map_err(|_| TunnelError::Tls)?;
+        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Eggress(tls), true).await
     }
 
     #[cfg(feature = "quic")]
@@ -207,13 +230,14 @@ impl Server {
         bind_policy: BindPolicy,
     ) -> Result<Self, TunnelError> {
         let tls = build_mtls_server_config(&config, &trusted_client_ca_pem)?;
-        Self::bind_with_tls(config, bind_policy, ServerTls::Mutual(tls)).await
+        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Mutual(tls), false).await
     }
 
-    async fn bind_with_tls(
+    async fn bind_with_tls_profile(
         config: ServerConfig,
         bind_policy: BindPolicy,
         tls: ServerTls,
+        websocket: bool,
     ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Server::bind requires a caller-owned Tokio runtime")
@@ -236,6 +260,7 @@ impl Server {
             bind_policy,
             task_cancel,
             counters,
+            websocket,
         ));
         Ok(Self {
             cancel,
@@ -329,6 +354,7 @@ async fn server_loop(
     bind_policy: BindPolicy,
     cancel: CancellationToken,
     counters: Counters,
+    websocket: bool,
 ) {
     let sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -369,7 +395,7 @@ async fn server_loop(
                 };
                 handlers.spawn(async move {
                     if let Err(error) =
-                        handle_connection(tcp, peer.ip(), tls, token, connection_context).await
+                        handle_connection(tcp, peer.ip(), tls, token, connection_context, websocket).await
                     {
                         task_counters.record_termination(error.termination_category());
                     }
@@ -647,8 +673,9 @@ async fn handle_connection(
     tls: ServerTls,
     token: SecretToken,
     mut context: ConnectionContext,
+    websocket: bool,
 ) -> Result<(), TunnelError> {
-    let (mut stream, principal) = match tls {
+    let (stream, principal) = match tls {
         ServerTls::Eggress(tls) => {
             let stream: BoxStream = Box::new(tcp);
             let stream = tokio::select! {
@@ -672,6 +699,27 @@ async fn handle_connection(
                 .map(|certificate| certificate_principal(certificate.as_ref()));
             (Box::new(stream) as BoxStream, principal)
         }
+    };
+    #[cfg(feature = "websocket")]
+    let mut stream = if websocket {
+        let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(1024 * 1024))
+            .max_frame_size(Some(1024 * 1024));
+        timeout(
+            HANDSHAKE_TIMEOUT,
+            eggress_protocol_websocket::WebSocketTunnelServer::new(1024 * 1024)
+                .accept_upgrade_with_config_over_stream(stream, ws_config),
+        )
+        .await
+        .map_err(|_| TunnelError::Timeout)?
+        .map_err(|_| TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage))?
+    } else {
+        stream
+    };
+    #[cfg(not(feature = "websocket"))]
+    let mut stream = {
+        let _ = websocket;
+        stream
     };
     context.principal = principal;
     let first = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream))
@@ -1381,6 +1429,249 @@ mod tests {
         );
         client.shutdown().await;
         server.shutdown().await;
+    }
+
+    #[cfg(feature = "websocket")]
+    #[tokio::test]
+    async fn websocket_tls_session_registers_and_relays_data_paths() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"websocket-profile-secret".to_vec()).unwrap();
+        let server = Server::bind_websocket(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let client = Client::start_websocket_with_connector(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("direct-echo").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            },
+            Arc::new(DuplexEchoConnector),
+        )
+        .await
+        .unwrap();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        let mut external = TcpStream::connect(addr).await.unwrap();
+        external.write_all(b"websocket-over-tls").await.unwrap();
+        let mut response = [0u8; 18];
+        tokio::time::timeout(Duration::from_secs(5), external.read_exact(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&response, b"websocket-over-tls");
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
+    #[cfg(feature = "outbound-proxy")]
+    #[tokio::test]
+    async fn outbound_http_connect_keeps_eggtunnel_tls_end_to_end() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"proxy-profile-secret".to_vec()).unwrap();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let tunnel_addr = server.local_addr();
+        let proxy_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut downstream, _)) = proxy_listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let byte = downstream.read_u8().await.unwrap();
+                        request.push(byte);
+                        assert!(request.len() <= 4096, "CONNECT request too large");
+                    }
+                    assert!(request.starts_with(b"CONNECT "));
+                    let mut upstream = TcpStream::connect(tunnel_addr).await.unwrap();
+                    downstream
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .await
+                        .unwrap();
+                    tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
+                        .await
+                        .unwrap();
+                });
+            }
+        });
+
+        let client = Client::start_with_outbound_proxy_and_connector(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("direct-echo").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            },
+            &format!("http://{proxy_addr}"),
+            Arc::new(DuplexEchoConnector),
+        )
+        .await
+        .unwrap();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        assert_eq!(
+            roundtrip(addr, b"tls-through-connect").await,
+            b"tls-through-connect"
+        );
+        client.shutdown().await;
+        server.shutdown().await;
+        proxy_task.abort();
+    }
+
+    #[cfg(feature = "outbound-proxy")]
+    #[tokio::test]
+    async fn outbound_socks5_keeps_eggtunnel_tls_end_to_end() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"socks-proxy-profile-secret".to_vec()).unwrap();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let tunnel_addr = server.local_addr();
+        let proxy_task = tokio::spawn(async move {
+            loop {
+                let Ok((mut downstream, _)) = proxy_listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut greeting = [0u8; 2];
+                    downstream.read_exact(&mut greeting).await.unwrap();
+                    let mut methods = vec![0; greeting[1] as usize];
+                    downstream.read_exact(&mut methods).await.unwrap();
+                    downstream.write_all(&[5, 0]).await.unwrap();
+                    let mut request = [0u8; 4];
+                    downstream.read_exact(&mut request).await.unwrap();
+                    assert_eq!(request[0], 5);
+                    assert_eq!(request[1], 1);
+                    match request[3] {
+                        1 => {
+                            let mut tail = [0u8; 6];
+                            downstream.read_exact(&mut tail).await.unwrap();
+                        }
+                        3 => {
+                            let length = downstream.read_u8().await.unwrap() as usize;
+                            let mut tail = vec![0; length + 2];
+                            downstream.read_exact(&mut tail).await.unwrap();
+                        }
+                        atyp => panic!("unexpected SOCKS address type: {atyp}"),
+                    }
+                    let mut upstream = TcpStream::connect(tunnel_addr).await.unwrap();
+                    downstream
+                        .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                        .await
+                        .unwrap();
+                    tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
+                        .await
+                        .unwrap();
+                });
+            }
+        });
+        let client = Client::start_with_outbound_proxy_and_connector(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("direct-echo").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            },
+            &format!("socks5://{proxy_addr}"),
+            Arc::new(DuplexEchoConnector),
+        )
+        .await
+        .unwrap();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        assert_eq!(
+            roundtrip(addr, b"tls-through-socks5").await,
+            b"tls-through-socks5"
+        );
+        client.shutdown().await;
+        server.shutdown().await;
+        proxy_task.abort();
     }
 
     #[tokio::test]

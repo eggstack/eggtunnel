@@ -15,6 +15,8 @@ mod server;
 
 #[cfg(all(feature = "client", feature = "mtls"))]
 pub use client::ClientIdentity;
+#[cfg(feature = "outbound-proxy")]
+pub use client::validate_outbound_proxy;
 #[cfg(feature = "client")]
 pub use client::{
     ApplicationStream, Client, ClientConfig, ClientHandle, TargetConnector, TargetContext,

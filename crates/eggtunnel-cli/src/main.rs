@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use eggtunnel::{
     Client, ClientConfig, ClientIdentity, ClientService, SecretToken, Server, ServerConfig,
     proto::{RequestedBind, ServiceId, ServiceName, TcpTarget},
+    validate_outbound_proxy,
 };
 use serde::Deserialize;
 
@@ -44,6 +45,8 @@ struct FileConfig {
     tls_server_name: Option<String>,
     #[serde(default)]
     ca_cert: Option<PathBuf>,
+    #[serde(default)]
+    outbound_proxy_env: Option<String>,
     #[serde(default)]
     client_cert: Option<PathBuf>,
     #[serde(default)]
@@ -128,8 +131,11 @@ fn checked_endpoint(value: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
     let _token = load_token(&config.token_env)?;
-    if !matches!(config.transport.as_str(), "tcp_tls" | "quic") {
-        return Err("transport must be 'tcp_tls' or 'quic'".into());
+    if !matches!(
+        config.transport.as_str(),
+        "tcp_tls" | "quic" | "websocket_tls"
+    ) {
+        return Err("transport must be 'tcp_tls', 'quic', or 'websocket_tls'".into());
     }
     match config.mode.as_str() {
         "client" => {
@@ -154,11 +160,37 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             if config.transport == "quic"
                 && (config.ca_cert.is_some()
                     || config.client_cert.is_some()
-                    || config.client_key.is_some())
+                    || config.client_key.is_some()
+                    || config.outbound_proxy_env.is_some())
             {
                 return Err(
-                    "the Eggress QUIC adapter supports platform roots and bearer auth only".into(),
+                    "the Eggress QUIC adapter supports platform roots and bearer auth only; proxy traversal is unsupported".into(),
                 );
+            }
+            if config
+                .outbound_proxy_env
+                .as_deref()
+                .is_some_and(str::is_empty)
+            {
+                return Err("outbound_proxy_env must name an environment variable".into());
+            }
+            if let Some(name) = &config.outbound_proxy_env {
+                let value = env::var(name)
+                    .map_err(|_| format!("outbound proxy variable {name} is missing"))?;
+                if value.trim().is_empty() {
+                    return Err(format!("outbound proxy variable {name} is empty").into());
+                }
+                validate_outbound_proxy(&value)?;
+            }
+            if config.outbound_proxy_env.is_some()
+                && (config.client_cert.is_some() || config.client_key.is_some())
+            {
+                return Err("outbound proxy mode currently does not support mTLS".into());
+            }
+            if config.transport == "websocket_tls"
+                && (config.client_cert.is_some() || config.client_key.is_some())
+            {
+                return Err("WebSocket transport currently does not support mTLS".into());
             }
             if let (Some(cert), Some(key)) = (&config.client_cert, &config.client_key)
                 && (fs::read(cert)?.is_empty() || fs::read(key)?.is_empty())
@@ -191,6 +223,12 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             if config.transport == "quic" && config.client_ca.is_some() {
                 return Err("the Eggress QUIC adapter does not support mTLS".into());
             }
+            if config.transport == "websocket_tls" && config.client_ca.is_some() {
+                return Err("WebSocket transport currently does not support mTLS".into());
+            }
+            if config.outbound_proxy_env.is_some() {
+                return Err("outbound_proxy is only valid in client mode".into());
+            }
         }
         _ => return Err("mode must be 'client' or 'server'".into()),
     }
@@ -221,6 +259,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let server = if config.transport == "quic" {
                 Server::bind_quic(server_config).await?
+            } else if config.transport == "websocket_tls" {
+                Server::bind_websocket(server_config).await?
             } else if let Some(client_ca) = &config.client_ca {
                 Server::bind_mtls(server_config, fs::read(client_ca)?).await?
             } else {
@@ -264,6 +304,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let client = if config.transport == "quic" {
                 Client::start_quic(client_config).await?
+            } else if let Some(proxy_env) = &config.outbound_proxy_env {
+                let proxy = env::var(proxy_env)?;
+                if config.transport == "websocket_tls" {
+                    Client::start_websocket_with_outbound_proxy(client_config, &proxy).await?
+                } else {
+                    Client::start_with_outbound_proxy(client_config, &proxy).await?
+                }
+            } else if config.transport == "websocket_tls" {
+                Client::start_websocket(client_config).await?
             } else if let (Some(client_cert), Some(client_key)) =
                 (&config.client_cert, &config.client_key)
             {
