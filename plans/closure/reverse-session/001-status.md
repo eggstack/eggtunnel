@@ -1,8 +1,8 @@
 # M001 Closure Status — Repository and Protocol Foundation
 
-Status: closing
+Status: closed
 
-Disposition: conditionally closed — implementation and local checks are complete; the working tree has not been committed or reviewed as a final baseline. M002 remains blocked until the final implementation head is committed, reviewed, accepted, and recorded below.
+Disposition: closed — implementation, local verification, and reviewed final head are recorded below. M002 is unblocked against this baseline.
 
 Implementation plan:
 
@@ -11,8 +11,8 @@ Implementation plan:
 ## Baseline and implementation
 
 - Planning baseline: `121955694d2151095e409b3940922fc021a4b91a`.
-- Implementation commit: none; changes are present in the shared working tree.
-- Final reviewed head: pending commit and review.
+- Implementation commit: `357480b942e95ef7087d86a043f26b7a3d175687`.
+- Final reviewed head: `357480b942e95ef7087d86a043f26b7a3d175687` (local source review and required checks completed).
 - Workspace: Rust 2024, declared MSRV 1.89, virtual resolver-2 workspace.
 - Packages: `eggtunnel-proto`, `eggtunnel`, and `eggtunnel-cli`.
 
@@ -52,4 +52,3 @@ Dependency versions resolved in Cargo.lock include serde 1.0.229, postcard 1.1.3
 - `proptest` was not added. Focused table-driven boundary/round-trip tests plus a deterministic arbitrary-input no-panic loop cover the M001 decoder evidence.
 - Auth tokens are redacted but are not zeroized in memory; credential lifecycle hardening belongs to later security work.
 - The CLI is a placeholder and no network behavior is implemented, as required for M001.
-- No implementation commit or accepted final reviewed head exists yet. M002 hard dependency is therefore unresolved.

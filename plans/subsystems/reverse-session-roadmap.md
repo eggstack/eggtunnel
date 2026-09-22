@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001 closing; M002-M006 dependency-blocked
+Status: active — M002 active; M003-M006 dependency-blocked
 
 Canonical references:
 
@@ -98,18 +98,9 @@ It does not own:
 
 ## 3. Current state
 
-The repository began empty.
+At the initial planning baseline the repository contained planning documents only. M001 is now closed with the Rust workspace and bounded protocol foundation. M002 is active: the TCP/TLS client/server runtime, CLI, and first product documentation are implemented in the working tree, with acceptance and closure evidence still in progress.
 
-Planning bootstrap has established:
-
-- canonical specification and terminology;
-- dependency-ordered long-term roadmap;
-- planning/closure governance;
-- ADR-0001 defining the thin Eggtunnel/Eggress boundary.
-
-At the initial planning baseline there was no production code. M001 owns repository/workspace creation as well as protocol foundation.
-
-At planning time the relevant Eggress baseline is 1.0.8. Implementation MUST verify actual published crate/API availability before locking dependencies.
+The current Eggress integration baseline is 1.0.8. The TLS, relay, and core stream APIs were inspected before adding dependencies.
 
 ## 4. Target architecture
 
@@ -168,7 +159,7 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
-Status: closing — implementation complete; committed review baseline pending
+Status: closed
 
 Implementation plan:
 
@@ -203,7 +194,7 @@ Create the compilable workspace and bounded runtime-neutral native protocol on w
 
 ## 7. Milestone M002 — TCP/TLS reverse-tunnel product
 
-Status: blocked on M001 closure
+Status: active
 
 Implementation plan:
 
@@ -478,8 +469,8 @@ Explicitly deferred until after M006 or a new ADR:
 
 | Milestone | Status | Plan | Closure | Blocker |
 |---|---|---|---|---|
-| M001 repository/protocol foundation | closing | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | committed reviewed baseline pending |
-| M002 TCP/TLS product | blocked | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | — | M001 closure |
+| M001 repository/protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | — |
+| M002 TCP/TLS product | active | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | — | Implementation and closure evidence in progress |
 | M003 hardening/embedding | blocked | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | — | M002 closure |
 | M004 QUIC | blocked | plans/implementation/reverse-session/004-quic-transport.md | — | M003 closure |
 | M005 WSS/proxy traversal | blocked | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | — | M003 closure |

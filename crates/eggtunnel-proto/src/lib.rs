@@ -610,6 +610,15 @@ mod tests {
             decode_frame(&frame[..3]),
             Err(ProtocolError::TruncatedFrame)
         );
+        assert_eq!(
+            decode_frame(&frame[..frame.len() - 1]),
+            Err(ProtocolError::TruncatedFrame)
+        );
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        let payload_len = (trailing.len() - HEADER_LEN) as u32;
+        trailing[10..14].copy_from_slice(&payload_len.to_be_bytes());
+        assert_eq!(decode_frame(&trailing), Err(ProtocolError::InvalidPayload));
         let mut bad = frame.clone();
         bad[0] = 0;
         assert_eq!(decode_frame(&bad), Err(ProtocolError::InvalidMagic));

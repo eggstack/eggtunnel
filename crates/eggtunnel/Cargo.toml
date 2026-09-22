@@ -8,9 +8,9 @@ license.workspace = true
 
 [features]
 default = ["client", "tls"]
-client = []
-server = []
-tls = []
+client = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:getrandom", "dep:rustls", "tls"]
+server = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:rustls", "tls"]
+tls = ["dep:eggress-transport-tls"]
 quic = []
 websocket = []
 outbound-proxy = []
@@ -18,4 +18,16 @@ mtls = ["tls"]
 
 [dependencies]
 eggtunnel-proto = { path = "../eggtunnel-proto", version = "0.1.0" }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+eggress-core = { workspace = true, optional = true }
+eggress-relay = { workspace = true, optional = true }
+eggress-transport-tls = { workspace = true, optional = true }
+subtle.workspace = true
+zeroize.workspace = true
+getrandom = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+thiserror.workspace = true
 
+[dev-dependencies]
+rcgen = "0.13"

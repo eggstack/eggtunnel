@@ -9,4 +9,12 @@ publish = false
 
 [dependencies]
 eggtunnel = { path = "../eggtunnel", features = ["client", "server", "tls"] }
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 
+[[bin]]
+name = "eggtunnel"
+path = "src/main.rs"
+doc = false

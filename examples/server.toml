@@ -1,0 +1,6 @@
+mode = "server"
+listen_addr = "0.0.0.0:9443"
+tls_cert = "/etc/eggtunnel/server-chain.pem"
+tls_key = "/etc/eggtunnel/server-key.pem"
+token_env = "EGGTUNNEL_TOKEN"
+allow_public_service_binds = false

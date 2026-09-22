@@ -29,23 +29,24 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M001 closing | M001 checks pass; implementation is uncommitted, so strict closure and M002 baseline refresh remain pending. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M002 active | M001 is strictly closed at `357480b942e95ef7087d86a043f26b7a3d175687`. |
 
-## Dependency-ready implementation plans
+## Active implementation plans
 
-None. M001 has completed implementation and is in closure.
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+|---|---|---|---|---|
+| Reverse session | M002 TCP/TLS reverse-tunnel product | active | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | M001 is strictly closed; implementation and closure evidence are in progress. |
 
-## Closing implementation plans
+## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / pending evidence |
 |---|---|---|---|---|
-| Reverse session | M001 repository and protocol foundation | closing | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; commit and reviewed head pending. |
+| Reverse session | M001 repository and protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; final head `357480b942e95ef7087d86a043f26b7a3d175687`. |
 
 ## Blocked implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Blocker |
 |---|---|---|---|---|
-| Reverse session | M002 TCP/TLS reverse-tunnel product | blocked | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | Requires strict M001 closure and execution-baseline refresh. |
 | Reverse session | M003 security/lifecycle/resource/embedding hardening | blocked | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | Requires strict M002 closure and execution-baseline refresh. |
 | Reverse session | M004 QUIC transport | blocked | plans/implementation/reverse-session/004-quic-transport.md | Requires strict M003 closure and execution-baseline refresh. |
 | Reverse session | M005 restricted-network transports/proxy traversal | blocked | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | Requires strict M003 closure and execution-baseline refresh. |
@@ -53,14 +54,14 @@ None. M001 has completed implementation and is in closure.
 
 ## Closure work
 
-M001 implementation is in closing with executable local evidence recorded in `plans/closure/reverse-session/001-status.md`. Strict closure is pending a committed reviewed head; M002 remains blocked until that head is accepted and its baseline is refreshed.
+M001 is closed with executable local evidence recorded in `plans/closure/reverse-session/001-status.md`. M002 is active against the accepted M001 head; runtime, CLI, docs, and local verification are in progress.
 
-For M001 closure:
+M001 closure was completed as follows:
 
-1. commit and review the implementation, then add the commit/head to the closure record;
-2. record acceptance of strict closure;
-3. only after accepted strict closure change M001 to closed and M002 to ready;
-4. refresh M002 repository baseline to the accepted M001 reviewed head before handoff.
+1. committed and reviewed the implementation;
+2. recorded required tests and dependency evidence;
+3. closed M001 and unblocked M002;
+4. refreshed the M002 baseline to the accepted reviewed head.
 
 ## Current architecture constraints
 

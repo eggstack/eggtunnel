@@ -1,0 +1,13 @@
+mode = "client"
+server_addr = "tunnel.example.net:9443"
+tls_server_name = "tunnel.example.net"
+token_env = "EGGTUNNEL_TOKEN"
+# Optional private certificate authority bundle:
+# ca_cert = "/etc/eggtunnel/server-ca.pem"
+
+[[services]]
+id = 1
+name = "web"
+target_host = "127.0.0.1"
+target_port = 8080
+bind_port = 0
