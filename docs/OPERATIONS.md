@@ -8,6 +8,8 @@ The server's `listen_addr` accepts both control sessions and reverse data
 connections. Every accepted connection begins with TLS. A service's actual
 address is server-assigned and is available through the Rust `ServerHandle`
 snapshot. The CLI prints newly assigned service addresses while it is running.
+For QUIC, `listen_addr` is the UDP control endpoint; service listeners still
+bind TCP on the requested interface and port.
 
 The client retries transient connection, TLS, and protocol failures with
 bounded exponential backoff and jitter. Invalid authentication or service

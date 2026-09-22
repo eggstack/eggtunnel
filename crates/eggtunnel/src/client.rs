@@ -21,6 +21,17 @@ use crate::{
     wire_io::{read_boxed, read_message, write_boxed, write_message},
 };
 
+#[derive(Clone)]
+enum ClientDataTransport {
+    TcpTls {
+        server_addr: String,
+        server_name: String,
+        tls: Arc<rustls::ClientConfig>,
+    },
+    #[cfg(feature = "quic")]
+    Quic(eggress_transport_quic::QuicConnection),
+}
+
 const MAX_SERVICES: usize = 64;
 const MAX_OPEN_TASKS: usize = 128;
 const CONTROL_QUEUE: usize = 128;
@@ -140,6 +151,68 @@ impl Client {
     ) -> Result<Self, TunnelError> {
         let tls_config = build_tls_config(config.ca_pem.as_deref())?;
         Self::start_with_tls_config(config, connector, tls_config).await
+    }
+
+    #[cfg(feature = "quic")]
+    pub async fn start_quic(config: ClientConfig) -> Result<Self, TunnelError> {
+        Self::start_quic_with_connector(config, Arc::new(TcpTargetConnector)).await
+    }
+
+    #[cfg(feature = "quic")]
+    pub async fn start_quic_with_connector(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        Self::start_quic_profile(config, connector, false).await
+    }
+
+    #[cfg(feature = "quic")]
+    async fn start_quic_profile(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+        insecure: bool,
+    ) -> Result<Self, TunnelError> {
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            TunnelError::Configuration("Client::start_quic requires a caller-owned Tokio runtime")
+        })?;
+        validate_config(&config)?;
+        if config.ca_pem.is_some() {
+            return Err(TunnelError::Configuration(
+                "Eggress QUIC currently uses platform roots; custom CA bundles are unsupported",
+            ));
+        }
+        let cancel = CancellationToken::new();
+        let counters = Counters::default();
+        let (command_tx, command_rx) = mpsc::channel(32);
+        let handle = ClientHandle {
+            cancel: cancel.clone(),
+            counters: counters.clone(),
+            commands: command_tx,
+        };
+        let task_cancel = cancel.clone();
+        let task = tokio::spawn(async move {
+            quic_reconnect_loop(
+                config,
+                connector,
+                insecure,
+                task_cancel,
+                counters,
+                command_rx,
+            )
+            .await;
+        });
+        Ok(Self {
+            cancel,
+            task: Some(task),
+            handle,
+        })
+    }
+
+    #[cfg(all(test, feature = "quic"))]
+    pub(crate) async fn start_quic_insecure_for_test(
+        config: ClientConfig,
+    ) -> Result<Self, TunnelError> {
+        Self::start_quic_profile(config, Arc::new(TcpTargetConnector), true).await
     }
 
     #[cfg(feature = "mtls")]
@@ -378,10 +451,12 @@ async fn reconnect_loop(
                         tokio::select! {
                             _ = cancel.cancelled() => Err(TunnelError::Cancelled),
                             result = run_session(stream, SessionRun {
-                                server_addr: &config.server_addr,
-                                tls_server_name: &config.tls_server_name,
                                 token: &config.token,
-                                tls: tls.clone(),
+                                transport: ClientDataTransport::TcpTls {
+                                    server_addr: config.server_addr.clone(),
+                                    server_name: config.tls_server_name.clone(),
+                                    tls: tls.clone(),
+                                },
                                 connector: connector.clone(),
                                 cancel: &cancel,
                                 counters: &counters,
@@ -434,6 +509,140 @@ async fn reconnect_loop(
     }
 }
 
+#[cfg(feature = "quic")]
+async fn quic_reconnect_loop(
+    mut config: ClientConfig,
+    connector: Arc<dyn TargetConnector>,
+    insecure: bool,
+    cancel: CancellationToken,
+    counters: Counters,
+    mut commands: mpsc::Receiver<ClientCommand>,
+) {
+    use eggress_transport_quic::{QuicClient, QuicClientConfig};
+
+    let Some((host, port)) = split_endpoint(&config.server_addr) else {
+        return;
+    };
+    let mut delay = Duration::from_millis(500);
+    'reconnect: loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+        while let Ok(command) = commands.try_recv() {
+            apply_client_command(&mut config.services, command);
+        }
+        let quic_config = QuicClientConfig {
+            server_name: config.tls_server_name.clone(),
+            insecure,
+            idle_timeout: Duration::from_secs(90),
+            max_concurrent_streams: 256,
+            ..QuicClientConfig::default()
+        };
+        let quic = tokio::select! {
+            _ = cancel.cancelled() => break,
+            result = timeout(CONNECT_TIMEOUT, QuicClient::connect(host, port, quic_config)) => {
+                match result {
+                    Ok(Ok(client)) => client,
+                    _ => {
+                        record_quic_reconnect(&counters, &cancel, &mut delay).await;
+                        continue;
+                    }
+                }
+            }
+        };
+        let session = async {
+            let connection = timeout(CONNECT_TIMEOUT, quic.get_connection())
+                .await
+                .map_err(|_| TunnelError::Timeout)?
+                .map_err(|_| TunnelError::Tls)?;
+            let control = timeout(CONNECT_TIMEOUT, connection.open_stream())
+                .await
+                .map_err(|_| TunnelError::Timeout)?
+                .map_err(|_| TunnelError::Disconnected)?;
+            run_session(
+                control,
+                SessionRun {
+                    token: &config.token,
+                    transport: ClientDataTransport::Quic(connection.clone()),
+                    connector: connector.clone(),
+                    cancel: &cancel,
+                    counters: &counters,
+                    reconnect_delay: &mut delay,
+                    services: &mut config.services,
+                    commands: &mut commands,
+                },
+            )
+            .await
+        };
+        let result = tokio::select! {
+            _ = cancel.cancelled() => Err(TunnelError::Cancelled),
+            result = session => result,
+        };
+        quic.close();
+        if matches!(
+            &result,
+            Err(TunnelError::Authentication | TunnelError::Authorization)
+        ) {
+            if let Err(error) = &result {
+                counters.record_termination(error.termination_category());
+            }
+            break 'reconnect;
+        }
+        if let Err(error) = &result {
+            counters.record_termination(error.termination_category());
+        }
+        if cancel.is_cancelled() {
+            break 'reconnect;
+        }
+        record_quic_reconnect(&counters, &cancel, &mut delay).await;
+    }
+}
+
+#[cfg(feature = "quic")]
+async fn record_quic_reconnect(
+    counters: &Counters,
+    cancel: &CancellationToken,
+    delay: &mut Duration,
+) {
+    counters
+        .connected
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    counters
+        .services
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    counters
+        .binds
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
+    if cancel.is_cancelled() {
+        return;
+    }
+    counters
+        .reconnects
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let jitter = random_jitter_ms(*delay);
+    tokio::select! {
+        _ = cancel.cancelled() => {},
+        _ = tokio::time::sleep(*delay + Duration::from_millis(jitter)) => {}
+    }
+    *delay = (*delay * 2).min(Duration::from_secs(30));
+}
+
+#[cfg(feature = "quic")]
+fn split_endpoint(endpoint: &str) -> Option<(&str, u16)> {
+    let (host, port) = if endpoint.starts_with('[') {
+        let end = endpoint.find(']')?;
+        if endpoint.as_bytes().get(end + 1) != Some(&b':') {
+            return None;
+        }
+        (&endpoint[1..end], &endpoint[end + 2..])
+    } else {
+        endpoint.rsplit_once(':')?
+    };
+    Some((host, port.parse().ok()?))
+}
+
 fn random_jitter_ms(delay: Duration) -> u64 {
     let max = (delay.as_millis() / 4).min(7_500) as u64;
     if max == 0 {
@@ -448,10 +657,8 @@ fn random_jitter_ms(delay: Duration) -> u64 {
 }
 
 struct SessionRun<'a> {
-    server_addr: &'a str,
-    tls_server_name: &'a str,
     token: &'a SecretToken,
-    tls: Arc<rustls::ClientConfig>,
+    transport: ClientDataTransport,
     connector: Arc<dyn TargetConnector>,
     cancel: &'a CancellationToken,
     counters: &'a Counters,
@@ -462,10 +669,8 @@ struct SessionRun<'a> {
 
 async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(), TunnelError> {
     let SessionRun {
-        server_addr,
-        tls_server_name,
         token,
-        tls,
+        transport,
         connector,
         cancel,
         counters,
@@ -570,18 +775,13 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             continue;
                         };
                         let service_cancel = session_cancel.child_token();
-                        let server_addr = server_addr.to_owned();
-                        let server_name = tls_server_name.to_owned();
                         let out = out_tx.clone();
-                        let open_tls = tls.clone();
                         let open_guard = OpenTaskGuard::new(
                             counters.open_tasks.clone(),
                             counters.high_water_open_tasks.clone(),
                         );
                         let context = OpenContext {
-                            server_addr,
-                            server_name,
-                            tls: open_tls,
+                            transport: transport.clone(),
                             session_id,
                             cancel: service_cancel,
                             out,
@@ -656,9 +856,7 @@ async fn handshake_write(stream: &mut BoxStream, message: &Message) -> Result<()
 }
 
 struct OpenContext {
-    server_addr: String,
-    server_name: String,
-    tls: Arc<rustls::ClientConfig>,
+    transport: ClientDataTransport,
     connector: Arc<dyn TargetConnector>,
     session_id: eggtunnel_proto::SessionId,
     cancel: CancellationToken,
@@ -668,9 +866,7 @@ struct OpenContext {
 
 async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
     let OpenContext {
-        server_addr,
-        server_name,
-        tls,
+        transport,
         connector,
         session_id,
         cancel,
@@ -687,14 +883,25 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
             _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
             result = timeout(CONNECT_TIMEOUT, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
         };
-        let tcp = tokio::select! {
-            _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(CONNECT_TIMEOUT, TcpStream::connect(server_addr.as_str())) => result.map_err(|_| TunnelError::Disconnected)??,
-        };
-        let stream: BoxStream = Box::new(tcp);
-        let mut data = tokio::select! {
-            _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+        let mut data = match transport {
+            ClientDataTransport::TcpTls { server_addr, server_name, tls } => {
+                let tcp = tokio::select! {
+                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
+                    result = timeout(CONNECT_TIMEOUT, TcpStream::connect(server_addr.as_str())) => result.map_err(|_| TunnelError::Timeout)??,
+                };
+                let stream: BoxStream = Box::new(tcp);
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
+                    result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
+                }
+            }
+            #[cfg(feature = "quic")]
+            ClientDataTransport::Quic(connection) => {
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
+                    result = timeout(CONNECT_TIMEOUT, connection.open_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
+                }
+            }
         };
         write_boxed(&mut data, &Message::DataHello(DataHello { session_id, service_id: service.id, connection_id: open.connection_id })).await?;
         match relay_with_options(target, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), RELAY_DRAIN)).await {

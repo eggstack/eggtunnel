@@ -41,3 +41,8 @@ buffers are redacted and zeroized on drop on a best-effort basis.
 The ordinary TLS profile uses Eggress 1.0.8. Its public configuration builders
 install the Rustls ring provider as the process default if no provider has
 been set; Eggtunnel does not install a runtime or tracing subscriber.
+
+The optional QUIC profile uses Eggress 1.0.8 with platform certificate roots
+and verified SNI. The adapter currently has no custom-root or client-certificate
+configuration, so QUIC rejects custom CA and mTLS settings instead of ignoring
+them. QUIC still requires the bearer token inside its encrypted control stream.

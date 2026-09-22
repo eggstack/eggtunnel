@@ -27,6 +27,8 @@ enum Command {
 #[derive(Deserialize)]
 struct FileConfig {
     mode: String,
+    #[serde(default = "default_transport")]
+    transport: String,
     token_env: String,
     #[serde(default)]
     listen_addr: Option<String>,
@@ -50,6 +52,10 @@ struct FileConfig {
     client_ca: Option<PathBuf>,
     #[serde(default)]
     services: Vec<FileService>,
+}
+
+fn default_transport() -> String {
+    "tcp_tls".to_owned()
 }
 
 #[derive(Deserialize)]
@@ -122,6 +128,9 @@ fn checked_endpoint(value: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
     let _token = load_token(&config.token_env)?;
+    if !matches!(config.transport.as_str(), "tcp_tls" | "quic") {
+        return Err("transport must be 'tcp_tls' or 'quic'".into());
+    }
     match config.mode.as_str() {
         "client" => {
             let addr = config
@@ -141,6 +150,15 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
             if config.client_cert.is_some() != config.client_key.is_some() {
                 return Err("client_cert and client_key must be configured together".into());
+            }
+            if config.transport == "quic"
+                && (config.ca_cert.is_some()
+                    || config.client_cert.is_some()
+                    || config.client_key.is_some())
+            {
+                return Err(
+                    "the Eggress QUIC adapter supports platform roots and bearer auth only".into(),
+                );
             }
             if let (Some(cert), Some(key)) = (&config.client_cert, &config.client_key)
                 && (fs::read(cert)?.is_empty() || fs::read(key)?.is_empty())
@@ -170,6 +188,9 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             {
                 return Err("client CA file must not be empty".into());
             }
+            if config.transport == "quic" && config.client_ca.is_some() {
+                return Err("the Eggress QUIC adapter does not support mTLS".into());
+            }
         }
         _ => return Err("mode must be 'client' or 'server'".into()),
     }
@@ -198,7 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token,
                 allow_public_service_binds: config.allow_public_service_binds,
             };
-            let server = if let Some(client_ca) = &config.client_ca {
+            let server = if config.transport == "quic" {
+                Server::bind_quic(server_config).await?
+            } else if let Some(client_ca) = &config.client_ca {
                 Server::bind_mtls(server_config, fs::read(client_ca)?).await?
             } else {
                 Server::bind(server_config).await?
@@ -239,7 +262,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 token: load_token(&config.token_env)?,
                 services,
             };
-            let client = if let (Some(client_cert), Some(client_key)) =
+            let client = if config.transport == "quic" {
+                Client::start_quic(client_config).await?
+            } else if let (Some(client_cert), Some(client_key)) =
                 (&config.client_cert, &config.client_key)
             {
                 Client::start_with_mtls(

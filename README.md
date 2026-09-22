@@ -9,12 +9,14 @@ services, and opens a separate TLS data connection per accepted external
 connection. Embedders can provide a direct application stream connector, and
 the optional `mtls` feature adds certificate authentication alongside the
 bearer token. See the [configuration guide](docs/CONFIGURATION.md),
-[security model](docs/SECURITY.md), and [roadmap](plans/subsystems/reverse-session-roadmap.md).
+[security model](docs/SECURITY.md), [transport support](docs/SUPPORT.md), and
+[roadmap](plans/subsystems/reverse-session-roadmap.md).
 
 ```sh
 eggtunnel check client.toml
 EGGTUNNEL_TOKEN='use-a-high-entropy-secret' eggtunnel client client.toml
 ```
 
-QUIC, WebSocket, outbound-proxy traversal, and release packaging remain
+QUIC is available with the optional `quic` feature and `transport = "quic"` CLI
+setting. WebSocket, outbound-proxy traversal, and release packaging remain
 roadmap items.

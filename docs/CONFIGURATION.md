@@ -7,6 +7,7 @@ named by `token_env`; the token is not stored in the configuration file.
 
 ```toml
 mode = "client"
+transport = "tcp_tls" # or "quic" (UDP)
 server_addr = "tunnel.example.net:9443"
 tls_server_name = "tunnel.example.net"
 token_env = "EGGTUNNEL_TOKEN"
@@ -32,6 +33,7 @@ server cannot change the client's local destination.
 
 ```toml
 mode = "server"
+transport = "tcp_tls" # or "quic" (UDP; service listeners remain TCP)
 listen_addr = "0.0.0.0:9443"
 tls_cert = "/etc/eggtunnel/server-chain.pem"
 tls_key = "/etc/eggtunnel/server-key.pem"
@@ -45,6 +47,12 @@ allow_public_service_binds = false
 Service binds are loopback-only by default. `allow_public_service_binds = true`
 enables explicit non-loopback binds requested by authenticated clients. The
 control endpoint itself is TLS protected and requires the token after TLS.
+
+The QUIC profile uses operating-system certificate roots and bearer-token
+authentication. The current Eggress QUIC adapter does not accept custom CA
+bundles or mTLS identity material; `eggtunnel check` rejects those combinations.
+The QUIC control endpoint uses UDP on `listen_addr`; approved service listeners
+continue to use TCP.
 
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup

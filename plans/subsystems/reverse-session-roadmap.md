@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M004 active; M005 ready; M006 dependency-blocked
+Status: active — M004 closed; M005 ready; M006 dependency-blocked
 
 Canonical references:
 
@@ -98,7 +98,7 @@ It does not own:
 
 ## 3. Current state
 
-At the initial planning baseline the repository contained planning documents only. M001 is closed with the Rust workspace and bounded protocol foundation. M002 is closed with the authenticated TCP/TLS product. M003 is closed with resource accounting, auth and bind hardening, optional mTLS, direct application connectors, and lifecycle qualification. M004 is active; M005 is ready and sequenced after it.
+At the initial planning baseline the repository contained planning documents only. M001 is closed with the Rust workspace and bounded protocol foundation. M002 is closed with the authenticated TCP/TLS product. M003 is closed with resource accounting, auth and bind hardening, optional mTLS, direct application connectors, and lifecycle qualification. M004 is closed; M005 is ready and sequenced after it.
 
 The current Eggress integration baseline is 1.0.8. The TLS, relay, and core stream APIs were inspected before adding dependencies.
 
@@ -472,6 +472,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M001 repository/protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | — |
 | M002 TCP/TLS product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md | — |
 | M003 hardening/embedding | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md | — |
-| M004 QUIC | active | plans/implementation/reverse-session/004-quic-transport.md | — | M003 closed at `31458e83e543304d6b271898575bf2f6e98c7352` |
+| M004 QUIC | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md | M003 closed at `31458e83e543304d6b271898575bf2f6e98c7352` |
 | M005 WSS/proxy traversal | ready | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | — | M003 closed; sequenced after M004 |
 | M006 distribution/downstream | blocked | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | M003 + selected transport closures |

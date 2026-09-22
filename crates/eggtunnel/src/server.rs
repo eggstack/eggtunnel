@@ -133,6 +133,61 @@ impl Server {
         Self::bind_with_tls(config, bind_policy, ServerTls::Eggress(tls)).await
     }
 
+    #[cfg(feature = "quic")]
+    pub async fn bind_quic(config: ServerConfig) -> Result<Self, TunnelError> {
+        let bind_policy = BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        };
+        Self::bind_quic_with_policy(config, bind_policy).await
+    }
+
+    #[cfg(feature = "quic")]
+    pub async fn bind_quic_with_policy(
+        config: ServerConfig,
+        bind_policy: BindPolicy,
+    ) -> Result<Self, TunnelError> {
+        use eggress_transport_quic::{QuicListener, QuicServerConfig};
+
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            TunnelError::Configuration("Server::bind_quic requires a caller-owned Tokio runtime")
+        })?;
+        validate_config(&config)?;
+        bind_policy.validate()?;
+        let listener = QuicListener::bind(
+            config.listen_addr,
+            QuicServerConfig {
+                certificate_pem: config.certificate_pem.clone(),
+                private_key_pem: config.private_key_pem.clone(),
+                idle_timeout: Duration::from_secs(90),
+                max_concurrent_streams: 256,
+                alpn_protocols: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|_| TunnelError::Tls)?;
+        let local_addr = listener.local_addr().map_err(|_| TunnelError::Tls)?;
+        let cancel = CancellationToken::new();
+        let counters = Counters::default();
+        let handle = ServerHandle {
+            cancel: cancel.clone(),
+            counters: counters.clone(),
+        };
+        let task = tokio::spawn(quic_server_loop(
+            listener,
+            config.token.clone(),
+            bind_policy,
+            cancel.clone(),
+            counters,
+        ));
+        Ok(Self {
+            cancel,
+            task: Some(task),
+            handle,
+            local_addr,
+        })
+    }
+
     #[cfg(feature = "mtls")]
     pub async fn bind_mtls(
         config: ServerConfig,
@@ -344,6 +399,187 @@ async fn server_loop(
     }
     handlers.abort_all();
     while handlers.join_next().await.is_some() {}
+}
+
+#[cfg(feature = "quic")]
+async fn quic_server_loop(
+    listener: Arc<eggress_transport_quic::QuicListener>,
+    token: SecretToken,
+    bind_policy: BindPolicy,
+    cancel: CancellationToken,
+    counters: Counters,
+) {
+    let sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let admission = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+    let auth_failures = Arc::new(AuthFailureLimiter::new(
+        AUTH_FAILURES_PER_SOURCE,
+        AUTH_FAILURE_WINDOW,
+        MAX_AUTH_SOURCES,
+    ));
+    let mut handlers = JoinSet::new();
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            accepted = listener.accept_connection(&cancel) => {
+                let connection = match accepted {
+                    Ok(Some(connection)) => connection,
+                    Ok(None) => break,
+                    Err(_) => {
+                        counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
+                };
+                let Ok(permit) = admission.clone().try_acquire_owned() else {
+                    counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    counters.record_termination(TerminationCategory::ResourceExhausted);
+                    connection.close("handshake limit reached");
+                    continue;
+                };
+                let source = connection.remote_address().ip();
+                let handshake_guard = HandshakeGuard::new(counters.clone());
+                let connection_context = ConnectionContext {
+                    sessions: sessions.clone(),
+                    counters: counters.clone(),
+                    auth_failures: auth_failures.clone(),
+                    bind_policy: bind_policy.clone(),
+                    cancel: cancel.child_token(),
+                    principal: None,
+                    admission: Some(permit),
+                    handshake_guard: Some(handshake_guard),
+                };
+                let token = token.clone();
+                let task_counters = counters.clone();
+                handlers.spawn(async move {
+                    if let Err(error) = handle_quic_connection(connection, source, token, connection_context).await {
+                        task_counters.record_termination(error.termination_category());
+                    }
+                });
+            }
+            Some(result) = handlers.join_next(), if !handlers.is_empty() => {
+                counters.record_join_result(&result);
+            }
+        }
+    }
+    listener.close();
+    let active: Vec<_> = sessions
+        .lock()
+        .await
+        .values()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    for session in &active {
+        if let Some(sender) = session.control_tx.lock().await.as_ref() {
+            let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain {
+                deadline_ms: SERVER_SHUTDOWN_GRACE.as_millis() as u32,
+            }));
+        }
+    }
+    tokio::time::sleep(SERVER_SHUTDOWN_GRACE).await;
+    for session in active {
+        session.cancel.cancel();
+    }
+    handlers.abort_all();
+    while handlers.join_next().await.is_some() {}
+}
+
+#[cfg(feature = "quic")]
+async fn handle_quic_connection(
+    connection: eggress_transport_quic::QuicConnection,
+    source: IpAddr,
+    token: SecretToken,
+    context: ConnectionContext,
+) -> Result<(), TunnelError> {
+    let mut control_stream = tokio::select! {
+        _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
+        result = timeout(HANDSHAKE_TIMEOUT, connection.accept_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
+    };
+    let first = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut control_stream))
+        .await
+        .map_err(|_| TunnelError::Timeout)??;
+    let Message::ClientHello(hello) = first else {
+        return Err(TunnelError::Protocol(
+            eggtunnel_proto::ProtocolError::UnexpectedMessage,
+        ));
+    };
+    let connection_cancel = context.cancel.clone();
+    let stream_admission = Arc::new(Semaphore::new(MAX_ACTIVE_CONNECTIONS_PER_SESSION));
+    let sessions = context.sessions.clone();
+    let counters = context.counters.clone();
+    let auth_failures = context.auth_failures.clone();
+    let bind_policy = context.bind_policy.clone();
+    let control = tokio::spawn(serve_control(control_stream, hello, token, source, context));
+    let mut control = control;
+    let mut streams = JoinSet::new();
+    loop {
+        tokio::select! {
+            _ = connection_cancel.cancelled() => break,
+            result = &mut control => {
+                match result {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => counters.record_termination(error.termination_category()),
+                    Err(error) if error.is_panic() => {
+                        counters.task_panics.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        counters.record_termination(TerminationCategory::Internal);
+                    }
+                    Err(_) => {},
+                }
+                break;
+            }
+            accepted = connection.accept_stream() => {
+                let stream = accepted.map_err(|_| TunnelError::Disconnected)?;
+                let Ok(permit) = stream_admission.clone().try_acquire_owned() else {
+                    counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    counters.record_termination(TerminationCategory::ResourceExhausted);
+                    continue;
+                };
+                let data_context = ConnectionContext {
+                    sessions: sessions.clone(),
+                    counters: counters.clone(),
+                    auth_failures: auth_failures.clone(),
+                    bind_policy: bind_policy.clone(),
+                    cancel: connection_cancel.child_token(),
+                    principal: None,
+                    admission: None,
+                    handshake_guard: Some(HandshakeGuard::new(counters.clone())),
+                };
+                streams.spawn(async move {
+                    let _permit = permit;
+                    handle_quic_data_stream(stream, data_context).await
+                });
+            }
+            Some(result) = streams.join_next(), if !streams.is_empty() => {
+                counters.record_join_result(&result);
+            }
+        }
+    }
+    connection_cancel.cancel();
+    connection.close("session ended");
+    streams.abort_all();
+    while streams.join_next().await.is_some() {}
+    if !control.is_finished() {
+        control.abort();
+    }
+    let _ = control.await;
+    Ok(())
+}
+
+#[cfg(feature = "quic")]
+async fn handle_quic_data_stream(
+    mut stream: BoxStream,
+    mut context: ConnectionContext,
+) -> Result<(), TunnelError> {
+    let first = tokio::select! {
+        _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
+        result = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream)) => result.map_err(|_| TunnelError::Timeout)??,
+    };
+    let Message::DataHello(hello) = first else {
+        return Err(TunnelError::Protocol(
+            eggtunnel_proto::ProtocolError::UnexpectedMessage,
+        ));
+    };
+    drop(context.handshake_guard.take());
+    accept_data_hello(stream, hello, None, &context.sessions, &context.counters).await
 }
 
 struct PendingEntry {
@@ -1478,6 +1714,205 @@ mod tests {
         assert_eq!(server.handle().snapshot().pending_connections, 0);
         server.shutdown().await;
         echo_task.abort();
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn quic_session_multiplexes_isolated_data_streams_for_two_services() {
+        let (cert, key) = certificate();
+        let server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"quic-test-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        let client = Client::start_quic_insecure_for_test(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token: SecretToken::new(b"quic-test-secret".to_vec()).unwrap(),
+            services: vec![
+                ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("quic-one").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
+                ),
+                ClientService::new(
+                    ServiceId(2),
+                    ServiceName::new("quic-two").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
+                ),
+            ],
+        })
+        .await
+        .unwrap();
+        let binds = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let binds = server.handle().snapshot().effective_binds;
+                if binds.len() == 2 {
+                    break binds
+                        .into_iter()
+                        .map(|(_, _, bind)| {
+                            SocketAddr::V6(std::net::SocketAddrV6::new(
+                                std::net::Ipv6Addr::from(bind.address),
+                                bind.port,
+                                0,
+                                0,
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (one, two) = tokio::join!(
+            roundtrip(binds[0], b"quic-stream-one"),
+            roundtrip(binds[1], b"quic-stream-two")
+        );
+        assert_eq!(one, b"quic-stream-one");
+        assert_eq!(two, b"quic-stream-two");
+
+        let mut reset_stream = TcpStream::connect(binds[0]).await.unwrap();
+        reset_stream.write_all(b"reset-this-stream").await.unwrap();
+        drop(reset_stream);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            roundtrip(binds[1], b"stream-after-reset").await,
+            b"stream-after-reset"
+        );
+        client.shutdown().await;
+        server.shutdown().await;
+        echo_task.abort();
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn quic_connection_replacement_creates_new_session_and_reregisters_services() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"quic-reconnect-secret".to_vec()).unwrap();
+        let first_server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let endpoint = first_server.local_addr();
+        let first_handle = first_server.handle();
+        let client = Client::start_quic_insecure_for_test(ClientConfig {
+            server_addr: endpoint.to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token: token.clone(),
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("quic-restored").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )],
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if first_handle.snapshot().registered_services == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let first_session = first_handle.snapshot().effective_binds[0].0;
+        first_server.shutdown().await;
+
+        let second_server = Server::bind_quic(ServerConfig {
+            listen_addr: endpoint,
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token,
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if second_server.handle().snapshot().registered_services == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let second_session = second_server.handle().snapshot().effective_binds[0].0;
+        assert_ne!(first_session, second_session);
+        assert!(client.handle().snapshot().reconnects > 0);
+        client.shutdown().await;
+        second_server.shutdown().await;
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn production_quic_profile_rejects_untrusted_server_certificate() {
+        let (cert, key) = certificate();
+        let server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"quic-trust-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let client = Client::start_quic(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token: SecretToken::new(b"quic-trust-secret".to_vec()).unwrap(),
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("must-not-register").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )],
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if client.handle().snapshot().reconnects > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(server.handle().snapshot().active_sessions, 0);
+        assert_eq!(server.handle().snapshot().registered_services, 0);
+        client.shutdown().await;
+        server.shutdown().await;
     }
 
     #[tokio::test]

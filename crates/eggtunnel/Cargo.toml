@@ -11,7 +11,7 @@ default = ["client", "tls"]
 client = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:getrandom", "dep:rustls", "tls"]
 server = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:rustls", "tls"]
 tls = ["dep:eggress-transport-tls"]
-quic = []
+quic = ["client", "server", "dep:eggress-transport-quic"]
 websocket = []
 outbound-proxy = []
 mtls = ["tls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots", "dep:sha2"]
@@ -23,6 +23,7 @@ tokio-util = { workspace = true, optional = true }
 eggress-core = { workspace = true, optional = true }
 eggress-relay = { workspace = true, optional = true }
 eggress-transport-tls = { workspace = true, optional = true }
+eggress-transport-quic = { workspace = true, optional = true }
 subtle.workspace = true
 zeroize.workspace = true
 getrandom = { workspace = true, optional = true }
@@ -35,3 +36,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 rcgen = "0.13"
+eggress-transport-quic = { workspace = true, features = ["insecure-quic"] }

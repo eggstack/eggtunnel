@@ -1,6 +1,6 @@
 # Reverse Session M004 — QUIC Transport
 
-Status: active
+Status: closed
 
 Planning baseline: 31458e83e543304d6b271898575bf2f6e98c7352
 

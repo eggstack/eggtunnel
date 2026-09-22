@@ -36,3 +36,8 @@ That profile keeps bearer-token auth and adds a required client certificate.
 The compile-only downstream fixture in `fixtures/embedder` demonstrates a
 caller-owned Tokio runtime, programmatic service configuration, caller-owned
 tracing, and a direct in-process connector without the CLI dependency.
+
+Enable the optional `quic` feature and call `Client::start_quic` to use one
+QUIC connection per Session. The current Eggress adapter uses platform trust
+roots and does not support custom CA bundles or mTLS; QUIC can still use a
+programmatic `TargetConnector` with `start_quic_with_connector`.
