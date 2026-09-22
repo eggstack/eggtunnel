@@ -1,0 +1,12 @@
+[package]
+name = "eggtunnel-embedder-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+eggtunnel = { path = "../../crates/eggtunnel", default-features = false, features = ["client", "tls"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"

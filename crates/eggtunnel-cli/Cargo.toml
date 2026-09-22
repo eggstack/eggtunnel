@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-eggtunnel = { path = "../eggtunnel", features = ["client", "server", "tls"] }
+eggtunnel = { path = "../eggtunnel", features = ["client", "server", "tls", "mtls"] }
 clap.workspace = true
 serde.workspace = true
 toml.workspace = true

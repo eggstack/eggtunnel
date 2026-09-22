@@ -12,6 +12,9 @@ tls_server_name = "tunnel.example.net"
 token_env = "EGGTUNNEL_TOKEN"
 # Optional private root bundle. Without it the system root set is used.
 # ca_cert = "/etc/eggtunnel/server-ca.pem"
+# Optional mTLS identity. Configure both fields to require/use a client cert.
+# client_cert = "/etc/eggtunnel/client-chain.pem"
+# client_key = "/etc/eggtunnel/client-key.pem"
 
 [[services]]
 id = 1
@@ -34,6 +37,9 @@ tls_cert = "/etc/eggtunnel/server-chain.pem"
 tls_key = "/etc/eggtunnel/server-key.pem"
 token_env = "EGGTUNNEL_TOKEN"
 allow_public_service_binds = false
+# Optional mTLS client trust roots; when present the server requires a
+# trusted client certificate as well as the bearer token.
+# client_ca = "/etc/eggtunnel/client-ca.pem"
 ```
 
 Service binds are loopback-only by default. `allow_public_service_binds = true`
@@ -43,4 +49,3 @@ control endpoint itself is TLS protected and requires the token after TLS.
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup
 also parses and validates its certificate and key.
-

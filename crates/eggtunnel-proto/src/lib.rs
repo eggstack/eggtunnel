@@ -700,8 +700,19 @@ mod tests {
 
     #[test]
     fn arbitrary_input_never_panics() {
-        for len in 0..512 {
-            let bytes: Vec<u8> = (0..len).map(|n| ((n * 31 + len) % 256) as u8).collect();
+        let mut state = 0xD1CE_BA5E_F00D_u64;
+        for sample in 0..10_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let len = (state as usize ^ sample) % 4097;
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                bytes.push(state as u8);
+            }
             let _ = decode_frame(&bytes);
         }
     }

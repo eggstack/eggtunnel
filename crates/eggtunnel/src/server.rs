@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap,
-    net::SocketAddr,
+    collections::{HashMap, VecDeque},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -22,16 +22,29 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    common::{Counters, SecretToken, Snapshot, TunnelError, bind_to_socket, verify_token},
+    common::{
+        BindPolicy, Counters, SecretToken, Snapshot, TerminationCategory, TunnelError,
+        bind_to_socket, verify_token,
+    },
     wire_io::{read_boxed, read_message, write_boxed, write_message},
 };
 
+#[derive(Clone)]
+enum ServerTls {
+    Eggress(Arc<rustls::ServerConfig>),
+    #[cfg(feature = "mtls")]
+    Mutual(Arc<rustls::ServerConfig>),
+}
+
 const MAX_SESSIONS: usize = 128;
-const MAX_SERVICES_PER_SESSION: usize = 64;
 const MAX_PENDING_PER_SESSION: usize = 128;
 const MAX_ACTIVE_CONNECTIONS_PER_SESSION: usize = 128;
 const CONTROL_QUEUE: usize = 128;
 const MAX_HANDSHAKES: usize = 64;
+const AUTH_FAILURES_PER_SOURCE: usize = 10;
+const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const MAX_AUTH_SOURCES: usize = 1024;
+const AUTH_FAILURE_DELAY: Duration = Duration::from_millis(100);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const PENDING_LIFETIME: Duration = Duration::from_secs(30);
@@ -46,6 +59,13 @@ pub struct ServerConfig {
     pub token: SecretToken,
     /// Non-loopback service binds require this explicit policy switch.
     pub allow_public_service_binds: bool,
+}
+
+impl Drop for ServerConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.private_key_pem.zeroize();
+    }
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -87,10 +107,22 @@ impl ServerHandle {
 
 impl Server {
     pub async fn bind(config: ServerConfig) -> Result<Self, TunnelError> {
+        let policy = BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        };
+        Self::bind_with_policy(config, policy).await
+    }
+
+    pub async fn bind_with_policy(
+        config: ServerConfig,
+        bind_policy: BindPolicy,
+    ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Server::bind requires a caller-owned Tokio runtime")
         })?;
         validate_config(&config)?;
+        bind_policy.validate()?;
         let tls = TlsServerConfigBuilder::new()
             .with_certificate_pem(&config.certificate_pem)
             .map_err(|_| TunnelError::Tls)?
@@ -98,6 +130,41 @@ impl Server {
             .map_err(|_| TunnelError::Tls)?
             .build()
             .map_err(|_| TunnelError::Tls)?;
+        Self::bind_with_tls(config, bind_policy, ServerTls::Eggress(tls)).await
+    }
+
+    #[cfg(feature = "mtls")]
+    pub async fn bind_mtls(
+        config: ServerConfig,
+        trusted_client_ca_pem: Vec<u8>,
+    ) -> Result<Self, TunnelError> {
+        let bind_policy = BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        };
+        Self::bind_mtls_with_policy(config, trusted_client_ca_pem, bind_policy).await
+    }
+
+    #[cfg(feature = "mtls")]
+    pub async fn bind_mtls_with_policy(
+        config: ServerConfig,
+        trusted_client_ca_pem: Vec<u8>,
+        bind_policy: BindPolicy,
+    ) -> Result<Self, TunnelError> {
+        let tls = build_mtls_server_config(&config, &trusted_client_ca_pem)?;
+        Self::bind_with_tls(config, bind_policy, ServerTls::Mutual(tls)).await
+    }
+
+    async fn bind_with_tls(
+        config: ServerConfig,
+        bind_policy: BindPolicy,
+        tls: ServerTls,
+    ) -> Result<Self, TunnelError> {
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            TunnelError::Configuration("Server::bind requires a caller-owned Tokio runtime")
+        })?;
+        validate_config(&config)?;
+        bind_policy.validate()?;
         let listener = TcpListener::bind(config.listen_addr).await?;
         let local_addr = listener.local_addr()?;
         let cancel = CancellationToken::new();
@@ -107,7 +174,14 @@ impl Server {
             counters: counters.clone(),
         };
         let task_cancel = cancel.clone();
-        let task = tokio::spawn(server_loop(listener, config, tls, task_cancel, counters));
+        let task = tokio::spawn(server_loop(
+            listener,
+            config.token.clone(),
+            tls,
+            bind_policy,
+            task_cancel,
+            counters,
+        ));
         Ok(Self {
             cancel,
             task: Some(task),
@@ -154,38 +228,96 @@ fn validate_config(config: &ServerConfig) -> Result<(), TunnelError> {
     Ok(())
 }
 
+#[cfg(feature = "mtls")]
+fn build_mtls_server_config(
+    config: &ServerConfig,
+    trusted_client_ca_pem: &[u8],
+) -> Result<Arc<rustls::ServerConfig>, TunnelError> {
+    use std::io::Cursor;
+
+    let certificates = rustls_pemfile::certs(&mut Cursor::new(&config.certificate_pem))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| TunnelError::Tls)?;
+    let private_key = rustls_pemfile::private_key(&mut Cursor::new(&config.private_key_pem))
+        .map_err(|_| TunnelError::Tls)?
+        .ok_or(TunnelError::Tls)?;
+    let client_ca = rustls_pemfile::certs(&mut Cursor::new(trusted_client_ca_pem))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| TunnelError::Tls)?;
+    if certificates.is_empty() || client_ca.is_empty() {
+        return Err(TunnelError::Tls);
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in client_ca {
+        roots.add(cert).map_err(|_| TunnelError::Tls)?;
+    }
+    let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|_| TunnelError::Tls)?;
+    let tls = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(certificates, private_key)
+        .map_err(|_| TunnelError::Tls)?;
+    Ok(Arc::new(tls))
+}
+
+#[cfg(feature = "mtls")]
+fn certificate_principal(certificate_der: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(certificate_der).into()
+}
+
 async fn server_loop(
     listener: TcpListener,
-    config: ServerConfig,
-    tls: Arc<rustls::ServerConfig>,
+    token: SecretToken,
+    tls: ServerTls,
+    bind_policy: BindPolicy,
     cancel: CancellationToken,
     counters: Counters,
 ) {
     let sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let admission = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+    let auth_failures = Arc::new(AuthFailureLimiter::new(
+        AUTH_FAILURES_PER_SOURCE,
+        AUTH_FAILURE_WINDOW,
+        MAX_AUTH_SOURCES,
+    ));
     let mut handlers = JoinSet::new();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             accepted = listener.accept() => {
-                let Ok((tcp, _peer)) = accepted else { continue; };
+                let Ok((tcp, peer)) = accepted else { continue; };
                 let Ok(permit) = admission.clone().try_acquire_owned() else {
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    counters.record_termination(TerminationCategory::ResourceExhausted);
                     continue;
                 };
                 let tls = tls.clone();
-                let token = config.token.clone();
+                let token = token.clone();
                 let sessions = sessions.clone();
                 let counters = counters.clone();
-                let service_policy = config.allow_public_service_binds;
+                let auth_failures = auth_failures.clone();
                 let child_cancel = cancel.child_token();
+                let handshake_guard = HandshakeGuard::new(counters.clone());
+                let connection_context = ConnectionContext {
+                    sessions,
+                    counters,
+                    auth_failures,
+                    bind_policy: bind_policy.clone(),
+                    cancel: child_cancel,
+                    principal: None,
+                    admission: Some(permit),
+                    handshake_guard: Some(handshake_guard),
+                };
                 handlers.spawn(async move {
-                    let _permit = permit;
-                    let _ = handle_connection(tcp, tls, token, sessions, counters, service_policy, child_cancel).await;
+                    let _ = handle_connection(tcp, peer.ip(), tls, token, connection_context).await;
                 });
             }
-            Some(_) = handlers.join_next(), if !handlers.is_empty() => {}
+            Some(result) = handlers.join_next(), if !handlers.is_empty() => {
+                counters.record_join_result(&result);
+            }
         }
     }
     let active: Vec<_> = sessions
@@ -215,8 +347,43 @@ struct PendingEntry {
     data_tx: oneshot::Sender<BoxStream>,
 }
 
+struct ConnectionContext {
+    sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+    counters: Counters,
+    auth_failures: Arc<AuthFailureLimiter>,
+    bind_policy: BindPolicy,
+    cancel: CancellationToken,
+    principal: Option<[u8; 32]>,
+    admission: Option<OwnedSemaphorePermit>,
+    handshake_guard: Option<HandshakeGuard>,
+}
+
+struct HandshakeGuard(Counters);
+
+impl HandshakeGuard {
+    fn new(counters: Counters) -> Self {
+        let active = counters
+            .handshakes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        counters
+            .high_water_handshakes
+            .fetch_max(active, std::sync::atomic::Ordering::Relaxed);
+        Self(counters)
+    }
+}
+
+impl Drop for HandshakeGuard {
+    fn drop(&mut self) {
+        self.0
+            .handshakes
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 struct SessionContext {
     id: SessionId,
+    principal: Option<[u8; 32]>,
     cancel: CancellationToken,
     pending: Mutex<HashMap<eggtunnel_proto::ConnectionId, PendingEntry>>,
     connection_admission: Arc<Semaphore>,
@@ -235,35 +402,54 @@ impl Drop for SessionContext {
 
 async fn handle_connection(
     tcp: TcpStream,
-    tls: Arc<rustls::ServerConfig>,
+    source: IpAddr,
+    tls: ServerTls,
     token: SecretToken,
-    sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
-    counters: Counters,
-    allow_public_binds: bool,
-    cancel: CancellationToken,
+    mut context: ConnectionContext,
 ) -> Result<(), TunnelError> {
-    let stream: BoxStream = Box::new(tcp);
-    let mut stream = tokio::select! {
-        _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-        result = timeout(HANDSHAKE_TIMEOUT, tls_accept(stream, tls)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+    let (mut stream, principal) = match tls {
+        ServerTls::Eggress(tls) => {
+            let stream: BoxStream = Box::new(tcp);
+            let stream = tokio::select! {
+                _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
+                result = timeout(HANDSHAKE_TIMEOUT, tls_accept(stream, tls)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+            };
+            (stream, None)
+        }
+        #[cfg(feature = "mtls")]
+        ServerTls::Mutual(tls) => {
+            let acceptor = tokio_rustls::TlsAcceptor::from(tls);
+            let stream = tokio::select! {
+                _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
+                result = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+            };
+            let principal = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(|certificates| certificates.first())
+                .map(|certificate| certificate_principal(certificate.as_ref()));
+            (Box::new(stream) as BoxStream, principal)
+        }
     };
+    context.principal = principal;
     let first = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream))
         .await
         .map_err(|_| TunnelError::Disconnected)??;
     match first {
-        Message::DataHello(hello) => accept_data_hello(stream, hello, &sessions, &counters).await,
-        Message::ClientHello(hello) => {
-            serve_control(
+        Message::DataHello(hello) => {
+            drop(context.handshake_guard.take());
+            drop(context.admission.take());
+            accept_data_hello(
                 stream,
                 hello,
-                token,
-                sessions,
-                counters,
-                allow_public_binds,
-                cancel,
+                context.principal,
+                &context.sessions,
+                &context.counters,
             )
             .await
         }
+        Message::ClientHello(hello) => serve_control(stream, hello, token, source, context).await,
         _ => Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnexpectedMessage,
         )),
@@ -273,6 +459,7 @@ async fn handle_connection(
 async fn accept_data_hello(
     stream: BoxStream,
     hello: DataHello,
+    principal: Option<[u8; 32]>,
     sessions: &Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
     counters: &Counters,
 ) -> Result<(), TunnelError> {
@@ -287,6 +474,12 @@ async fn accept_data_hello(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authentication);
     };
+    if session.principal != principal {
+        counters
+            .rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(TunnelError::Authentication);
+    }
     let pending = session.pending.lock().await.remove(&hello.connection_id);
     let Some(pending) = pending else {
         counters
@@ -314,11 +507,22 @@ async fn serve_control(
     mut stream: BoxStream,
     hello: ClientHello,
     token: SecretToken,
-    sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
-    counters: Counters,
-    allow_public_binds: bool,
-    cancel: CancellationToken,
+    source: IpAddr,
+    context: ConnectionContext,
 ) -> Result<(), TunnelError> {
+    let ConnectionContext {
+        sessions,
+        counters,
+        auth_failures,
+        bind_policy,
+        cancel,
+        principal,
+        mut admission,
+        mut handshake_guard,
+    } = context;
+    if auth_failures.is_blocked(source) {
+        return Err(TunnelError::Authentication);
+    }
     if hello.version.major != ProtocolVersion::CURRENT.major {
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnsupportedVersion(
@@ -343,6 +547,10 @@ async fn serve_control(
         _ => return Err(TunnelError::Authentication),
     };
     if !verify_token(&token, auth.token()) {
+        auth_failures.record_failure(source);
+        drop(handshake_guard.take());
+        drop(admission.take());
+        tokio::time::sleep(AUTH_FAILURE_DELAY).await;
         counters
             .rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -353,6 +561,8 @@ async fn serve_control(
         let _ = write_boxed(&mut stream, &failure).await;
         return Err(TunnelError::Authentication);
     }
+    drop(handshake_guard.take());
+    drop(admission.take());
     let session_id = SessionId::generate()
         .map_err(|_| TunnelError::Configuration("operating system randomness unavailable"))?;
     if cancel.is_cancelled() {
@@ -360,6 +570,7 @@ async fn serve_control(
     }
     let context = Arc::new(SessionContext {
         id: session_id,
+        principal,
         cancel: CancellationToken::new(),
         pending: Mutex::new(HashMap::new()),
         connection_admission: Arc::new(Semaphore::new(MAX_ACTIVE_CONNECTIONS_PER_SESSION)),
@@ -370,13 +581,18 @@ async fn serve_control(
         let mut active = sessions.lock().await;
         active.retain(|_, weak| weak.strong_count() > 0);
         if active.len() >= MAX_SESSIONS {
+            counters.record_termination(TerminationCategory::ResourceExhausted);
             return Err(TunnelError::Authorization);
         }
         active.insert(session_id, Arc::downgrade(&context));
     }
-    counters
+    let active_sessions = counters
         .sessions
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        + 1;
+    counters
+        .high_water_sessions
+        .fetch_max(active_sessions, std::sync::atomic::Ordering::Relaxed);
     let _session_guard = SessionGuard {
         context: context.clone(),
         sessions: sessions.clone(),
@@ -398,13 +614,19 @@ async fn serve_control(
                 match incoming {
                     Ok(Message::RegisterService(register)) => {
                         idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
-                        if services.len() >= MAX_SERVICES_PER_SESSION || services.contains_key(&register.service_id) || names.contains(register.name.as_str()) {
+                        if services.len() >= bind_policy.max_services_per_session {
+                            counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            counters.record_termination(TerminationCategory::ResourceExhausted);
+                            write_registration_error(&mut writer, 5).await?;
+                            continue;
+                        }
+                        if services.contains_key(&register.service_id) || names.contains(register.name.as_str()) {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             write_registration_error(&mut writer, 1).await?;
                             continue;
                         }
                         // The target descriptor is client-owned. The server uses it only as bounded registration metadata.
-                        let bind_addr = match bind_to_socket(&register.requested_bind, allow_public_binds) {
+                        let bind_addr = match bind_to_socket(&register.requested_bind, &bind_policy) {
                             Ok(addr) => addr,
                             Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); write_registration_error(&mut writer, 2).await?; continue; }
                         };
@@ -420,7 +642,8 @@ async fn serve_control(
                         children.spawn(run_service(listener, sid, context.clone(), open_tx.clone(), service_cancel.clone(), counters.clone()));
                         names.insert(name.as_str().to_owned());
                         services.insert(sid, ServiceEntry { name, cancel: service_cancel });
-                        counters.services.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let registered_services = counters.services.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        counters.high_water_services.fetch_max(registered_services, std::sync::atomic::Ordering::Relaxed);
                         write_message(&mut writer, &Message::RegisterAck(RegisterAck { service_id: sid, effective_bind: effective })).await?;
                     }
                     Ok(Message::UnregisterService(UnregisterService { service_id })) => {
@@ -454,7 +677,9 @@ async fn serve_control(
                 write_message(&mut writer, &message).await?;
                 if draining { break; }
             }
-            Some(_) = children.join_next(), if !children.is_empty() => {}
+            Some(result) = children.join_next(), if !children.is_empty() => {
+                counters.record_join_result(&result);
+            }
         }
     }
     for entry in services.values() {
@@ -464,6 +689,66 @@ async fn serve_control(
     while children.join_next().await.is_some() {}
     remove_all_pending(&context).await;
     Ok(())
+}
+
+/// Bounded sliding-window limiter keyed by the TCP peer address. It retains no
+/// unbounded per-source history and never delays successful authentication.
+struct AuthFailureLimiter {
+    failures: std::sync::Mutex<HashMap<IpAddr, VecDeque<Instant>>>,
+    threshold: usize,
+    window: Duration,
+    max_sources: usize,
+}
+
+impl AuthFailureLimiter {
+    fn new(threshold: usize, window: Duration, max_sources: usize) -> Self {
+        Self {
+            failures: std::sync::Mutex::new(HashMap::new()),
+            threshold,
+            window,
+            max_sources,
+        }
+    }
+
+    fn is_blocked(&self, source: IpAddr) -> bool {
+        self.is_blocked_at(source, Instant::now())
+    }
+
+    fn is_blocked_at(&self, source: IpAddr, now: Instant) -> bool {
+        let mut sources = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+        self.prune(&mut sources, now);
+        if !sources.contains_key(&source) && sources.len() >= self.max_sources {
+            return true;
+        }
+        sources
+            .get(&source)
+            .is_some_and(|failures| failures.len() >= self.threshold)
+    }
+
+    fn record_failure(&self, source: IpAddr) {
+        self.record_failure_at(source, Instant::now());
+    }
+
+    fn record_failure_at(&self, source: IpAddr, now: Instant) {
+        let mut sources = self.failures.lock().unwrap_or_else(|p| p.into_inner());
+        self.prune(&mut sources, now);
+        if !sources.contains_key(&source) && sources.len() >= self.max_sources {
+            return;
+        }
+        sources.entry(source).or_default().push_back(now);
+    }
+
+    fn prune(&self, sources: &mut HashMap<IpAddr, VecDeque<Instant>>, now: Instant) {
+        sources.retain(|_, failures| {
+            while failures
+                .front()
+                .is_some_and(|at| now.saturating_duration_since(*at) >= self.window)
+            {
+                failures.pop_front();
+            }
+            !failures.is_empty()
+        });
+    }
 }
 
 async fn write_registration_error<W: tokio::io::AsyncWrite + Unpin>(
@@ -497,6 +782,7 @@ async fn run_service(
                 let Ok((external, _remote)) = accepted else { continue; };
                 let Ok(connection_permit) = session.connection_admission.clone().try_acquire_owned() else {
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    counters.record_termination(TerminationCategory::ResourceExhausted);
                     continue;
                 };
                 let active_guard = ActiveConnectionGuard::new(connection_permit, counters.clone());
@@ -508,11 +794,13 @@ async fn run_service(
                 let mut pending = session.pending.lock().await;
                 if pending.len() >= MAX_PENDING_PER_SESSION {
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    counters.record_termination(TerminationCategory::ResourceExhausted);
                     continue;
                 }
                 pending.insert(connection_id, PendingEntry { service_id, expires: Instant::now() + PENDING_LIFETIME, data_tx });
                 drop(pending);
-                counters.pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let pending_connections = counters.pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                counters.high_water_pending.fetch_max(pending_connections, std::sync::atomic::Ordering::Relaxed);
                 if opens.try_send(Message::Open(Open { service_id, connection_id })).is_err() {
                     if session.pending.lock().await.remove(&connection_id).is_some() { counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -544,7 +832,9 @@ async fn run_service(
                     }
                 });
             }
-            Some(_) = relays.join_next(), if !relays.is_empty() => {}
+            Some(result) = relays.join_next(), if !relays.is_empty() => {
+                counters.record_join_result(&result);
+            }
         }
     }
     relays.abort_all();
@@ -559,9 +849,13 @@ struct ActiveConnectionGuard {
 
 impl ActiveConnectionGuard {
     fn new(permit: OwnedSemaphorePermit, counters: Counters) -> Self {
-        counters
+        let active = counters
             .active_connections
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        counters
+            .high_water_active_connections
+            .fetch_max(active, std::sync::atomic::Ordering::Relaxed);
         Self {
             _permit: permit,
             counters,
@@ -644,7 +938,10 @@ fn socket_to_effective(addr: SocketAddr) -> EffectiveBind {
 #[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
-    use crate::{Client, ClientConfig, ClientService};
+    use crate::{
+        Client, ClientConfig, ClientIdentity, ClientService, TargetConnector, TargetContext,
+        TargetError, TargetFuture, TargetStream,
+    };
     use eggtunnel_proto::{RequestedBind, ServiceName, TcpTarget};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -661,6 +958,7 @@ mod tests {
         let counters = Counters::default();
         let context = Arc::new(SessionContext {
             id: session_id,
+            principal: None,
             cancel: CancellationToken::new(),
             pending: Mutex::new(HashMap::new()),
             connection_admission: Arc::new(Semaphore::new(4)),
@@ -687,6 +985,70 @@ mod tests {
         (cert.pem(), key.serialize_pem())
     }
 
+    #[cfg(feature = "mtls")]
+    fn mtls_certificates() -> (
+        String,
+        String,
+        String,
+        ClientIdentity,
+        ClientIdentity,
+        ClientIdentity,
+    ) {
+        use rcgen::{BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair};
+
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca_key = KeyPair::generate().unwrap();
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca_pem = ca_cert.pem();
+
+        let mut server_params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+        server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let server_key = KeyPair::generate().unwrap();
+        let server_cert = server_params
+            .signed_by(&server_key, &ca_cert, &ca_key)
+            .unwrap();
+
+        let client_identity = |common_name: &str| {
+            let mut params = CertificateParams::new(vec![common_name.to_owned()]).unwrap();
+            params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+            let key = KeyPair::generate().unwrap();
+            let certificate = params.signed_by(&key, &ca_cert, &ca_key).unwrap();
+            ClientIdentity::new(
+                certificate.pem().into_bytes(),
+                key.serialize_pem().into_bytes(),
+            )
+        };
+        let trusted_identity = client_identity("trusted-client");
+        let trusted_identity_wrong_name = client_identity("trusted-client-wrong-name");
+
+        let mut rogue_ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        rogue_ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let rogue_ca_key = KeyPair::generate().unwrap();
+        let rogue_ca_cert = rogue_ca_params.self_signed(&rogue_ca_key).unwrap();
+        let rogue_identity = {
+            let mut params = CertificateParams::new(vec!["rogue-client".to_owned()]).unwrap();
+            params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+            let key = KeyPair::generate().unwrap();
+            let certificate = params
+                .signed_by(&key, &rogue_ca_cert, &rogue_ca_key)
+                .unwrap();
+            ClientIdentity::new(
+                certificate.pem().into_bytes(),
+                key.serialize_pem().into_bytes(),
+            )
+        };
+
+        (
+            ca_pem,
+            server_cert.pem(),
+            server_key.serialize_pem(),
+            trusted_identity,
+            trusted_identity_wrong_name,
+            rogue_identity,
+        )
+    }
+
     async fn roundtrip(addr: SocketAddr, bytes: &'static [u8]) -> Vec<u8> {
         let mut external = TcpStream::connect(addr).await.unwrap();
         external.write_all(bytes).await.unwrap();
@@ -697,6 +1059,287 @@ mod tests {
             .unwrap()
             .unwrap();
         received
+    }
+
+    struct DuplexEchoConnector;
+
+    impl TargetConnector for DuplexEchoConnector {
+        fn connect(&self, service: ClientService, _context: TargetContext) -> TargetFuture {
+            Box::pin(async move {
+                if service.name.as_str() != "direct-echo" {
+                    return Err(TargetError::Refused);
+                }
+                let (application, peer) = tokio::io::duplex(64 * 1024);
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(peer);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+                Ok(Box::new(application) as TargetStream)
+            })
+        }
+    }
+
+    struct PendingConnector;
+
+    impl TargetConnector for PendingConnector {
+        fn connect(&self, _service: ClientService, _context: TargetContext) -> TargetFuture {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test]
+    async fn application_target_connector_relays_without_loopback_target() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"direct-connector-secret".to_vec()).unwrap();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let client = Client::start_with_connector(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("direct-echo").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            },
+            Arc::new(DuplexEchoConnector),
+        )
+        .await
+        .unwrap();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        assert_eq!(
+            roundtrip(addr, b"application-stream").await,
+            b"application-stream"
+        );
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn client_cancellation_releases_pending_direct_connector_and_external_peer() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"pending-connector-secret".to_vec()).unwrap();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let client = Client::start_with_connector(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("pending-connector").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            },
+            Arc::new(PendingConnector),
+        )
+        .await
+        .unwrap();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        let mut external = TcpStream::connect(addr).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.handle().snapshot().pending_connections == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.shutdown().await;
+        let mut drained = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), external.read_to_end(&mut drained))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server.handle().snapshot().pending_connections, 0);
+        assert_eq!(server.handle().snapshot().active_connections, 0);
+        server.shutdown().await;
+    }
+
+    #[cfg(feature = "mtls")]
+    #[tokio::test]
+    async fn mtls_requires_trusted_client_certificate_and_keeps_server_name_validation() {
+        let (
+            ca_pem,
+            server_cert,
+            server_key,
+            trusted_identity,
+            trusted_identity_wrong_name,
+            rogue_identity,
+        ) = mtls_certificates();
+        let server = Server::bind_mtls(
+            ServerConfig {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                certificate_pem: server_cert.as_bytes().to_vec(),
+                private_key_pem: server_key.as_bytes().to_vec(),
+                token: SecretToken::new(b"mtls-secret".to_vec()).unwrap(),
+                allow_public_service_binds: false,
+            },
+            ca_pem.as_bytes().to_vec(),
+        )
+        .await
+        .unwrap();
+        let service = ClientService::new(
+            ServiceId(1),
+            ServiceName::new("mtls-service").unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", 9).unwrap(),
+        );
+        let trusted = Client::start_with_mtls(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(ca_pem.as_bytes().to_vec()),
+                token: SecretToken::new(b"mtls-secret".to_vec()).unwrap(),
+                services: vec![service.clone()],
+            },
+            trusted_identity,
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.handle().snapshot().registered_services == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(server.handle().snapshot().high_water_sessions >= 1);
+
+        let identity_debug = format!("{trusted_identity_wrong_name:?}");
+        assert!(identity_debug.contains("REDACTED"));
+        assert!(!identity_debug.contains("PRIVATE KEY"));
+        let wrong_name = Client::start_with_mtls(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "wrong.example".into(),
+                ca_pem: Some(ca_pem.as_bytes().to_vec()),
+                token: SecretToken::new(b"mtls-secret".to_vec()).unwrap(),
+                services: vec![service.clone()],
+            },
+            trusted_identity_wrong_name,
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if wrong_name.handle().snapshot().reconnects > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(server.handle().snapshot().registered_services, 1);
+
+        let rejected = Client::start_with_mtls(
+            ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(ca_pem.as_bytes().to_vec()),
+                token: SecretToken::new(b"mtls-secret".to_vec()).unwrap(),
+                services: vec![service.clone()],
+            },
+            rogue_identity,
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if rejected.handle().snapshot().reconnects > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(server.handle().snapshot().registered_services, 1);
+
+        let missing = Client::start(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(ca_pem.as_bytes().to_vec()),
+            token: SecretToken::new(b"mtls-secret".to_vec()).unwrap(),
+            services: vec![service],
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if missing.handle().snapshot().reconnects > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(server.handle().snapshot().registered_services, 1);
+
+        trusted.shutdown().await;
+        wrong_name.shutdown().await;
+        rejected.shutdown().await;
+        missing.shutdown().await;
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -780,6 +1423,14 @@ mod tests {
         assert!(server.handle().snapshot().bytes_downstream > 0);
         assert!(client.handle().snapshot().bytes_upstream > 0);
         assert!(client.handle().snapshot().bytes_downstream > 0);
+        let server_snapshot = server.handle().snapshot();
+        let client_snapshot = client.handle().snapshot();
+        assert_eq!(server_snapshot.resource_limits.sessions, MAX_SESSIONS);
+        assert_eq!(server_snapshot.high_water_services, 2);
+        assert!(server_snapshot.high_water_active_connections >= 1);
+        assert!(server_snapshot.high_water_pending_connections >= 1);
+        assert!(server_snapshot.high_water_handshakes >= 1);
+        assert!(client_snapshot.high_water_client_open_tasks >= 1);
 
         let mut active_external = TcpStream::connect(bound[1]).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1117,7 +1768,14 @@ mod tests {
             connection_id,
         };
         assert!(matches!(
-            accept_data_hello(test_data_stream(), wrong_session, &sessions, &counters).await,
+            accept_data_hello(
+                test_data_stream(),
+                wrong_session,
+                None,
+                &sessions,
+                &counters
+            )
+            .await,
             Err(TunnelError::Authentication)
         ));
         assert_eq!(session.pending.lock().await.len(), 1);
@@ -1127,16 +1785,22 @@ mod tests {
             service_id: ServiceId(5),
             connection_id,
         };
-        accept_data_hello(test_data_stream(), correct.clone(), &sessions, &counters)
-            .await
-            .unwrap();
+        accept_data_hello(
+            test_data_stream(),
+            correct.clone(),
+            None,
+            &sessions,
+            &counters,
+        )
+        .await
+        .unwrap();
         assert!(data_rx.await.is_ok());
         assert_eq!(
             counters.pending.load(std::sync::atomic::Ordering::Relaxed),
             0
         );
         assert!(matches!(
-            accept_data_hello(test_data_stream(), correct, &sessions, &counters).await,
+            accept_data_hello(test_data_stream(), correct, None, &sessions, &counters).await,
             Err(TunnelError::Authorization)
         ));
     }
@@ -1166,6 +1830,7 @@ mod tests {
                     service_id: ServiceId(2),
                     connection_id: wrong_service_id
                 },
+                None,
                 &sessions,
                 &counters
             )
@@ -1194,6 +1859,7 @@ mod tests {
                     service_id: ServiceId(1),
                     connection_id: expired_id
                 },
+                None,
                 &sessions,
                 &counters
             )
@@ -1204,6 +1870,257 @@ mod tests {
         assert_eq!(
             counters.pending.load(std::sync::atomic::Ordering::Relaxed),
             0
+        );
+    }
+
+    #[cfg(feature = "mtls")]
+    #[tokio::test]
+    async fn mtls_principal_mismatch_cannot_attach_data_stream() {
+        let session_id = SessionId([11; 16]);
+        let counters = Counters::default();
+        let session = Arc::new(SessionContext {
+            id: session_id,
+            principal: Some([1; 32]),
+            cancel: CancellationToken::new(),
+            pending: Mutex::new(HashMap::new()),
+            connection_admission: Arc::new(Semaphore::new(1)),
+            control_tx: Mutex::new(None),
+            counters: counters.clone(),
+        });
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        sessions
+            .lock()
+            .await
+            .insert(session_id, Arc::downgrade(&session));
+        let connection_id = eggtunnel_proto::ConnectionId([12; 16]);
+        let (data_tx, _data_rx) = oneshot::channel();
+        session.pending.lock().await.insert(
+            connection_id,
+            PendingEntry {
+                service_id: ServiceId(4),
+                expires: Instant::now() + Duration::from_secs(5),
+                data_tx,
+            },
+        );
+        counters
+            .pending
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            accept_data_hello(
+                test_data_stream(),
+                DataHello {
+                    session_id,
+                    service_id: ServiceId(4),
+                    connection_id,
+                },
+                Some([2; 32]),
+                &sessions,
+                &counters,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(session.pending.lock().await.len(), 1);
+        assert_eq!(
+            counters.pending.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_client_server_start_stop_returns_runtime_counts_to_zero() {
+        for cycle in 0..3u64 {
+            let (cert, key) = certificate();
+            let token = SecretToken::new(format!("cycle-secret-{cycle}").into_bytes()).unwrap();
+            let server = Server::bind(ServerConfig {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                certificate_pem: cert.as_bytes().to_vec(),
+                private_key_pem: key.as_bytes().to_vec(),
+                token: token.clone(),
+                allow_public_service_binds: false,
+            })
+            .await
+            .unwrap();
+            let server_handle = server.handle();
+            let client = Client::start(ClientConfig {
+                server_addr: server.local_addr().to_string(),
+                tls_server_name: "localhost".into(),
+                ca_pem: Some(cert.into_bytes()),
+                token,
+                services: vec![ClientService::new(
+                    ServiceId(1),
+                    ServiceName::new("cycle-service").unwrap(),
+                    RequestedBind::Loopback { port: 0 },
+                    TcpTarget::new("127.0.0.1", 9).unwrap(),
+                )],
+            })
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if server_handle.snapshot().registered_services == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            client.shutdown().await;
+            server.shutdown().await;
+            let snapshot = server_handle.snapshot();
+            assert_eq!(snapshot.active_sessions, 0);
+            assert_eq!(snapshot.registered_services, 0);
+            assert_eq!(snapshot.pending_connections, 0);
+            assert_eq!(snapshot.active_connections, 0);
+            assert_eq!(snapshot.active_handshakes, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn owned_task_panic_is_counted_as_internal_termination() {
+        let counters = Counters::default();
+        let result = tokio::spawn(async { panic!("injected child panic") }).await;
+        counters.record_join_result(&result);
+        let snapshot = counters.snapshot();
+        assert_eq!(snapshot.task_panics, 1);
+        assert_eq!(
+            snapshot.last_termination,
+            Some(TerminationCategory::Internal)
+        );
+    }
+
+    #[tokio::test]
+    async fn server_shutdown_cancels_incomplete_tls_and_authentication_handshakes() {
+        use eggress_transport_tls::{TlsClientConfigBuilder, tls_connect};
+
+        let (cert, key) = certificate();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"handshake-cancel-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let handle = server.handle();
+        let incomplete_tls = TcpStream::connect(server.local_addr()).await.unwrap();
+        let tls_config = TlsClientConfigBuilder::new()
+            .with_custom_ca_pem(cert.as_bytes())
+            .unwrap()
+            .build()
+            .unwrap();
+        let control_tcp = TcpStream::connect(server.local_addr()).await.unwrap();
+        let mut control = tls_connect(Box::new(control_tcp), tls_config, "localhost")
+            .await
+            .unwrap();
+        write_boxed(
+            &mut control,
+            &Message::ClientHello(ClientHello {
+                version: ProtocolVersion::CURRENT,
+                capabilities: Capabilities::default(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::ServerHello(_)
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().active_handshakes == 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.shutdown().await;
+        assert_eq!(handle.snapshot().active_handshakes, 0);
+        assert_eq!(handle.snapshot().active_sessions, 0);
+        drop(control);
+        drop(incomplete_tls);
+    }
+
+    #[test]
+    fn auth_failure_limiter_is_per_source_bounded_and_expires() {
+        let limiter = AuthFailureLimiter::new(2, Duration::from_secs(5), 1);
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let second: IpAddr = "192.0.2.2".parse().unwrap();
+        let start = Instant::now();
+
+        assert!(!limiter.is_blocked_at(first, start));
+        limiter.record_failure_at(first, start);
+        assert!(!limiter.is_blocked_at(first, start + Duration::from_secs(1)));
+        limiter.record_failure_at(first, start + Duration::from_secs(1));
+        assert!(limiter.is_blocked_at(first, start + Duration::from_secs(2)));
+        assert!(limiter.is_blocked_at(second, start + Duration::from_secs(2)));
+        assert!(!limiter.is_blocked_at(first, start + Duration::from_secs(6)));
+        assert_eq!(
+            limiter
+                .failures
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn bind_policy_enforces_address_port_and_ephemeral_rules() {
+        let policy = BindPolicy {
+            allow_public_addresses: true,
+            allowed_addresses: vec![std::net::Ipv6Addr::LOCALHOST.octets()],
+            allowed_port_ranges: vec![(8000, 8100)],
+            allow_ephemeral_ports: false,
+            max_services_per_session: 4,
+        };
+        assert!(policy.validate().is_ok());
+        assert!(
+            bind_to_socket(
+                &RequestedBind::Ip {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 8080
+                },
+                &policy
+            )
+            .is_ok()
+        );
+        assert!(
+            bind_to_socket(
+                &RequestedBind::Ip {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 0
+                },
+                &policy
+            )
+            .is_err()
+        );
+        assert!(
+            bind_to_socket(
+                &RequestedBind::Ip {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 9000
+                },
+                &policy
+            )
+            .is_err()
+        );
+        assert!(
+            bind_to_socket(
+                &RequestedBind::Ip {
+                    address: "2001:db8::1"
+                        .parse::<std::net::Ipv6Addr>()
+                        .unwrap()
+                        .octets(),
+                    port: 8080
+                },
+                &policy
+            )
+            .is_err()
         );
     }
 }

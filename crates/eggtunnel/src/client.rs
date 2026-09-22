@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use eggress_core::BoxStream;
 use eggress_relay::{RelayOptions, relay_with_options};
@@ -8,6 +8,7 @@ use eggtunnel_proto::{
     ProtocolVersion, RegisterService, ServerHello, ServiceId,
 };
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     net::TcpStream,
     sync::{Semaphore, mpsc},
     task::{JoinHandle, JoinSet},
@@ -27,6 +28,48 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const RELAY_DRAIN: Duration = Duration::from_secs(15);
 const SERVER_DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// Async byte stream implemented by an application-provided target connector.
+pub trait ApplicationStream: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> ApplicationStream for T {}
+
+/// Transport-neutral stream returned by a [`TargetConnector`].
+pub type TargetStream = Box<dyn ApplicationStream>;
+
+#[derive(Clone)]
+pub struct TargetContext {
+    pub session_id: eggtunnel_proto::SessionId,
+    pub connection_id: eggtunnel_proto::ConnectionId,
+    pub cancellation: CancellationToken,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TargetError {
+    #[error("application target refused the connection")]
+    Refused,
+    #[error("application target failed")]
+    Failed,
+}
+
+pub type TargetFuture = Pin<Box<dyn Future<Output = Result<TargetStream, TargetError>> + Send>>;
+
+/// Resolves a trusted, client-owned service to an application stream.
+pub trait TargetConnector: Send + Sync + 'static {
+    fn connect(&self, service: ClientService, context: TargetContext) -> TargetFuture;
+}
+
+struct TcpTargetConnector;
+
+impl TargetConnector for TcpTargetConnector {
+    fn connect(&self, service: ClientService, _context: TargetContext) -> TargetFuture {
+        Box::pin(async move {
+            TcpStream::connect((service.target.host(), service.target.port()))
+                .await
+                .map(|stream| Box::new(stream) as TargetStream)
+                .map_err(|_| TargetError::Refused)
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -87,11 +130,46 @@ impl ClientHandle {
 
 impl Client {
     pub async fn start(config: ClientConfig) -> Result<Self, TunnelError> {
+        Self::start_with_connector(config, Arc::new(TcpTargetConnector)).await
+    }
+
+    /// Start a client using an application-provided target connector.
+    pub async fn start_with_connector(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
+        Self::start_with_tls_config(config, connector, tls_config).await
+    }
+
+    #[cfg(feature = "mtls")]
+    pub async fn start_with_mtls(
+        config: ClientConfig,
+        identity: ClientIdentity,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_mtls_tls_config(&config, identity)?;
+        Self::start_with_tls_config(config, Arc::new(TcpTargetConnector), tls_config).await
+    }
+
+    #[cfg(feature = "mtls")]
+    pub async fn start_with_mtls_and_connector(
+        config: ClientConfig,
+        identity: ClientIdentity,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        let tls_config = build_mtls_tls_config(&config, identity)?;
+        Self::start_with_tls_config(config, connector, tls_config).await
+    }
+
+    async fn start_with_tls_config(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+        tls_config: Arc<rustls::ClientConfig>,
+    ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Client::start requires a caller-owned Tokio runtime")
         })?;
         validate_config(&config)?;
-        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
         let cancel = CancellationToken::new();
         let counters = Counters::default();
         let (command_tx, command_rx) = mpsc::channel(32);
@@ -102,7 +180,15 @@ impl Client {
         };
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
-            reconnect_loop(config, tls_config, task_cancel, counters, command_rx).await;
+            reconnect_loop(
+                config,
+                tls_config,
+                connector,
+                task_cancel,
+                counters,
+                command_rx,
+            )
+            .await;
         });
         Ok(Self {
             cancel,
@@ -120,6 +206,40 @@ impl Client {
         if let Some(task) = self.task.take() {
             let _ = task.await;
         }
+    }
+}
+
+#[cfg(feature = "mtls")]
+pub struct ClientIdentity {
+    pub certificate_pem: Vec<u8>,
+    private_key_pem: Vec<u8>,
+}
+
+#[cfg(feature = "mtls")]
+impl ClientIdentity {
+    pub fn new(certificate_pem: Vec<u8>, private_key_pem: Vec<u8>) -> Self {
+        Self {
+            certificate_pem,
+            private_key_pem,
+        }
+    }
+}
+
+#[cfg(feature = "mtls")]
+impl std::fmt::Debug for ClientIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientIdentity")
+            .field("certificate_pem", &"[configured]")
+            .field("private_key_pem", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[cfg(feature = "mtls")]
+impl Drop for ClientIdentity {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.private_key_pem.zeroize();
     }
 }
 
@@ -192,9 +312,44 @@ fn build_tls_config(ca_pem: Option<&[u8]>) -> Result<Arc<rustls::ClientConfig>, 
     builder.build().map_err(|_| TunnelError::Tls)
 }
 
+#[cfg(feature = "mtls")]
+fn build_mtls_tls_config(
+    config: &ClientConfig,
+    identity: ClientIdentity,
+) -> Result<Arc<rustls::ClientConfig>, TunnelError> {
+    use std::io::Cursor;
+
+    let mut roots = rustls::RootCertStore::empty();
+    if let Some(ca_pem) = config.ca_pem.as_deref() {
+        let ca_certs = rustls_pemfile::certs(&mut Cursor::new(ca_pem))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| TunnelError::Tls)?;
+        for cert in ca_certs {
+            roots.add(cert).map_err(|_| TunnelError::Tls)?;
+        }
+    } else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+    let certificates = rustls_pemfile::certs(&mut Cursor::new(&identity.certificate_pem))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| TunnelError::Tls)?;
+    let private_key = rustls_pemfile::private_key(&mut Cursor::new(&identity.private_key_pem))
+        .map_err(|_| TunnelError::Tls)?
+        .ok_or(TunnelError::Tls)?;
+    if certificates.is_empty() {
+        return Err(TunnelError::Tls);
+    }
+    let tls = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_client_auth_cert(certificates, private_key)
+        .map_err(|_| TunnelError::Tls)?;
+    Ok(Arc::new(tls))
+}
+
 async fn reconnect_loop(
     mut config: ClientConfig,
     tls: Arc<rustls::ClientConfig>,
+    connector: Arc<dyn TargetConnector>,
     cancel: CancellationToken,
     counters: Counters,
     mut commands: mpsc::Receiver<ClientCommand>,
@@ -227,6 +382,7 @@ async fn reconnect_loop(
                                 tls_server_name: &config.tls_server_name,
                                 token: &config.token,
                                 tls: tls.clone(),
+                                connector: connector.clone(),
                                 cancel: &cancel,
                                 counters: &counters,
                                 reconnect_delay: &mut delay,
@@ -241,10 +397,16 @@ async fn reconnect_loop(
             _ => Err(TunnelError::Disconnected),
         };
         if matches!(
-            result,
+            &result,
             Err(TunnelError::Authentication | TunnelError::Authorization)
         ) {
+            if let Err(error) = &result {
+                counters.record_termination(error.termination_category());
+            }
             break;
+        }
+        if let Err(error) = &result {
+            counters.record_termination(error.termination_category());
         }
         counters
             .connected
@@ -290,6 +452,7 @@ struct SessionRun<'a> {
     tls_server_name: &'a str,
     token: &'a SecretToken,
     tls: Arc<rustls::ClientConfig>,
+    connector: Arc<dyn TargetConnector>,
     cancel: &'a CancellationToken,
     counters: &'a Counters,
     reconnect_delay: &'a mut Duration,
@@ -303,6 +466,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         tls_server_name,
         token,
         tls,
+        connector,
         cancel,
         counters,
         reconnect_delay,
@@ -394,11 +558,14 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     Ok(Message::Open(open)) => {
                         let Some(service) = active_services.get(&open.service_id).cloned() else {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            counters.record_termination(crate::common::TerminationCategory::Authorization);
                             let _ = out_tx.try_send(Message::OpenReject(OpenReject { connection_id: open.connection_id, code: 1 }));
                             continue;
                         };
                         let permit = semaphore.clone().try_acquire_owned();
                         let Ok(permit) = permit else {
+                            counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            counters.record_termination(crate::common::TerminationCategory::ResourceExhausted);
                             let _ = out_tx.try_send(Message::OpenReject(OpenReject { connection_id: open.connection_id, code: 2 }));
                             continue;
                         };
@@ -407,6 +574,10 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         let server_name = tls_server_name.to_owned();
                         let out = out_tx.clone();
                         let open_tls = tls.clone();
+                        let open_guard = OpenTaskGuard::new(
+                            counters.open_tasks.clone(),
+                            counters.high_water_open_tasks.clone(),
+                        );
                         let context = OpenContext {
                             server_addr,
                             server_name,
@@ -415,9 +586,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             cancel: service_cancel,
                             out,
                             counters: (*counters).clone(),
+                            connector: connector.clone(),
                         };
                         opens.spawn(async move {
                             let _permit = permit;
+                            let _open_guard = open_guard;
                             handle_open(open, service, context).await;
                         });
                     }
@@ -445,7 +618,9 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     }
                 }
             }
-            Some(_) = opens.join_next(), if !opens.is_empty() => {}
+            Some(result) = opens.join_next(), if !opens.is_empty() => {
+                counters.record_join_result(&result);
+            }
         }
     }
     let _ = timeout(SERVER_DRAIN_GRACE, async {
@@ -484,6 +659,7 @@ struct OpenContext {
     server_addr: String,
     server_name: String,
     tls: Arc<rustls::ClientConfig>,
+    connector: Arc<dyn TargetConnector>,
     session_id: eggtunnel_proto::SessionId,
     cancel: CancellationToken,
     out: mpsc::Sender<Message>,
@@ -495,15 +671,21 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
         server_addr,
         server_name,
         tls,
+        connector,
         session_id,
         cancel,
         out,
         counters,
     } = context;
     let result = async {
+        let target_context = TargetContext {
+            session_id,
+            connection_id: open.connection_id,
+            cancellation: cancel.clone(),
+        };
         let target = tokio::select! {
             _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(CONNECT_TIMEOUT, TcpStream::connect((service.target.host(), service.target.port()))) => result.map_err(|_| TunnelError::Disconnected)??,
+            result = timeout(CONNECT_TIMEOUT, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
         };
         let tcp = tokio::select! {
             _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
@@ -539,6 +721,25 @@ struct CounterGuard(Arc<std::sync::atomic::AtomicUsize>);
 impl CounterGuard {
     fn new(value: Arc<std::sync::atomic::AtomicUsize>) -> Self {
         Self(value)
+    }
+}
+
+struct OpenTaskGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl OpenTaskGuard {
+    fn new(
+        current: Arc<std::sync::atomic::AtomicUsize>,
+        high_water: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        let active = current.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        high_water.fetch_max(active, std::sync::atomic::Ordering::Relaxed);
+        Self(current)
+    }
+}
+
+impl Drop for OpenTaskGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 impl Drop for CounterGuard {

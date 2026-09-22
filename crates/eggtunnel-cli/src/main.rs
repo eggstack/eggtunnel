@@ -4,7 +4,7 @@ use std::{env, fs, net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use eggtunnel::{
-    Client, ClientConfig, ClientService, SecretToken, Server, ServerConfig,
+    Client, ClientConfig, ClientIdentity, ClientService, SecretToken, Server, ServerConfig,
     proto::{RequestedBind, ServiceId, ServiceName, TcpTarget},
 };
 use serde::Deserialize;
@@ -42,6 +42,12 @@ struct FileConfig {
     tls_server_name: Option<String>,
     #[serde(default)]
     ca_cert: Option<PathBuf>,
+    #[serde(default)]
+    client_cert: Option<PathBuf>,
+    #[serde(default)]
+    client_key: Option<PathBuf>,
+    #[serde(default)]
+    client_ca: Option<PathBuf>,
     #[serde(default)]
     services: Vec<FileService>,
 }
@@ -133,6 +139,14 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ca) = &config.ca_cert {
                 let _ = fs::read(ca)?;
             }
+            if config.client_cert.is_some() != config.client_key.is_some() {
+                return Err("client_cert and client_key must be configured together".into());
+            }
+            if let (Some(cert), Some(key)) = (&config.client_cert, &config.client_key)
+                && (fs::read(cert)?.is_empty() || fs::read(key)?.is_empty())
+            {
+                return Err("client certificate and key files must not be empty".into());
+            }
         }
         "server" => {
             let listen = config
@@ -150,6 +164,11 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("server config requires tls_key")?;
             if fs::read(cert)?.is_empty() || fs::read(key)?.is_empty() {
                 return Err("TLS certificate and key files must not be empty".into());
+            }
+            if let Some(client_ca) = &config.client_ca
+                && fs::read(client_ca)?.is_empty()
+            {
+                return Err("client CA file must not be empty".into());
             }
         }
         _ => return Err("mode must be 'client' or 'server'".into()),
@@ -169,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let config = read_config(&path)?;
             check_config(&config)?;
             let token = load_token(&config.token_env)?;
-            let server = Server::bind(ServerConfig {
+            let server_config = ServerConfig {
                 listen_addr: checked_addr(
                     config.listen_addr.as_deref().ok_or("missing listen_addr")?,
                     "listen_addr",
@@ -178,8 +197,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 private_key_pem: fs::read(config.tls_key.as_ref().ok_or("missing tls_key")?)?,
                 token,
                 allow_public_service_binds: config.allow_public_service_binds,
-            })
-            .await?;
+            };
+            let server = if let Some(client_ca) = &config.client_ca {
+                Server::bind_mtls(server_config, fs::read(client_ca)?).await?
+            } else {
+                Server::bind(server_config).await?
+            };
             println!("server listening on {}", server.local_addr());
             let handle = server.handle();
             let mut printed = std::collections::HashSet::new();
@@ -207,7 +230,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .tls_server_name
                 .clone()
                 .ok_or("missing tls_server_name")?;
-            let client = Client::start(ClientConfig {
+            let client_config = ClientConfig {
                 server_addr: checked_endpoint(
                     config.server_addr.as_deref().ok_or("missing server_addr")?,
                 )?,
@@ -215,8 +238,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ca_pem: config.ca_cert.as_ref().map(fs::read).transpose()?,
                 token: load_token(&config.token_env)?,
                 services,
-            })
-            .await?;
+            };
+            let client = if let (Some(client_cert), Some(client_key)) =
+                (&config.client_cert, &config.client_key)
+            {
+                Client::start_with_mtls(
+                    client_config,
+                    ClientIdentity::new(fs::read(client_cert)?, fs::read(client_key)?),
+                )
+                .await?
+            } else {
+                Client::start(client_config).await?
+            };
             println!("client started; waiting for authenticated session");
             tokio::signal::ctrl_c().await?;
             client.shutdown().await;

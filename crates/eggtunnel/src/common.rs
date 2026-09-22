@@ -78,6 +78,49 @@ pub struct ServiceSpec {
     pub requested_bind: RequestedBind,
 }
 
+/// Typed admission policy for server-owned service listeners.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindPolicy {
+    pub allow_public_addresses: bool,
+    /// Empty permits any address allowed by `allow_public_addresses`.
+    pub allowed_addresses: Vec<[u8; 16]>,
+    /// Empty permits every nonzero port; ranges are inclusive.
+    pub allowed_port_ranges: Vec<(u16, u16)>,
+    pub allow_ephemeral_ports: bool,
+    pub max_services_per_session: usize,
+}
+
+impl BindPolicy {
+    pub fn loopback_only() -> Self {
+        Self::default()
+    }
+
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        if self.max_services_per_session == 0
+            || self.max_services_per_session > ResourceLimits::default().services_per_session
+            || self
+                .allowed_port_ranges
+                .iter()
+                .any(|(start, end)| start == &0 || start > end)
+        {
+            return Err(TunnelError::Configuration("bind policy is invalid"));
+        }
+        Ok(())
+    }
+}
+
+impl Default for BindPolicy {
+    fn default() -> Self {
+        Self {
+            allow_public_addresses: false,
+            allowed_addresses: Vec::new(),
+            allowed_port_ranges: Vec::new(),
+            allow_ephemeral_ports: true,
+            max_services_per_session: 64,
+        }
+    }
+}
+
 impl ServiceSpec {
     pub fn new(id: ServiceId, name: ServiceName, requested_bind: RequestedBind) -> Self {
         Self {
@@ -95,11 +138,63 @@ pub struct Snapshot {
     pub registered_services: usize,
     pub pending_connections: usize,
     pub active_connections: usize,
+    pub active_client_open_tasks: usize,
+    pub active_handshakes: usize,
+    pub high_water_sessions: usize,
+    pub high_water_services: usize,
+    pub high_water_pending_connections: usize,
+    pub high_water_active_connections: usize,
+    pub high_water_client_open_tasks: usize,
+    pub high_water_handshakes: usize,
+    pub task_panics: u64,
+    pub last_termination: Option<TerminationCategory>,
+    pub resource_limits: ResourceLimits,
     pub reconnects: u64,
     pub rejected_connections: u64,
     pub bytes_upstream: u64,
     pub bytes_downstream: u64,
     pub effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminationCategory {
+    Clean,
+    Cancelled,
+    Timeout,
+    Authentication,
+    Authorization,
+    Protocol,
+    Transport,
+    Target,
+    ResourceExhausted,
+    PeerClosed,
+    Internal,
+}
+
+/// Immutable hard ceilings used by the current runtime profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceLimits {
+    pub sessions: usize,
+    pub services_per_session: usize,
+    pub pending_per_session: usize,
+    pub active_connections_per_session: usize,
+    pub accepted_handshakes: usize,
+    pub client_open_tasks: usize,
+    pub control_queue: usize,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            sessions: 128,
+            services_per_session: 64,
+            pending_per_session: 128,
+            active_connections_per_session: 128,
+            accepted_handshakes: 64,
+            client_open_tasks: 128,
+            control_queue: 128,
+        }
+    }
 }
 
 #[cfg(any(feature = "client", feature = "server"))]
@@ -110,6 +205,16 @@ pub(crate) struct Counters {
     pub services: Arc<AtomicUsize>,
     pub pending: Arc<AtomicUsize>,
     pub active_connections: Arc<AtomicUsize>,
+    pub open_tasks: Arc<AtomicUsize>,
+    pub handshakes: Arc<AtomicUsize>,
+    pub high_water_sessions: Arc<AtomicUsize>,
+    pub high_water_services: Arc<AtomicUsize>,
+    pub high_water_pending: Arc<AtomicUsize>,
+    pub high_water_active_connections: Arc<AtomicUsize>,
+    pub high_water_open_tasks: Arc<AtomicUsize>,
+    pub high_water_handshakes: Arc<AtomicUsize>,
+    pub task_panics: Arc<AtomicU64>,
+    pub last_termination: Arc<std::sync::Mutex<Option<TerminationCategory>>>,
     pub reconnects: Arc<AtomicU64>,
     pub rejected: Arc<AtomicU64>,
     pub bytes_upstream: Arc<AtomicU64>,
@@ -126,11 +231,41 @@ impl Counters {
             registered_services: self.services.load(Ordering::Relaxed),
             pending_connections: self.pending.load(Ordering::Relaxed),
             active_connections: self.active_connections.load(Ordering::Relaxed),
+            active_client_open_tasks: self.open_tasks.load(Ordering::Relaxed),
+            active_handshakes: self.handshakes.load(Ordering::Relaxed),
+            high_water_sessions: self.high_water_sessions.load(Ordering::Relaxed),
+            high_water_services: self.high_water_services.load(Ordering::Relaxed),
+            high_water_pending_connections: self.high_water_pending.load(Ordering::Relaxed),
+            high_water_active_connections: self
+                .high_water_active_connections
+                .load(Ordering::Relaxed),
+            high_water_client_open_tasks: self.high_water_open_tasks.load(Ordering::Relaxed),
+            high_water_handshakes: self.high_water_handshakes.load(Ordering::Relaxed),
+            task_panics: self.task_panics.load(Ordering::Relaxed),
+            last_termination: *self
+                .last_termination
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+            resource_limits: ResourceLimits::default(),
             reconnects: self.reconnects.load(Ordering::Relaxed),
             rejected_connections: self.rejected.load(Ordering::Relaxed),
             bytes_upstream: self.bytes_upstream.load(Ordering::Relaxed),
             bytes_downstream: self.bytes_downstream.load(Ordering::Relaxed),
             effective_binds: self.binds.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        }
+    }
+
+    pub fn record_termination(&self, category: TerminationCategory) {
+        *self
+            .last_termination
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(category);
+    }
+
+    pub fn record_join_result<T>(&self, result: &Result<T, tokio::task::JoinError>) {
+        if result.as_ref().is_err_and(tokio::task::JoinError::is_panic) {
+            self.task_panics.fetch_add(1, Ordering::Relaxed);
+            self.record_termination(TerminationCategory::Internal);
         }
     }
 }
@@ -153,6 +288,31 @@ pub enum TunnelError {
     Disconnected,
     #[error("operation was cancelled")]
     Cancelled,
+    #[error("operation timed out")]
+    Timeout,
+    #[error("local target rejected or failed the connection")]
+    Target,
+    #[error("runtime resource limit was reached")]
+    ResourceExhausted,
+    #[error("peer closed the connection")]
+    PeerClosed,
+}
+
+impl TunnelError {
+    pub fn termination_category(&self) -> TerminationCategory {
+        match self {
+            Self::Cancelled => TerminationCategory::Cancelled,
+            Self::Timeout => TerminationCategory::Timeout,
+            Self::Target => TerminationCategory::Target,
+            Self::ResourceExhausted => TerminationCategory::ResourceExhausted,
+            Self::PeerClosed => TerminationCategory::PeerClosed,
+            Self::Authentication => TerminationCategory::Authentication,
+            Self::Authorization => TerminationCategory::Authorization,
+            Self::Protocol(_) => TerminationCategory::Protocol,
+            Self::Io(_) | Self::Tls | Self::Disconnected => TerminationCategory::Transport,
+            Self::Configuration(_) => TerminationCategory::Internal,
+        }
+    }
 }
 
 #[cfg(feature = "server")]
@@ -164,20 +324,43 @@ pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
 #[cfg(feature = "server")]
 pub(crate) fn bind_to_socket(
     request: &RequestedBind,
-    allow_public: bool,
+    policy: &BindPolicy,
 ) -> Result<SocketAddr, TunnelError> {
     use std::net::{Ipv6Addr, SocketAddrV6};
     let addr = match request {
         RequestedBind::Loopback { port } => {
+            if !policy.permits_port(*port) {
+                return Err(TunnelError::Authorization);
+            }
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, *port, 0, 0))
         }
         RequestedBind::Ip { address, port } => {
             let ip = Ipv6Addr::from(*address);
-            if !allow_public && !ip.is_loopback() {
+            if !policy.permits_address(*address, ip.is_loopback()) || !policy.permits_port(*port) {
                 return Err(TunnelError::Authorization);
             }
             SocketAddr::V6(SocketAddrV6::new(ip, *port, 0, 0))
         }
     };
     Ok(addr)
+}
+
+impl BindPolicy {
+    #[cfg(feature = "server")]
+    fn permits_address(&self, address: [u8; 16], is_loopback: bool) -> bool {
+        (is_loopback || self.allow_public_addresses)
+            && (self.allowed_addresses.is_empty() || self.allowed_addresses.contains(&address))
+    }
+
+    #[cfg(feature = "server")]
+    fn permits_port(&self, port: u16) -> bool {
+        if port == 0 {
+            return self.allow_ephemeral_ports;
+        }
+        self.allowed_port_ranges.is_empty()
+            || self
+                .allowed_port_ranges
+                .iter()
+                .any(|(start, end)| (*start..=*end).contains(&port))
+    }
 }

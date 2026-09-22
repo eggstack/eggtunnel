@@ -18,7 +18,21 @@ application shutdown so owned session and data tasks are joined.
 `ClientHandle::unregister_service(id).await` removes a configured mapping from
 the active Session and from subsequent reconnect registration. Snapshots
 include current effective binds, pending counts, reconnect/reject counts, and
-bounded byte totals.
+bounded byte totals. They also include resource ceilings and current/high-water
+counts for handshakes, services, pending and active connections, and client
+Open tasks.
 
-This first public surface supports TCP targets. Direct application duplex
-connectors and mTLS are planned for later milestones.
+The default `Client::start` uses the configured TCP Target. An application can
+provide an async byte stream without a loopback socket by implementing
+`TargetConnector` and calling `Client::start_with_connector`. The connector
+receives the trusted client-owned `ClientService` plus a `TargetContext` with
+the Session ID, ConnectionId, and cancellation token. It returns
+`TargetStream`, a transport-neutral async read/write stream. The server cannot
+select or rewrite the client target.
+
+Enable `mtls` in addition to `client` and `tls` to use
+`Client::start_with_mtls`; the server counterpart is `Server::bind_mtls`.
+That profile keeps bearer-token auth and adds a required client certificate.
+The compile-only downstream fixture in `fixtures/embedder` demonstrates a
+caller-owned Tokio runtime, programmatic service configuration, caller-owned
+tracing, and a direct in-process connector without the CLI dependency.
