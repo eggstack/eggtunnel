@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001 ready; M002-M006 dependency-blocked
+Status: active — M001 closing; M002-M006 dependency-blocked
 
 Canonical references:
 
@@ -107,7 +107,7 @@ Planning bootstrap has established:
 - planning/closure governance;
 - ADR-0001 defining the thin Eggtunnel/Eggress boundary.
 
-There is no production code yet. Therefore M001 owns repository/workspace creation as well as protocol foundation.
+At the initial planning baseline there was no production code. M001 owns repository/workspace creation as well as protocol foundation.
 
 At planning time the relevant Eggress baseline is 1.0.8. Implementation MUST verify actual published crate/API availability before locking dependencies.
 
@@ -168,7 +168,7 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
-Status: ready
+Status: closing — implementation complete; committed review baseline pending
 
 Implementation plan:
 
@@ -478,7 +478,7 @@ Explicitly deferred until after M006 or a new ADR:
 
 | Milestone | Status | Plan | Closure | Blocker |
 |---|---|---|---|---|
-| M001 repository/protocol foundation | ready | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | — | — |
+| M001 repository/protocol foundation | closing | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | committed reviewed baseline pending |
 | M002 TCP/TLS product | blocked | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | — | M001 closure |
 | M003 hardening/embedding | blocked | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | — | M002 closure |
 | M004 QUIC | blocked | plans/implementation/reverse-session/004-quic-transport.md | — | M003 closure |

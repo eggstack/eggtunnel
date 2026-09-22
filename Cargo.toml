@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/eggtunnel-proto", "crates/eggtunnel", "crates/eggtunnel-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+thiserror = "2"
+getrandom = "0.3"

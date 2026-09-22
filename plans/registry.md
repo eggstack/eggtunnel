@@ -29,13 +29,17 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M001 ready | Repository is planning-only; M001 has no implementation dependency. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M001 closing | M001 checks pass; implementation is uncommitted, so strict closure and M002 baseline refresh remain pending. |
 
 ## Dependency-ready implementation plans
 
-| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+None. M001 has completed implementation and is in closure.
+
+## Closing implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Closure record / pending evidence |
 |---|---|---|---|---|
-| Reverse session | M001 repository and protocol foundation | ready | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | Execute against baseline 43b761b14c9e1ee5a42a74ebe841dad875d9610e; later commits are planning-only baseline refreshes. Inspect current head first and preserve user changes. |
+| Reverse session | M001 repository and protocol foundation | closing | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; commit and reviewed head pending. |
 
 ## Blocked implementation plans
 
@@ -49,15 +53,14 @@ Accepted architectural decisions:
 
 ## Closure work
 
-No implementation milestone has landed yet. No closure record should exist until executable evidence is available.
+M001 implementation is in closing with executable local evidence recorded in `plans/closure/reverse-session/001-status.md`. Strict closure is pending a committed reviewed head; M002 remains blocked until that head is accepted and its baseline is refreshed.
 
-When M001 implementation lands:
+For M001 closure:
 
-1. change M001 from ready/active to closing as appropriate;
-2. create plans/closure/reverse-session/001-status.md;
-3. record implementation commits, final reviewed head, tests, dependency evidence, docs, and residual findings;
-4. only after accepted strict closure change M001 to closed and M002 to ready;
-5. refresh M002 repository baseline to the accepted M001 reviewed head before handoff.
+1. commit and review the implementation, then add the commit/head to the closure record;
+2. record acceptance of strict closure;
+3. only after accepted strict closure change M001 to closed and M002 to ready;
+4. refresh M002 repository baseline to the accepted M001 reviewed head before handoff.
 
 ## Current architecture constraints
 

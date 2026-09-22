@@ -1,8 +1,8 @@
 # Reverse Session M001 — Repository and Protocol Foundation
 
-Status: ready
+Status: closing — implementation complete; committed review baseline pending
 
-Repository baseline: 43b761b14c9e1ee5a42a74ebe841dad875d9610e
+Repository baseline: 121955694d2151095e409b3940922fc021a4b91a
 
 Source roadmap:
 

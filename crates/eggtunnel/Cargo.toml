@@ -1,0 +1,21 @@
+[package]
+name = "eggtunnel"
+description = "Embeddable Eggtunnel reverse-session library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["client", "tls"]
+client = []
+server = []
+tls = []
+quic = []
+websocket = []
+outbound-proxy = []
+mtls = ["tls"]
+
+[dependencies]
+eggtunnel-proto = { path = "../eggtunnel-proto", version = "0.1.0" }
+
