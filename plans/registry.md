@@ -29,19 +29,18 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 active | M001-M005 historically closed; C001 closed. M006 strict closure additionally depends on hosted release-target, advisory/license, publication, and downstream-registry evidence. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 closed | M001-M006 closed; C001 closed (supplemental). No open implementation dependency. |
 | Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M006 distribution/downstream qualification | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Release-qualification foundation landed at fc19fe57a32d0c45be339ff3dd80044c4a8bc069. C001 is closed. Strict M006 closure now waits only on hosted release-target, advisory/license, publication, and downstream-registry evidence. |
-
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
+| Reverse session | M006 distribution/downstream qualification | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md; tag v0.1.0, hosted 4-target release with install/version smoke, crates.io publication of eggtunnel-proto then eggtunnel, registry-consumer qualification, audit (0 vulns) + deny licenses pass. |
 | Reverse session post-closure corrective | C001 optional-transport qualification and planning reconciliation | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md; M004/M005 historical closure records remain unchanged; supplemental evidence adds QUIC wrong/stale/replay/saturation/half-close, WSS close-during-relay and multi-frame backpressure, proxy refusal/timeout/cancellation, HTTP CONNECT and SOCKS5 authentication success/failure, and two-hop SOCKS5+HTTP CONNECT chain evidence. |
 | Reverse session | M005 restricted-network transports/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md; historical closure retains explicit proxy/WSS qualification limitations; C001 supplemental evidence covers the listed cases. |
 | Reverse session | M004 QUIC transport | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md; historical closure retains explicit QUIC qualification limitations; C001 supplemental evidence covers the listed cases. |
@@ -58,18 +57,14 @@ records the supplemental transport-specific evidence. No new high/medium
 correctness or security findings remain open. M004/M005 historical closure
 records are preserved unchanged.
 
-### M006 distribution/downstream qualification
+### M006 distribution/downstream qualification (closed)
 
-M006 implementation/local qualification is active. Its own execution record currently identifies these open closure gates:
-
-- hosted candidate release-target workflow/archive/install evidence;
-- advisory/license review;
-- registry publication ordering and downstream registry-consumption evidence if publication is authorized;
-- final supported-platform claims based on actual evidence.
-
-C001 is closed. M006 strict closure now depends only on the hosted
-release-target, advisory/license, publication, and downstream-registry gates
-above.
+M006 closure record at plans/closure/reverse-session/006-status.md records
+the hosted 4-target release, crates.io publication (proto then library),
+downstream registry-consumption, advisory/license review, and the supported
+platform claims. No high/medium correctness or security findings remain open.
+Deferred follow-up (PEM-parser replacement, broader runtime qualification) is
+not gated on M006.
 
 ## Current architecture constraints
 

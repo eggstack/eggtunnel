@@ -1,6 +1,10 @@
 # Reverse Session M006 — Distribution and Downstream Qualification
 
-Status: active — M003–M005 are closed; distribution and downstream qualification is underway
+Status: closed
+
+Closure record:
+
+- plans/closure/reverse-session/006-status.md
 
 Planning baseline: 448c615 (accepted M005 head)
 
@@ -407,3 +411,42 @@ Disposition: M006 implementation and local qualification are in place, but the
 acceptance criteria requiring hosted release artifacts, downstream registry
 consumption, and completed security/license review are still open. Keep M006
 active; do not declare the distribution qualified or publish a release yet.
+
+## 22. Closure execution record (2026-09-23)
+
+With explicit user authorization, the remaining gates were executed and M006
+is closed. Full evidence is in `plans/closure/reverse-session/006-status.md`.
+
+### Implemented since the 2026-09-22 record
+
+- Added `deny.toml`: permissive-license policy (`cargo deny check licenses`
+  passes, with SPDX clarifications pinned by license-file hashes for four
+  legacy `/`-separated declarations). Added `cargo audit` and
+  `cargo deny check licenses` to CI.
+- Added proto guard test `documented_wire_version_and_message_ids_are_pinned`
+  tying `docs/PROTOCOL.md` wire version 1.0 and all 14 message IDs to code.
+- Cross-target `cargo check -p eggtunnel-cli` evidence: `x86_64-apple-darwin`
+  (native SDK), `x86_64/aarch64-unknown-linux-gnu` and
+  `armv7-unknown-linux-gnueabihf` (zig-cc with a wrapper stripping ring's
+  `--target=<rust-triple>` flag), `x86_64-pc-windows-gnu` (mingw). MSVC, musl,
+  and SBC targets remain unevaluated.
+- Updated `docs/DISTRIBUTION.md` (release state, supported targets,
+  supply-chain review) and `docs/SUPPORT.md` (release target evidence table).
+
+### Authorized release actions
+
+- Tag `v0.1.0` pushed (commit `531ccbc`); release workflow run `35804871876`
+  built all four archives and published GitHub release `v0.1.0` with
+  `SHA256SUMS`, `install.sh`, and build attestations. Consumer-side
+  download/checksum/install/version verification passed for
+  `aarch64-apple-darwin`.
+- CI on the tag (run `35804871853`) passed all steps including audit and deny.
+- Published `eggtunnel-proto 0.1.0` then `eggtunnel 0.1.0` to crates.io, in
+  the required order. A registry-dependent consumer crate resolved
+  `eggtunnel 0.1.0` from crates.io, compiled, and ran successfully.
+- `cargo audit`: 0 vulnerabilities; 2 open `unmaintained` warnings
+  (`atomic-polyfill`, `rustls-pemfile`) recorded as low/informational
+  findings with deferred follow-up for the PEM parser.
+
+Disposition: M006 closed. Follow-up work (PEM-parser replacement, broader
+runtime qualification) is not gated on M006.

@@ -126,7 +126,7 @@ Planning/evidence:
 
 - registry reflects M001-M005 closed, C001 closed, M006 active;
 - reverse-session roadmap individual milestone sections and status table agree;
-- M006 is explicitly active; with C001 closed, its strict closure is blocked only on its own hosted release/security/publication gates;
+- M006 is closed (closure record at plans/closure/reverse-session/006-status.md);
 - M004/M005 historical closure records remain intact; a C001 closure record supplies supplemental evidence rather than rewriting history;
 - support/security/operations docs accurately distinguish tested support from adapter limitations.
 
@@ -139,7 +139,7 @@ M005 historical closure ----+--> C001 optional-transport corrective
 M006 implementation active -+          v
                               M006 strict closure gate
 
-C001 executed while M006's non-conflicting release-workflow and documentation work continued. That gate is satisfied (C001 closed); M006 strict closure now depends only on the hosted release-target, advisory/license, publication, and downstream-registry gates.
+C001 executed while M006's non-conflicting release-workflow and documentation work continued. Both are now closed; the M006 closure record is at plans/closure/reverse-session/006-status.md.
 
 ## 7. Closure policy
 

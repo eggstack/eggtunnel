@@ -2,27 +2,30 @@
 
 ## Current release state
 
-Eggtunnel is at `0.1.0`. No crate has been published and no GitHub release has
-been made. `eggtunnel` and `eggtunnel-proto` are intended as public Rust
-packages; `eggtunnel-cli` remains a private workspace package and ships only
-inside the binary archive. The CLI crate depends on the library, never the
-reverse.
+Eggtunnel is at `0.1.0`. `eggtunnel-proto 0.1.0` and `eggtunnel 0.1.0` are
+published on crates.io (`eggtunnel-proto` first, then `eggtunnel`, matching the
+versioned dependency order). Git tag `v0.1.0` points at the qualified head and
+GitHub release `v0.1.0` carries versioned archives, a SHA-256 manifest, build
+provenance attestations, and `install.sh`. `eggtunnel-cli` remains a private
+workspace package (`publish = false`) and ships only inside the binary
+archive. The CLI crate depends on the library, never the reverse.
 
-## Candidate release targets
+## Release targets
 
-The release workflow builds archives for these candidate targets:
+The release workflow builds archives for these supported targets:
 
-| Target | Build runner | Local runtime evidence |
+| Target | Build runner | Evidence |
 |---|---|---|
-| `x86_64-unknown-linux-gnu` | GitHub Ubuntu x64 | Pending hosted release workflow |
-| `aarch64-unknown-linux-gnu` | GitHub Ubuntu arm64 | Pending hosted release workflow |
-| `x86_64-apple-darwin` | GitHub macOS Intel | Pending hosted release workflow |
-| `aarch64-apple-darwin` | GitHub macOS arm64 | Local workspace and release binary checks |
+| `x86_64-unknown-linux-gnu` | GitHub Ubuntu x64 | Hosted build, checksum, per-runner install/version smoke |
+| `aarch64-unknown-linux-gnu` | GitHub Ubuntu arm64 | Hosted build, checksum, per-runner install/version smoke |
+| `x86_64-apple-darwin` | GitHub macOS Intel | Hosted build, checksum, per-runner install/version smoke |
+| `aarch64-apple-darwin` | GitHub macOS arm64 | Hosted build, checksum, per-runner install/version smoke, plus independent consumer-side download/checksum/install/version verification |
 
-These are candidate build outputs until the release workflow succeeds and the
-archives pass version and checksum smoke checks. Windows, musl, armv7 and SBC
-targets are not in the candidate release set. A Rust target being available
-does not make that target supported.
+Support means hosted build plus install/version smoke for that archive. No
+target has interactive tunnel runtime evidence beyond the local loopback
+suite; Windows, musl, armv7 and SBC targets are not in the release set and
+are unsupported. A Rust target being available does not make that target
+supported.
 
 ## Archives and integrity
 
@@ -49,8 +52,25 @@ Eggup transaction machinery into the CLI. No update engine is embedded.
 
 ## Publication ordering
 
-The initial Rust publication order is `eggtunnel-proto`, then `eggtunnel`
-(which has a versioned dependency on the former). Publish only after package
-inspection, downstream compile qualification, dependency/license review, and
-the release support matrix have been accepted. The CLI remains unpublished.
-No automatic crate publication is configured.
+The Rust publication order is `eggtunnel-proto`, then `eggtunnel` (which has
+a versioned dependency on the former). Both were published for `0.1.0` after
+package inspection, downstream compile qualification, dependency/license
+review, and acceptance of the release support matrix. The CLI remains
+unpublished. No automatic crate publication is configured; each publish is an
+explicit authorized action.
+
+## Supply-chain review
+
+- `cargo audit`: no vulnerabilities across the locked dependency graph. Two
+  `unmaintained` warnings remain open: `atomic-polyfill 1.0.3` (transitive via
+  `postcard`/`heapless`, only compiled on targets without native atomics) and
+  `rustls-pemfile 2.2.0` (direct `mtls` dependency for PEM parsing). Neither
+  has a known vulnerability; replacing the PEM parser is deferred follow-up
+  work, not a release blocker.
+- `cargo deny check licenses` with `deny.toml`: passes. Every third-party
+  dependency resolves to a permissive license (MIT/Apache-2.0 family, ISC,
+  BSD, Zlib, Unlicense, CDLA-Permissive-2.0, Unicode-3.0); no copyleft license
+  is present. Four legacy `/`-separated license declarations are clarified to
+  SPDX equivalents pinned by license-file hashes.
+- Both checks run in CI on every push and pull request. The exact outcomes for
+  the release head are recorded in the M006 closure record.

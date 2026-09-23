@@ -40,11 +40,13 @@ optional transport profiles.
 
 | Target | Current evidence | Claim |
 |---|---|---|
-| `aarch64-apple-darwin` | Local host runs the workspace suite; local release archive/install smoke passed | Local smoke evidence only; hosted release qualification pending |
-| `x86_64-unknown-linux-gnu` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
-| `aarch64-unknown-linux-gnu` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
-| `x86_64-apple-darwin` | Release workflow runner configured; hosted workflow has not run in this implementation pass | Candidate only |
-| Windows, musl, armv7, Raspberry Pi/Le Potato variants | No release runner/runtime evidence recorded | Unsupported/unevaluated |
+| `x86_64-unknown-linux-gnu` | Hosted release build, SHA-256 manifest, per-runner install/version smoke; local cross-check | Supported (build + install/version smoke) |
+| `aarch64-unknown-linux-gnu` | Hosted release build, SHA-256 manifest, per-runner install/version smoke; local cross-check | Supported (build + install/version smoke) |
+| `x86_64-apple-darwin` | Hosted release build, SHA-256 manifest, per-runner install/version smoke; local cross-check | Supported (build + install/version smoke) |
+| `aarch64-apple-darwin` | Hosted release build, SHA-256 manifest, per-runner install/version smoke; independent consumer-side download/checksum/install/version verification | Supported (build + install/version smoke) |
+| Windows, musl, armv7, Raspberry Pi/Le Potato variants | No release runner evidence; local check-only cross-compiles exist for `x86_64-pc-windows-gnu` and `armv7-unknown-linux-gnueabihf` but neither is installed, smoked, or released | Unsupported/unevaluated |
 
 The release workflow produces archives, SHA-256 manifests, and build
-attestations for the four candidate targets. It does not publish Rust crates.
+attestations for the four supported targets. Rust crates `eggtunnel-proto`
+and `eggtunnel` are published at `0.1.0`; downstream registry consumption is
+qualified with a registry-dependent consumer build.
