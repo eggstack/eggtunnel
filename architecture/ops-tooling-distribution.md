@@ -32,12 +32,13 @@ Top level (`/`, see directory read):
 | `crates/eggtunnel-cli/` | Private binary (`publish = false`); all-features consumer of the library | `crates/eggtunnel-cli/Cargo.toml:1-22` |
 | `docs/` | 9 user-facing guides (see §5) | `docs/` directory listing |
 | `plans/` | Canonical spec + roadmaps + ADRs + implementation/closure evidence (see §6) | `plans/registry.md:1-95` |
-| `architecture/` | This review layer; currently only the index | `architecture/overview.md:1-183` |
+| `architecture/` | Review layer: `overview.md` index + per-module deep dives (proto, core, client, server, transports, CLI, this file) | `architecture/overview.md:1-183` |
 | `examples/` | `client.toml`, `server.toml` starter configs | `examples/` |
 | `fixtures/embedder/` | Downstream-shaped embedder proof (see §7); own `Cargo.toml` + `Cargo.lock`, excluded from workspace via `[workspace]` empty table | `fixtures/embedder/Cargo.toml:1-12`, `fixtures/embedder/src/main.rs:1-54` |
 | `scripts/` | `generate-third-party-notices.py`, `test-install.sh` only | `scripts/` |
 | `install.sh` | Install-only bootstrap script shipped as a release asset | `install.sh:1-60` |
 | `.github/workflows/` | `ci.yml` (per-push/PR gates), `release.yml` (tag-triggered 4-target build) | `.github/workflows/ci.yml:1-25`, `.github/workflows/release.yml:1-91` |
+| `.opencode/skills/` | Agent skills (`verify`, `release`) discovered via `SKILL.md`; loaded on demand through the skill tool | `.opencode/skills/verify/SKILL.md`, `.opencode/skills/release/SKILL.md` |
 | `deny.toml` | `cargo-deny` license policy + 4 `clarify` exceptions | `deny.toml:1-58` |
 | `target/` | **Build cache, never committed.** `.gitignore:1-4` ignores `/target`, `target/`, `**/target/`. At review time it contained cross-check outputs (`aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-pc-windows-gnu`, `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `debug`, `release`, `doc`) — these are local `cargo check` artifacts, not release evidence (cf. `plans/closure/reverse-session/006-status.md:37-41`). Do not review `target/` contents as source. |
 | `LICENSE-MIT`, `THIRD_PARTY_NOTICES.md` (generated) | License + per-release dependency inventory staged into every archive | `docs/DISTRIBUTION.md:32-33`, `scripts/generate-third-party-notices.py:40-52` |
@@ -444,9 +445,9 @@ suffices without the CLI, default features, or a library-owned runtime**
 
 ### E. Stale docs / plans sweep (run before any release)
 
-- [ ] `README.md:25-26` says "candidate release targets and qualification
-  state" — after M006 the targets are qualified, not candidate. Confirm wording
-  still matches DISTRIBUTION/SUPPORT intent.
+- [x] `README.md:25-26` said "candidate release targets and qualification
+  state" — fixed to "supported release targets" to match DISTRIBUTION/SUPPORT
+  after M006 qualification.
 - [ ] `plans/registry.md:32-33`: corrective addendum stays `active` for
   traceability while C001 is closed — intentional, but any new corrective work
   must decide whether to reopen C002 or amend the addendum rather than leaving

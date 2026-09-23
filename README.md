@@ -22,5 +22,5 @@ setting. Optional `websocket` support provides WSS, and `outbound-proxy` adds
 listener-free direct, HTTP CONNECT, and SOCKS5 traversal. Proxy credentials are
 read from an environment variable; see the configuration guide and support
 matrix for limitations and tested combinations. See the
-[distribution policy](docs/DISTRIBUTION.md) for the candidate release targets
+ [distribution policy](docs/DISTRIBUTION.md) for the supported release targets
 and qualification state.

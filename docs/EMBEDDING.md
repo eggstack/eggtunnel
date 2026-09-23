@@ -33,7 +33,7 @@ select or rewrite the client target.
 Enable `mtls` in addition to `client` and `tls` to use
 `Client::start_with_mtls`; the server counterpart is `Server::bind_mtls`.
 That profile keeps bearer-token auth and adds a required client certificate.
-The compile-only downstream fixture in `fixtures/embedder` demonstrates a
+The downstream fixture in `fixtures/embedder` demonstrates a
 caller-owned Tokio runtime, programmatic service configuration, caller-owned
 tracing, and a direct in-process connector without the CLI dependency.
 
