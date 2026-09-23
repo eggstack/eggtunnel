@@ -1,6 +1,6 @@
 # Reverse Session Post-Closure Corrective Addendum
 
-Status: active — C001 ready
+Status: active — C001 closed (historical closure evidence retained for traceability)
 
 Parent subsystem:
 
@@ -15,6 +15,7 @@ Historical closure records:
 
 - plans/closure/reverse-session/004-status.md
 - plans/closure/reverse-session/005-status.md
+- plans/closure/reverse-session-post-closure-corrective/001-status.md (supplemental evidence)
 
 Implementation plan:
 
@@ -85,11 +86,15 @@ C001 MUST preserve:
 
 ## 5. Corrective milestone C001
 
-Status: ready
+Status: closed
 
 Plan:
 
 - plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md
+
+Closure record:
+
+- plans/closure/reverse-session-post-closure-corrective/001-status.md
 
 Primary class: corrective / invariant / evidence
 
@@ -119,9 +124,9 @@ WSS/proxy:
 
 Planning/evidence:
 
-- registry reflects M001-M005 closed, C001 ready/active as appropriate, M006 active;
+- registry reflects M001-M005 closed, C001 closed, M006 active;
 - reverse-session roadmap individual milestone sections and status table agree;
-- M006 is explicitly active but strict closure is blocked on C001 plus its own hosted release/security/publication gates;
+- M006 is explicitly active; with C001 closed, its strict closure is blocked only on its own hosted release/security/publication gates;
 - M004/M005 historical closure records remain intact; a C001 closure record supplies supplemental evidence rather than rewriting history;
 - support/security/operations docs accurately distinguish tested support from adapter limitations.
 
@@ -134,7 +139,7 @@ M005 historical closure ----+--> C001 optional-transport corrective
 M006 implementation active -+          v
                               M006 strict closure gate
 
-C001 may execute while M006's non-conflicting release-workflow and documentation work continues. M006 MUST NOT be declared strictly closed until C001 closes.
+C001 executed while M006's non-conflicting release-workflow and documentation work continued. That gate is satisfied (C001 closed); M006 strict closure now depends only on the hosted release-target, advisory/license, publication, and downstream-registry gates.
 
 ## 7. Closure policy
 
@@ -166,4 +171,4 @@ The following remain outside this corrective:
 
 | Corrective | Status | Plan | Closure | Blocker |
 |---|---|---|---|---|
-| C001 optional-transport qualification and planning reconciliation | ready | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | — | none |
+| C001 optional-transport qualification and planning reconciliation | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md | none |

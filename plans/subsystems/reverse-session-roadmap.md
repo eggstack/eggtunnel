@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M004/M005 closed; M006 distribution qualification in progress
+Status: active — M001-M005 closed; C001 closed (supplemental transport-specific evidence); M006 distribution qualification in progress
 
 Canonical references:
 
@@ -98,7 +98,7 @@ It does not own:
 
 ## 3. Current state
 
-At the initial planning baseline the repository contained planning documents only. M001 is closed with the Rust workspace and bounded protocol foundation. M002 is closed with the authenticated TCP/TLS product. M003 is closed with resource accounting, auth and bind hardening, optional mTLS, direct application connectors, and lifecycle qualification. M004 and M005 are historically closed; M006 distribution qualification is active. A post-closure corrective (C001) is ready to close optional-transport evidence gaps and reconcile planning state before M006 can reach strict closure.
+At the initial planning baseline the repository contained planning documents only. M001 is closed with the Rust workspace and bounded protocol foundation. M002 is closed with the authenticated TCP/TLS product. M003 is closed with resource accounting, auth and bind hardening, optional mTLS, direct application connectors, and lifecycle qualification. M004 and M005 are historically closed. C001 is closed and supplies supplemental transport-specific evidence for QUIC wrong/stale/replay/saturation/half-close, WSS close-during-relay and bounded backpressure, proxy refusal/timeout/cancellation, HTTP CONNECT and SOCKS5 authentication success/failure, and a two-hop SOCKS5+HTTP CONNECT chain. M006 distribution qualification is active.
 
 The current Eggress integration baseline is 1.0.8. The TLS, relay, and core stream APIs were inspected before adding dependencies.
 
@@ -309,7 +309,7 @@ Add WSS and Eggress outbound-chain traversal without changing session semantics 
 
 ## 11. Milestone M006 — Distribution and downstream qualification
 
-Status: active — implementation/local qualification landed; strict closure blocked on C001 plus M006 release-evidence gates
+Status: active — implementation/local qualification landed; strict closure blocked on hosted release/security/publication/downstream evidence
 
 Implementation plan:
 
@@ -331,15 +331,13 @@ Finalize public documentation, release artifacts, supported target matrix, crate
 
 ## Post-closure corrective workstream
 
-The M004/M005 historical closure records intentionally retain the limitations observed when those milestones closed. A narrow supplemental corrective is now registered:
+The M004/M005 historical closure records intentionally retain the limitations observed when those milestones closed. C001 is closed and supplies supplemental transport-specific evidence for QUIC correlation/generation, stream saturation, half-close semantics, WSS close/backpressure, outbound-proxy failure/cancellation, proxy authentication success/failure, and a multi-hop chain qualification. It also owns planning-control-surface reconciliation.
 
 - roadmap: plans/subsystems/reverse-session-post-closure-corrective-addendum.md
 - C001 plan: plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md
-- C001 status: ready
+- C001 status: closed (historical; closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md)
 
-C001 owns transport-specific qualification for QUIC correlation/generation, stream saturation, half-close semantics, WSS close/backpressure, and outbound-proxy failure/cancellation/authentication/multi-hop claim reconciliation. It also owns planning-control-surface reconciliation.
-
-M006 implementation may continue in parallel where non-conflicting, but M006 MUST NOT reach strict closure until C001 closes in addition to satisfying M006's hosted release-target, advisory/license, publication, and downstream-registry gates.
+M006 implementation may continue in parallel where non-conflicting; M006 strict closure now depends only on the hosted release-target, advisory/license, publication, and downstream-registry gates.
 
 ## 12. Security considerations across milestones
 
@@ -484,7 +482,7 @@ Explicitly deferred until after M006 or a new ADR:
 | M001 repository/protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md | — |
 | M002 TCP/TLS product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md | — |
 | M003 hardening/embedding | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md | — |
-| M004 QUIC | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md | M003 closed at `31458e83e543304d6b271898575bf2f6e98c7352` |
-| M005 WSS/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md | M003/M004 closed |
-| C001 optional-transport corrective | ready | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | — | historical M004/M005 closures |
-| M006 distribution/downstream | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | C001 closure + hosted release/security/publication/downstream evidence |
+| M004 QUIC | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md | M003 closed at `31458e83e543304d6b271898575bf2f6e98c7352`; supplemental evidence at plans/closure/reverse-session-post-closure-corrective/001-status.md |
+| M005 WSS/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md | M003/M004 closed; supplemental evidence at plans/closure/reverse-session-post-closure-corrective/001-status.md |
+| C001 optional-transport corrective | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md | M004/M005 historical closures + post-closure corrective workstream |
+| M006 distribution/downstream | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | — | hosted release/security/publication/downstream evidence |

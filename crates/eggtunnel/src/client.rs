@@ -119,6 +119,8 @@ pub struct ClientHandle {
     cancel: CancellationToken,
     counters: Counters,
     commands: mpsc::Sender<ClientCommand>,
+    #[cfg(feature = "quic")]
+    quic_client: Arc<std::sync::Mutex<Option<Arc<eggress_transport_quic::QuicClient>>>>,
 }
 
 enum ClientCommand {
@@ -139,6 +141,14 @@ impl ClientHandle {
             .send(ClientCommand::Unregister(id))
             .await
             .map_err(|_| TunnelError::Cancelled)
+    }
+
+    #[cfg(all(test, feature = "quic"))]
+    pub(crate) fn quic_client_for_test(&self) -> Option<Arc<eggress_transport_quic::QuicClient>> {
+        self.quic_client
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 }
 
@@ -269,8 +279,11 @@ impl Client {
             cancel: cancel.clone(),
             counters: counters.clone(),
             commands: command_tx,
+            #[cfg(feature = "quic")]
+            quic_client: Arc::new(std::sync::Mutex::new(None)),
         };
         let task_cancel = cancel.clone();
+        let task_handle = handle.clone();
         let task = tokio::spawn(async move {
             quic_reconnect_loop(
                 config,
@@ -279,6 +292,7 @@ impl Client {
                 task_cancel,
                 counters,
                 command_rx,
+                task_handle,
             )
             .await;
         });
@@ -294,6 +308,14 @@ impl Client {
         config: ClientConfig,
     ) -> Result<Self, TunnelError> {
         Self::start_quic_profile(config, Arc::new(TcpTargetConnector), true).await
+    }
+
+    #[cfg(all(test, feature = "quic"))]
+    pub(crate) async fn start_quic_insecure_with_connector_for_test(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+    ) -> Result<Self, TunnelError> {
+        Self::start_quic_profile(config, connector, true).await
     }
 
     #[cfg(feature = "mtls")]
@@ -351,6 +373,8 @@ impl Client {
             cancel: cancel.clone(),
             counters: counters.clone(),
             commands: command_tx,
+            #[cfg(feature = "quic")]
+            quic_client: Arc::new(std::sync::Mutex::new(None)),
         };
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
@@ -697,6 +721,7 @@ async fn quic_reconnect_loop(
     cancel: CancellationToken,
     counters: Counters,
     mut commands: mpsc::Receiver<ClientCommand>,
+    handle: ClientHandle,
 ) {
     use eggress_transport_quic::{QuicClient, QuicClientConfig};
 
@@ -730,6 +755,7 @@ async fn quic_reconnect_loop(
                 }
             }
         };
+        *handle.quic_client.lock().unwrap_or_else(|p| p.into_inner()) = Some(quic.clone());
         let session = async {
             let connection = timeout(CONNECT_TIMEOUT, quic.get_connection())
                 .await
@@ -775,6 +801,7 @@ async fn quic_reconnect_loop(
             break 'reconnect;
         }
         record_quic_reconnect(&counters, &cancel, &mut delay).await;
+        *handle.quic_client.lock().unwrap_or_else(|p| p.into_inner()) = None;
     }
 }
 

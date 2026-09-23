@@ -1,10 +1,14 @@
 # Reverse Session Post-Closure Corrective C001 — Optional-Transport Qualification and Planning Reconciliation
 
-Status: ready
+Status: closed
 
 Repository baseline:
 
 - fc19fe57a32d0c45be339ff3dd80044c4a8bc069
+
+Closure record:
+
+- plans/closure/reverse-session-post-closure-corrective/001-status.md
 
 Source corrective roadmap:
 

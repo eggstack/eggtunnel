@@ -17,8 +17,10 @@ token_env = "EGGTUNNEL_TOKEN"
 # client_cert = "/etc/eggtunnel/client-chain.pem"
 # client_key = "/etc/eggtunnel/client-key.pem"
 # Optional outbound proxy chain, read from this environment variable. Supported
-# URI examples include http://proxy:3128 and socks5://proxy:1080. Chains use
-# Eggress's __ separator. Keep proxy credentials out of this file.
+# URI examples include http://user:pass@proxy:3128, socks5://user:pass@proxy:1080,
+# and chains such as socks5://proxy:1080__http://proxy:8080. Credentials are
+# passed via URI userinfo and redacted from diagnostics and the public Snapshot.
+# Keep proxy credentials out of this file.
 # outbound_proxy_env = "EGGTUNNEL_OUTBOUND_PROXY"
 
 [[services]]
@@ -67,9 +69,15 @@ browser security boundary.
 For clients, `outbound_proxy_env` selects a listener-free Eggress outbound
 chain. Proxying establishes the TCP path before Eggtunnel TLS, so the tunnel
 still authenticates the configured server name end to end. Supported URI
-families in Eggress 1.0.8 include direct, HTTP CONNECT, and SOCKS5; chains use
-the `__` separator. Proxy traversal over QUIC and proxy+mTLS are rejected.
-Put proxy credentials in the named environment variable, not TOML.
+families in Eggress 1.0.8 include direct, HTTP CONNECT, and SOCKS5; chains
+use the `__` separator. HTTP CONNECT Basic authentication and SOCKS5
+username/password authentication are honored when supplied as URI userinfo;
+credentials remain in the environment variable and are redacted from
+Eggtunnel diagnostics and the public `Snapshot` view. Proxy traversal over
+QUIC and proxy+mTLS are rejected. Multi-hop chains use the canonical
+`__`-separated pproxy URI syntax (e.g.
+`socks5://proxy1:1080__http://proxy2:8080`) and are qualified end-to-end
+through one SOCKS5+HTTP CONNECT integration test.
 
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup

@@ -29,42 +29,34 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 active | M001-M005 historically closed; M006 strict closure additionally depends on post-closure C001 and M006 release-evidence gates. |
-| Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 ready | No implementation dependency; operates against current head and historical M004/M005 closure evidence. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 active | M001-M005 historically closed; C001 closed. M006 strict closure additionally depends on hosted release-target, advisory/license, publication, and downstream-registry evidence. |
+| Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M006 distribution/downstream qualification | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Release-qualification foundation landed at fc19fe57a32d0c45be339ff3dd80044c4a8bc069. Strict closure waits on C001 plus hosted release-target, advisory/license, publication, and downstream-registry evidence. |
-
-## Dependency-ready implementation plans
-
-| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
-|---|---|---|---|---|
-| Reverse session post-closure corrective | C001 optional-transport qualification and planning reconciliation | ready | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | Execute against baseline fc19fe57a32d0c45be339ff3dd80044c4a8bc069 or current descendant head after inspection; preserve non-conflicting M006 work. |
+| Reverse session | M006 distribution/downstream qualification | active | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | Release-qualification foundation landed at fc19fe57a32d0c45be339ff3dd80044c4a8bc069. C001 is closed. Strict M006 closure now waits only on hosted release-target, advisory/license, publication, and downstream-registry evidence. |
 
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
-| Reverse session | M005 restricted-network transports/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md; historical closure retains explicit proxy/WSS qualification limitations now owned by C001. |
-| Reverse session | M004 QUIC transport | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md; historical closure retains explicit QUIC qualification limitations now owned by C001. |
+| Reverse session post-closure corrective | C001 optional-transport qualification and planning reconciliation | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md; M004/M005 historical closure records remain unchanged; supplemental evidence adds QUIC wrong/stale/replay/saturation/half-close, WSS close-during-relay and multi-frame backpressure, proxy refusal/timeout/cancellation, HTTP CONNECT and SOCKS5 authentication success/failure, and two-hop SOCKS5+HTTP CONNECT chain evidence. |
+| Reverse session | M005 restricted-network transports/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md; historical closure retains explicit proxy/WSS qualification limitations; C001 supplemental evidence covers the listed cases. |
+| Reverse session | M004 QUIC transport | closed | plans/implementation/reverse-session/004-quic-transport.md | plans/closure/reverse-session/004-status.md; historical closure retains explicit QUIC qualification limitations; C001 supplemental evidence covers the listed cases. |
 | Reverse session | M003 security/lifecycle/resource/embedding hardening | closed | plans/implementation/reverse-session/003-security-lifecycle-resource-embedding-hardening.md | plans/closure/reverse-session/003-status.md; final reviewed head 31458e83e543304d6b271898575bf2f6e98c7352. |
 | Reverse session | M002 TCP/TLS reverse-tunnel product | closed | plans/implementation/reverse-session/002-tcp-tls-reverse-tunnel-product.md | plans/closure/reverse-session/002-status.md; implementation head 13402200e51b46031a1a82240be1eb48027a09f4. |
 | Reverse session | M001 repository and protocol foundation | closed | plans/implementation/reverse-session/001-repository-and-protocol-foundation.md | plans/closure/reverse-session/001-status.md; implementation head 357480b942e95ef7087d86a043f26b7a3d175687. |
 
 ## Closure work
 
-### C001 optional-transport corrective
+### C001 optional-transport corrective (closed)
 
-C001 must produce:
-
-- plans/closure/reverse-session-post-closure-corrective/001-status.md
-
-Strict C001 closure requires direct evidence for the QUIC and WSS/proxy cases named in its implementation plan, feature/dependency isolation, full workspace verification, accurate adapter limitation classification, and reconciled planning/support documentation.
-
-M004/M005 historical closure records must not be rewritten to hide the limitations that motivated C001. C001 closure is supplemental evidence.
+C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md
+records the supplemental transport-specific evidence. No new high/medium
+correctness or security findings remain open. M004/M005 historical closure
+records are preserved unchanged.
 
 ### M006 distribution/downstream qualification
 
@@ -75,7 +67,9 @@ M006 implementation/local qualification is active. Its own execution record curr
 - registry publication ordering and downstream registry-consumption evidence if publication is authorized;
 - final supported-platform claims based on actual evidence.
 
-M006 MUST NOT be declared strictly closed before C001 closes.
+C001 is closed. M006 strict closure now depends only on the hosted
+release-target, advisory/license, publication, and downstream-registry gates
+above.
 
 ## Current architecture constraints
 
@@ -97,7 +91,7 @@ The following are not optional implementation preferences:
 
 ## External/deferred work
 
-These are not C001 implementation blockers:
+These are not M006 implementation blockers:
 
 - hosted release-target evidence remains M006;
 - crates.io publication remains M006 and requires explicit release authorization;

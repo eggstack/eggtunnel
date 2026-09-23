@@ -39,3 +39,11 @@ variable containing an HTTP CONNECT or SOCKS5 proxy URI/chain. Eggtunnel TLS
 remains end to end and uses `tls_server_name` for verification. WebSocket mode
 uses WSS on the configured TCP endpoint. QUIC uses UDP and does not support
 outbound proxy traversal.
+
+Outbound proxy support covers single-hop HTTP CONNECT, single-hop SOCKS5,
+optional Basic HTTP CONNECT authentication, optional SOCKS5 username/password
+authentication, and multi-hop chains using the canonical `__`-separated pproxy
+URI syntax. Proxy credentials are placed in the environment variable named by
+`outbound_proxy_env`; they are never formatted into diagnostics or the
+public `Snapshot` view, and proxy failures are reported only as typed
+termination categories.

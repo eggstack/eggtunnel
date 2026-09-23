@@ -13,5 +13,9 @@ connectors are feature/API-gated. QUIC is feature-gated and uses one
 bidirectional stream per control or data path. WSS wraps each TCP/TLS control
 and data connection in a binary WebSocket byte stream. The optional outbound
 proxy adapter dials each client connection before Eggtunnel TLS; it does not
-start a local proxy listener or change the Session protocol. The intended
-dependency direction is documented in the [subsystem roadmap](../plans/subsystems/reverse-session-roadmap.md).
+start a local proxy listener or change the Session protocol. Outbound proxy
+support covers direct, HTTP CONNECT, and SOCKS5 single-hop profiles, optional
+Basic HTTP CONNECT authentication, optional SOCKS5 username/password
+authentication, and multi-hop chains through the canonical `__`-separated
+pproxy URI syntax. The intended dependency direction is documented in the
+[subsystem roadmap](../plans/subsystems/reverse-session-roadmap.md).

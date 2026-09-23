@@ -46,16 +46,40 @@ The optional QUIC profile uses Eggress 1.0.8 with platform certificate roots
 and verified SNI. The adapter currently has no custom-root or client-certificate
 configuration, so QUIC rejects custom CA and mTLS settings instead of ignoring
 them. QUIC still requires the bearer token inside its encrypted control stream.
+Pre-session UDP/TLS handshake work runs inside the eggress-transport-quic
+adapter before Eggtunnel's authenticated-session semaphore is acquired.
+Eggress bounds its per-connection task fan-out at
+`MAX_CONCURRENT_CONNECTION_TASKS=1024` and per-stream tasks at
+`MAX_CONCURRENT_STREAM_TASKS=4096`. Eggtunnel further bounds accepted
+unauthenticated handshake tasks at `MAX_HANDSHAKES=64` (the existing M003
+resource policy). The combined behavior is documented; no replacement or
+vendoring of the adapter is required to keep the residual pre-session
+admission risk observable. The per-session `stream_admission` semaphore caps
+active data streams at `MAX_ACTIVE_CONNECTIONS_PER_SESSION=128`, with the
+admission saturating, recovering, and rejecting additional streams as
+qualified by the C001 stream-saturation test. QUIC transport-specific
+wrong-session, stale-session, replay, and half-close correlation cases are
+qualified end-to-end through the C001 evidence.
 
 The optional WebSocket profile establishes verified TLS before the WebSocket
 upgrade and uses binary messages with a 1 MiB message limit. It is intended for
 non-browser tunnel clients; the adapter does not validate Origin and makes no
 browser cross-site security claim. Its close operation closes the WebSocket
-connection as a whole, so TCP half-close equivalence is not promised.
+connection as a whole, so TCP half-close equivalence is not promised. The
+C001 corrective pass confirms peer close during an active relay terminates the
+underlying TCP connection promptly without leaving relay halves dangling, and
+that multi-frame bounded backpressure round-trips within the configured 1 MiB
+caps.
 
 Outbound proxy chains are client-side only. Eggtunnel TLS and server-name
 verification run over the established proxy path, protecting authentication
 from a proxy that only forwards CONNECT or SOCKS traffic. Proxy credentials
-should be placed in the environment variable named by `outbound_proxy_env`.
+should be placed in the environment variable named by `outbound_proxy_env`
+and are redacted from Eggtunnel diagnostics and the public `Snapshot` view.
 Proxy traversal with QUIC or mTLS is rejected. The client does not silently
-fall back to direct networking when a proxy path fails.
+fall back to direct networking when a proxy path fails; refusal, handshake
+timeout, and cancellation paths produce typed termination categories. HTTP
+CONNECT Basic authentication and SOCKS5 username/password authentication are
+qualified as supported when the corresponding URI userinfo is supplied.
+Two-hop chains using the canonical `__`-separated pproxy URI syntax are
+qualified by one end-to-end SOCKS5+HTTP CONNECT integration test.
