@@ -51,22 +51,21 @@ adapter before Eggtunnel's authenticated-session semaphore is acquired.
 Eggress bounds its per-connection task fan-out at
 `MAX_CONCURRENT_CONNECTION_TASKS=1024` and per-stream tasks at
 `MAX_CONCURRENT_STREAM_TASKS=4096`. Eggtunnel further bounds accepted
-unauthenticated handshake tasks at `MAX_HANDSHAKES=64` (the existing M003
-resource policy). The combined behavior is documented; no replacement or
+unauthenticated handshake tasks at `MAX_HANDSHAKES=64`. The combined behavior is documented; no replacement or
 vendoring of the adapter is required to keep the residual pre-session
 admission risk observable. The per-session `stream_admission` semaphore caps
 active data streams at `MAX_ACTIVE_CONNECTIONS_PER_SESSION=128`, with the
 admission saturating, recovering, and rejecting additional streams as
-qualified by the C001 stream-saturation test. QUIC transport-specific
+qualified by stream-saturation tests. QUIC transport-specific
 wrong-session, stale-session, replay, and half-close correlation cases are
-qualified end-to-end through the C001 evidence.
+qualified end-to-end.
 
 The optional WebSocket profile establishes verified TLS before the WebSocket
 upgrade and uses binary messages with a 1 MiB message limit. It is intended for
 non-browser tunnel clients; the adapter does not validate Origin and makes no
 browser cross-site security claim. Its close operation closes the WebSocket
-connection as a whole, so TCP half-close equivalence is not promised. The
-C001 corrective pass confirms peer close during an active relay terminates the
+connection as a whole, so TCP half-close equivalence is not promised. Peer
+close during an active relay terminates the
 underlying TCP connection promptly without leaving relay halves dangling, and
 that multi-frame bounded backpressure round-trips within the configured 1 MiB
 caps.

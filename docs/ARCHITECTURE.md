@@ -1,7 +1,7 @@
 # Architecture
 
-Eggtunnel owns reverse-session behavior. Eggress is intended to provide generic
-relay and optional transport primitives in later milestones. `eggtunnel-proto`
+Eggtunnel owns reverse-session behavior. Eggress provides generic
+relay and transport primitives. `eggtunnel-proto`
 is runtime-neutral and owns bounded wire DTOs and framing; it has no socket,
 async runtime, timer, or task dependencies.
 
@@ -17,5 +17,7 @@ start a local proxy listener or change the Session protocol. Outbound proxy
 support covers direct, HTTP CONNECT, and SOCKS5 single-hop profiles, optional
 Basic HTTP CONNECT authentication, optional SOCKS5 username/password
 authentication, and multi-hop chains through the canonical `__`-separated
-pproxy URI syntax. The intended dependency direction is documented in the
-[subsystem roadmap](../plans/subsystems/reverse-session-roadmap.md).
+pproxy URI syntax. Dependency direction: Eggtunnel owns reverse-session
+behavior and selects transport adapters; generic relay and transport
+implementations come from Eggress. See [transport support](SUPPORT.md) for
+the profile matrix.

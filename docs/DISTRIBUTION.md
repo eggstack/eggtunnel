@@ -73,4 +73,4 @@ explicit authorized action.
   is present. Four legacy `/`-separated license declarations are clarified to
   SPDX equivalents pinned by license-file hashes.
 - Both checks run in CI on every push and pull request. The exact outcomes for
-  the release head are recorded in the M006 closure record.
+  the release head were verified before tagging.

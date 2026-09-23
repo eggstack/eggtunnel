@@ -1,5 +1,5 @@
 # eggtunnel-cli
 
-Command-line package placeholder. M001 intentionally provides no tunnel
-commands.
-
+Private Eggtunnel command-line binary (`eggtunnel`): `check`, `client`,
+`server`, and `version` subcommands over TOML configuration files.
+See [the configuration guide](../../docs/CONFIGURATION.md).
