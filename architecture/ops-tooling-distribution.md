@@ -38,7 +38,7 @@ Top level (`/`, see directory read):
 | `scripts/` | `generate-third-party-notices.py`, `test-install.sh` only | `scripts/` |
 | `install.sh` | Install-only bootstrap script shipped as a release asset | `install.sh:1-60` |
 | `.github/workflows/` | `ci.yml` (per-push/PR gates), `release.yml` (tag-triggered 4-target build) | `.github/workflows/ci.yml:1-25`, `.github/workflows/release.yml:1-91` |
-| `.opencode/skills/` | Agent skills (`verify`, `release`) discovered via `SKILL.md`; loaded on demand through the skill tool | `.opencode/skills/verify/SKILL.md`, `.opencode/skills/release/SKILL.md` |
+| `.agents/skills/` (+ `.opencode/skills/` symlinks) | Agent skills (`verify`, `release`) in per-skill `SKILL.md` dirs; canonical files under `.agents/`, relative symlinks under `.opencode/` for dual discovery | `.agents/skills/verify/SKILL.md`, `.agents/skills/release/SKILL.md` |
 | `deny.toml` | `cargo-deny` license policy + 4 `clarify` exceptions | `deny.toml:1-58` |
 | `target/` | **Build cache, never committed.** `.gitignore:1-4` ignores `/target`, `target/`, `**/target/`. At review time it contained cross-check outputs (`aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-pc-windows-gnu`, `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `debug`, `release`, `doc`) — these are local `cargo check` artifacts, not release evidence (cf. `plans/closure/reverse-session/006-status.md:37-41`). Do not review `target/` contents as source. |
 | `LICENSE-MIT`, `THIRD_PARTY_NOTICES.md` (generated) | License + per-release dependency inventory staged into every archive | `docs/DISTRIBUTION.md:32-33`, `scripts/generate-third-party-notices.py:40-52` |

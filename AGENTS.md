@@ -29,7 +29,7 @@ cargo deny check licenses
 ## Docs / process
 
 - `architecture/overview.md` indexes per-module deep dives (`proto-wire-protocol`, `common-core`, `client`, `server`, `transports-wire-io`, `cli-config-ops`, `ops-tooling-distribution`); start there for behavior questions, then read the dive.
-- Agent skills live in `.opencode/skills/` (`verify`, `release`) and load on demand via the skill tool. There is no `.skills/` directory — that path is not discovered.
+- Agent skills live in `.agents/skills/` (`verify`, `release`) and load on demand via the skill tool. `.opencode/skills/<name>` are relative symlinks to the same directories (opencode + codex discovery). Keep the symlink structure; edit the real files under `.agents/`.
 - `plans/closure/` records are immutable historical evidence; never rewrite a closed milestone, add a new record. `docs/` guides are living: keep numeric ceilings, the transport rejection matrix, and the Eggress version in sync across code + docs (sync points listed in `architecture/ops-tooling-distribution.md` §5).
 
 ## Gotchas an agent would miss
