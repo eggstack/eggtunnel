@@ -18,3 +18,8 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo doc --locked --workspace --all-features --no-deps
       - run: cargo check --locked --manifest-path fixtures/embedder/Cargo.toml
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit
+      - run: cargo deny check licenses

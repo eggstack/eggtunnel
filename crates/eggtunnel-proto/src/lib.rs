@@ -604,6 +604,41 @@ mod tests {
     }
 
     #[test]
+    fn documented_wire_version_and_message_ids_are_pinned() {
+        // Guard matching docs/PROTOCOL.md: wire version 1.0 and the stable
+        // numeric message IDs. Any change here is a compatibility event and
+        // must update the protocol document alongside the constants.
+        assert_eq!(PROTOCOL_MAJOR, 1);
+        assert_eq!(PROTOCOL_MINOR, 0);
+        assert_eq!(
+            ProtocolVersion::CURRENT,
+            ProtocolVersion { major: 1, minor: 0 }
+        );
+        let ids = [
+            (MessageType::ClientHello, 1u16),
+            (MessageType::ServerHello, 2),
+            (MessageType::Auth, 3),
+            (MessageType::AuthOk, 4),
+            (MessageType::RegisterService, 5),
+            (MessageType::RegisterAck, 6),
+            (MessageType::UnregisterService, 7),
+            (MessageType::Open, 8),
+            (MessageType::OpenReject, 9),
+            (MessageType::Ping, 10),
+            (MessageType::Pong, 11),
+            (MessageType::Drain, 12),
+            (MessageType::Error, 13),
+            (MessageType::DataHello, 14),
+        ];
+        for (message_type, expected) in ids {
+            assert_eq!(message_type as u16, expected);
+            assert_eq!(MessageType::try_from(expected).unwrap(), message_type);
+        }
+        assert!(MessageType::try_from(15).is_err());
+        assert!(MessageType::try_from(0).is_err());
+    }
+
+    #[test]
     fn rejects_bad_headers_lengths_and_unknown_ids() {
         let frame = encode_frame(&Message::Ping(Ping { nonce: 1 })).unwrap();
         assert_eq!(
