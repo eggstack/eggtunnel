@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M010 and C001 closed; M011 active
+Status: active — M001-M010 and C001 closed; M011 closing
 
 Canonical references:
 
@@ -464,7 +464,7 @@ Exit conditions:
 
 ### Milestone M011 — Sustained robustness and performance qualification
 
-Status: active — M010 strict closure recorded at `plans/closure/reverse-session/010-status.md`
+Status: closing — M010 is strictly closed; M011 hosted exact-head CI run 36003630154 remains queued
 
 Implementation plan:
 
@@ -671,5 +671,5 @@ Explicitly deferred until after M006 or a new ADR:
 | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md | M007 strict closure |
 | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
 | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md | M009 strict closure; hosted CI passed |
-| M011 sustained robustness/performance qualification | ready | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | — | M010 strict closure |
+| M011 sustained robustness/performance qualification | closing | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | — | Local qualification complete; hosted exact-head CI run 36003630154 remains queued |
 | M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | — | M011 strict closure; publication requires explicit authorization |
