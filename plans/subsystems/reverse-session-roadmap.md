@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M009 and C001 closed; M010 ready
+Status: active — M001-M009 and C001 closed; M010 closing
 
 Canonical references:
 
@@ -439,7 +439,7 @@ Exit conditions:
 
 ### Milestone M010 — Client runtime modularization and state-machine hardening
 
-Status: ready
+Status: closing
 
 Implementation plan:
 

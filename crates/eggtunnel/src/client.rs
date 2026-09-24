@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use eggress_core::BoxStream;
 use eggress_relay::{RelayOptions, relay_with_options};
@@ -22,6 +22,18 @@ use crate::{
     wire_io::{read_boxed, read_message, write_boxed, write_message},
 };
 
+mod config;
+pub use config::{
+    ApplicationStream, ClientBuilder, ClientConfig, ClientTransportProfile, TargetConnector,
+    TargetContext, TargetError, TargetFuture, TargetStream,
+};
+mod service_state;
+use service_state::{AckDisposition, ServiceState};
+mod heartbeat;
+use heartbeat::HeartbeatState;
+mod open;
+use open::{OpenContext, handle_open};
+
 #[derive(Clone)]
 enum ClientDataTransport {
     TcpTls {
@@ -34,161 +46,6 @@ enum ClientDataTransport {
     },
     #[cfg(feature = "quic")]
     Quic(eggress_transport_quic::QuicConnection),
-}
-
-/// Async byte stream implemented by an application-provided target connector.
-pub trait ApplicationStream: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> ApplicationStream for T {}
-
-/// Transport-neutral stream returned by a [`TargetConnector`].
-pub type TargetStream = Box<dyn ApplicationStream>;
-
-#[derive(Clone)]
-pub struct TargetContext {
-    pub session_id: eggtunnel_proto::SessionId,
-    pub connection_id: eggtunnel_proto::ConnectionId,
-    pub cancellation: CancellationToken,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum TargetError {
-    #[error("application target refused the connection")]
-    Refused,
-    #[error("application target failed")]
-    Failed,
-}
-
-pub type TargetFuture = Pin<Box<dyn Future<Output = Result<TargetStream, TargetError>> + Send>>;
-
-/// Resolves a trusted, client-owned service to an application stream.
-pub trait TargetConnector: Send + Sync + 'static {
-    fn connect(&self, service: ClientService, context: TargetContext) -> TargetFuture;
-}
-
-struct TcpTargetConnector;
-
-impl TargetConnector for TcpTargetConnector {
-    fn connect(&self, service: ClientService, _context: TargetContext) -> TargetFuture {
-        Box::pin(async move {
-            TcpStream::connect((service.target.host(), service.target.port()))
-                .await
-                .map(|stream| Box::new(stream) as TargetStream)
-                .map_err(|_| TargetError::Refused)
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct ClientConfig {
-    /// `host:port` endpoint; DNS resolution is performed by Tokio on connect.
-    pub server_addr: String,
-    pub tls_server_name: String,
-    /// If absent, the Eggress system-root verifier is used.
-    pub ca_pem: Option<Vec<u8>>,
-    pub token: SecretToken,
-    pub services: Vec<ClientService>,
-}
-
-impl std::fmt::Debug for ClientConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClientConfig")
-            .field("server_addr", &self.server_addr)
-            .field("tls_server_name", &self.tls_server_name)
-            .field("ca_pem", &self.ca_pem.as_ref().map(|_| "[configured]"))
-            .field("token", &self.token)
-            .field("services", &self.services.len())
-            .finish()
-    }
-}
-
-/// Transport and identity selection for [`ClientBuilder`].
-pub enum ClientTransportProfile {
-    TcpTls,
-    #[cfg(feature = "quic")]
-    Quic,
-    #[cfg(feature = "websocket")]
-    WebSocket,
-}
-
-/// Typed composition surface for client transport, connector, and runtime policy.
-pub struct ClientBuilder {
-    config: ClientConfig,
-    connector: Arc<dyn TargetConnector>,
-    profile: ClientTransportProfile,
-    policy: crate::common::RuntimePolicy,
-    #[cfg(feature = "mtls")]
-    identity: Option<ClientIdentity>,
-    #[cfg(feature = "outbound-proxy")]
-    outbound_proxy: Option<String>,
-}
-
-impl ClientBuilder {
-    pub fn new(config: ClientConfig) -> Self {
-        Self {
-            config,
-            connector: Arc::new(TcpTargetConnector),
-            profile: ClientTransportProfile::TcpTls,
-            policy: crate::common::RuntimePolicy::default(),
-            #[cfg(feature = "mtls")]
-            identity: None,
-            #[cfg(feature = "outbound-proxy")]
-            outbound_proxy: None,
-        }
-    }
-
-    pub fn with_connector(mut self, connector: Arc<dyn TargetConnector>) -> Self {
-        self.connector = connector;
-        self
-    }
-
-    pub fn transport(mut self, profile: ClientTransportProfile) -> Self {
-        self.profile = profile;
-        self
-    }
-
-    pub fn runtime_policy(mut self, policy: crate::common::RuntimePolicy) -> Self {
-        self.policy = policy;
-        self
-    }
-
-    #[cfg(feature = "mtls")]
-    pub fn with_identity(mut self, identity: ClientIdentity) -> Self {
-        self.identity = Some(identity);
-        self
-    }
-
-    #[cfg(feature = "outbound-proxy")]
-    pub fn outbound_proxy(mut self, proxy_chain: impl Into<String>) -> Self {
-        self.outbound_proxy = Some(proxy_chain.into());
-        self
-    }
-
-    pub fn validate(&self) -> Result<(), TunnelError> {
-        validate_client_profile(
-            &self.config,
-            &self.profile,
-            #[cfg(feature = "mtls")]
-            self.identity.is_some(),
-            #[cfg(feature = "outbound-proxy")]
-            self.outbound_proxy.as_deref(),
-            &self.policy,
-        )
-    }
-
-    pub async fn start(self) -> Result<Client, TunnelError> {
-        self.validate()?;
-        Client::start_profile(
-            self.config,
-            self.connector,
-            self.profile,
-            #[cfg(feature = "mtls")]
-            self.identity,
-            #[cfg(feature = "outbound-proxy")]
-            self.outbound_proxy,
-            self.policy,
-        )
-        .await
-    }
 }
 
 pub struct Client {
@@ -512,7 +369,7 @@ impl Client {
     ) -> Result<Self, TunnelError> {
         Self::start_quic_profile(
             config,
-            Arc::new(TcpTargetConnector),
+            Arc::new(config::TcpTargetConnector),
             true,
             Default::default(),
         )
@@ -814,6 +671,7 @@ async fn reconnect_loop(
     counters: Counters,
     mut commands: mpsc::Receiver<ClientCommand>,
 ) {
+    let mut service_state = ServiceState::new(std::mem::take(&mut config.services));
     let mut delay = counters.policy.timeouts.reconnect_initial;
     'reconnect: loop {
         if cancel.is_cancelled() {
@@ -827,7 +685,7 @@ async fn reconnect_loop(
             "client connection attempt"
         );
         while let Ok(command) = commands.try_recv() {
-            apply_disconnected_command(&mut config.services, command);
+            apply_disconnected_command(&mut service_state, command);
         }
         let outcome = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -891,7 +749,7 @@ async fn reconnect_loop(
                                 cancel: &cancel,
                                 counters: &counters,
                                 reconnect_delay: &mut delay,
-                                services: &mut config.services,
+                                service_state: &mut service_state,
                                 commands: &mut commands,
                                 }) => result,
                             },
@@ -987,6 +845,7 @@ async fn quic_reconnect_loop(
 ) {
     use eggress_transport_quic::{QuicClient, QuicClientConfig};
 
+    let mut service_state = ServiceState::new(std::mem::take(&mut config.services));
     let Some((host, port)) = split_endpoint(&config.server_addr) else {
         return;
     };
@@ -1003,7 +862,7 @@ async fn quic_reconnect_loop(
             "QUIC client connection attempt"
         );
         while let Ok(command) = commands.try_recv() {
-            apply_disconnected_command(&mut config.services, command);
+            apply_disconnected_command(&mut service_state, command);
         }
         let quic_config = QuicClientConfig {
             server_name: config.tls_server_name.clone(),
@@ -1046,7 +905,7 @@ async fn quic_reconnect_loop(
                     cancel: &cancel,
                     counters: &counters,
                     reconnect_delay: &mut delay,
-                    services: &mut config.services,
+                    service_state: &mut service_state,
                     commands: &mut commands,
                 },
             )
@@ -1145,7 +1004,7 @@ struct SessionRun<'a> {
     cancel: &'a CancellationToken,
     counters: &'a Counters,
     reconnect_delay: &'a mut Duration,
-    services: &'a mut Vec<ClientService>,
+    service_state: &'a mut ServiceState,
     commands: &'a mut mpsc::Receiver<ClientCommand>,
 }
 
@@ -1157,7 +1016,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         cancel,
         counters,
         reconnect_delay,
-        services,
+        service_state,
         commands,
     } = context;
     handshake_write(
@@ -1195,7 +1054,8 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         "authenticated client Session established"
     );
 
-    for service in services.iter() {
+    service_state.clear_active();
+    for service in service_state.desired().iter() {
         let registration = RegisterService {
             service_id: service.id,
             name: service.name.clone(),
@@ -1222,12 +1082,14 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         }
     }
 
+    service_state.activate_initial();
     counters
         .connected
         .store(1, std::sync::atomic::Ordering::Relaxed);
-    counters
-        .services
-        .store(services.len(), std::sync::atomic::Ordering::Relaxed);
+    counters.services.store(
+        service_state.desired().len(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     counters
         .sessions
         .store(1, std::sync::atomic::Ordering::Relaxed);
@@ -1235,30 +1097,19 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     let _connected_guard = CounterGuard::new(counters.sessions.clone());
     tracing::info!(
         session_generation = generation,
-        registered_services = services.len(),
+        registered_services = service_state.desired().len(),
         "client Session ready"
     );
-    let mut active_services: HashMap<ServiceId, ClientService> =
-        services.iter().cloned().map(|s| (s.id, s)).collect();
-    let mut pending_registrations = HashMap::<
-        ServiceId,
-        (
-            ClientService,
-            u64,
-            Option<oneshot::Sender<Result<EffectiveBind, TunnelError>>>,
-        ),
-    >::new();
     let semaphore = Arc::new(Semaphore::new(counters.policy.limits.client_open_tasks));
     let (out_tx, mut out_rx) = mpsc::channel(counters.policy.limits.control_queue);
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut opens = JoinSet::new();
     let session_cancel = CancellationToken::new();
-    let mut heartbeat = tokio::time::interval_at(
+    let mut heartbeat_ticker = tokio::time::interval_at(
         tokio::time::Instant::now() + counters.policy.timeouts.heartbeat_interval,
         counters.policy.timeouts.heartbeat_interval,
     );
-    let mut heartbeat_nonce = 0u64;
-    let mut heartbeat_outstanding: Option<(u64, tokio::time::Instant)> = None;
+    let mut heartbeat = HeartbeatState::new();
     let mut registration_deadline: Option<tokio::time::Instant> = None;
     let mut registration_timed_out = false;
     loop {
@@ -1269,14 +1120,14 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                 let _ = timeout(Duration::from_millis(250), write_message(&mut writer, &drain)).await;
                 break;
             }
-            _ = heartbeat.tick() => {
-                if heartbeat_outstanding.is_some() {
+            _ = heartbeat_ticker.tick() => {
+                if heartbeat.has_outstanding() {
                     counters.record_heartbeat_missed();
                     tracing::debug!(session_generation = generation, "heartbeat response missed");
                 } else {
-                    heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
-                    match out_tx.try_send(Message::Ping(eggtunnel_proto::Ping { nonce: heartbeat_nonce })) {
-                        Ok(()) => heartbeat_outstanding = Some((heartbeat_nonce, tokio::time::Instant::now())),
+                    let nonce = heartbeat.next_nonce();
+                    match out_tx.try_send(Message::Ping(eggtunnel_proto::Ping { nonce })) {
+                        Ok(()) => heartbeat.mark_sent(nonce, tokio::time::Instant::now()),
                         Err(_) => counters.record_heartbeat_missed(),
                     }
                 }
@@ -1288,8 +1139,8 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     std::future::pending::<()>().await;
                 }
             }, if registration_deadline.is_some() => {
-                if let Some((_, _, reply)) = pending_registrations.values_mut().next()
-                    && let Some(reply) = reply.take()
+                if let Some(pending) = service_state.pending_mut()
+                    && let Some(reply) = pending.reply.take()
                 {
                     let _ = reply.send(Err(TunnelError::Timeout));
                 }
@@ -1300,7 +1151,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             incoming = read_message(&mut reader) => {
                 match incoming {
                     Ok(Message::Open(open)) => {
-                        let Some(service) = active_services.get(&open.service_id).cloned() else {
+                        let Some(service) = service_state.active().get(&open.service_id).cloned() else {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             counters.record_termination(crate::common::TerminationCategory::Authorization);
                             tracing::debug!(category = "unknown_service", service_id = open.service_id.0, "Open rejected");
@@ -1337,33 +1188,26 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     }
                     Ok(Message::Ping(ping)) => { let _ = out_tx.try_send(Message::Pong(eggtunnel_proto::Pong { nonce: ping.nonce })); }
                     Ok(Message::Pong(pong)) => {
-                        if let Some((nonce, sent_at)) = heartbeat_outstanding
-                            && nonce == pong.nonce
+                        if let Some(sent_at) = heartbeat.matching_pong(pong.nonce)
                         {
                             counters.record_heartbeat_pong(sent_at.into_std());
-                            heartbeat_outstanding = None;
                         }
                     }
                     Ok(Message::RegisterAck(ack)) => {
                         registration_deadline = None;
-                        let Some((service, ack_generation, reply)) = pending_registrations.remove(&ack.service_id) else {
-                            return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage));
-                        };
-                        if ack_generation != generation {
-                            if let Some(reply) = reply {
-                                let _ = reply.send(Err(TunnelError::Disconnected));
+                        let (service, reply) = match service_state.take_ack(ack.service_id, generation) {
+                            AckDisposition::Unexpected => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
+                            AckDisposition::Stale(reply) => { if let Some(reply) = reply { let _ = reply.send(Err(TunnelError::Disconnected)); } continue; }
+                            AckDisposition::Abandoned => {
+                                write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id })).await?;
+                                continue;
                             }
-                            continue;
-                        }
-                        if reply.as_ref().is_none_or(oneshot::Sender::is_closed) {
-                            write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id })).await?;
-                            continue;
-                        }
+                            AckDisposition::Commit(service, reply) => (service, reply),
+                        };
                         counters.binds.lock().unwrap_or_else(|p| p.into_inner()).push((session_id, service.id, ack.effective_bind.clone()));
-                        active_services.insert(service.id, service.clone());
-                        services.push(service.clone());
-                        counters.services.store(active_services.len(), std::sync::atomic::Ordering::Relaxed);
-                        counters.high_water_services.fetch_max(active_services.len(), std::sync::atomic::Ordering::Relaxed);
+                        service_state.commit(service.clone());
+                        counters.services.store(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
+                        counters.high_water_services.fetch_max(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
                         tracing::info!(service_id = service.id.0, service_name = service.name.as_str(), effective_address = %std::net::Ipv6Addr::from(ack.effective_bind.address), effective_port = ack.effective_bind.port, session_generation = generation, "Service registered");
                         if let Some(reply) = reply {
                             let _ = reply.send(Ok(ack.effective_bind));
@@ -1371,13 +1215,10 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     }
                     Ok(Message::Error(error)) => {
                         registration_deadline = None;
-                        let pending_id = pending_registrations.keys().next().copied();
-                        if let Some((_, _, reply)) = pending_id.and_then(|id| pending_registrations.remove(&id)) {
+                        if let Some(reply) = service_state.reject() {
                             let error = registration_error(error);
                             tracing::debug!(registration_error = ?error.termination_category(), session_generation = generation, "Service registration rejected");
-                            if let Some(reply) = reply {
-                                let _ = reply.send(Err(error));
-                            }
+                            if let Some(reply) = reply { let _ = reply.send(Err(error)); }
                         } else {
                             return Err(TunnelError::Authorization);
                         }
@@ -1399,18 +1240,15 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             let _ = reply.send(Err(TunnelError::Disconnected));
                             continue;
                         }
-                        let duplicate = services.iter().any(|existing| existing.id == service.id || existing.name == service.name)
-                            || pending_registrations.values().any(|(pending, _, _)| pending.id == service.id || pending.name == service.name);
-                        if duplicate {
-                            let _ = reply.send(Err(TunnelError::ServiceAlreadyExists));
-                            continue;
-                        }
-                        if !pending_registrations.is_empty() {
+                        if service_state.desired().len().saturating_add(usize::from(service_state.pending().is_some())) >= counters.policy.limits.services_per_session {
                             let _ = reply.send(Err(TunnelError::ResourceExhausted));
                             continue;
                         }
-                        if services.len().saturating_add(pending_registrations.len()) >= counters.policy.limits.services_per_session {
-                            let _ = reply.send(Err(TunnelError::ResourceExhausted));
+                        if reply.is_closed() {
+                            continue;
+                        }
+                        if let Err((error, reply)) = service_state.begin(service.clone(), command_generation, reply) {
+                            let _ = reply.send(Err(error));
                             continue;
                         }
                         let registration = RegisterService {
@@ -1419,9 +1257,6 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             requested_bind: service.requested_bind.clone(),
                             target: service.target.clone(),
                         };
-                        if reply.is_closed() {
-                            continue;
-                        }
                         match timeout(
                             counters.policy.timeouts.handshake,
                             write_message(&mut writer, &Message::RegisterService(registration)),
@@ -1431,7 +1266,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => return Err(error.into()),
                             Err(_) => {
-                                let _ = reply.send(Err(TunnelError::Timeout));
+                                if let Some(reply) = service_state.pending_mut().and_then(|pending| pending.reply.take()) { let _ = reply.send(Err(TunnelError::Timeout)); }
                                 registration_timed_out = true;
                                 break;
                             }
@@ -1439,18 +1274,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         registration_deadline = Some(
                             tokio::time::Instant::now() + counters.policy.timeouts.handshake,
                         );
-                        pending_registrations.insert(service.id, (service, command_generation, Some(reply)));
                     }
                     ClientCommand::Unregister { id, reply } => {
-                        if let Some((_, _, register_reply)) = pending_registrations.get_mut(&id)
-                            && let Some(register_reply) = register_reply.take()
-                        {
-                            let _ = register_reply.send(Err(TunnelError::Cancelled));
-                        }
-                        let was_present = active_services.remove(&id).is_some();
+                        let was_present = service_state.unregister(id);
                         if was_present {
-                            services.retain(|service| service.id != id);
-                            counters.services.store(active_services.len(), std::sync::atomic::Ordering::Relaxed);
+                            counters.services.store(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
                             counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, service_id, _)| *service_id != id);
                             tracing::info!(service_id = id.0, session_generation = generation, "Service unregistered");
                         }
@@ -1480,14 +1308,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     } else {
         TunnelError::Disconnected
     };
-    for (_, (_, _, reply)) in pending_registrations {
-        if let Some(reply) = reply {
-            let _ = reply.send(Err(match pending_error {
-                TunnelError::Cancelled => TunnelError::Cancelled,
-                _ => TunnelError::Disconnected,
-            }));
-        }
-    }
+    service_state.finish_pending(match pending_error {
+        TunnelError::Cancelled => TunnelError::Cancelled,
+        _ => TunnelError::Disconnected,
+    });
+    service_state.clear_active();
     if registration_timed_out {
         Err(TunnelError::Timeout)
     } else {
@@ -1495,13 +1320,13 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     }
 }
 
-fn apply_disconnected_command(services: &mut Vec<ClientService>, command: ClientCommand) {
+fn apply_disconnected_command(services: &mut ServiceState, command: ClientCommand) {
     match command {
         ClientCommand::Register { reply, .. } => {
             let _ = reply.send(Err(TunnelError::Disconnected));
         }
         ClientCommand::Unregister { id, reply } => {
-            services.retain(|service| service.id != id);
+            services.unregister(id);
             tracing::info!(
                 service_id = id.0,
                 "desired Service unregistered while disconnected"
@@ -1540,94 +1365,6 @@ async fn handshake_write(
         .map_err(Into::into)
 }
 
-struct OpenContext {
-    transport: ClientDataTransport,
-    connector: Arc<dyn TargetConnector>,
-    session_id: eggtunnel_proto::SessionId,
-    cancel: CancellationToken,
-    out: mpsc::Sender<Message>,
-    counters: Counters,
-}
-
-async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
-    let OpenContext {
-        transport,
-        connector,
-        session_id,
-        cancel,
-        out,
-        counters,
-    } = context;
-    let result = async {
-        let target_context = TargetContext {
-            session_id,
-            connection_id: open.connection_id,
-            cancellation: cancel.clone(),
-        };
-        let target = tokio::select! {
-            _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(counters.policy.timeouts.connect, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
-        };
-        let mut data = match transport {
-            ClientDataTransport::TcpTls { server_addr, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
-                let stream = tokio::select! {
-                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = connect_server(&server_addr, counters.policy.timeouts.connect, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
-                };
-                #[allow(unused_mut)]
-                let mut stream = tokio::select! {
-                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = timeout(counters.policy.timeouts.handshake, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
-                };
-                #[cfg(feature = "websocket")]
-                if websocket {
-                    let url = format!("wss://{server_addr}");
-                    let ws_client = eggress_protocol_websocket::WebSocketTunnelClient::new(1024 * 1024);
-                    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-                        .max_message_size(Some(1024 * 1024))
-                        .max_frame_size(Some(1024 * 1024));
-                    stream = tokio::select! {
-                        _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                        result = timeout(counters.policy.timeouts.handshake, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
-                    };
-                }
-                #[cfg(not(feature = "websocket"))]
-                let _ = websocket;
-                stream
-            }
-            #[cfg(feature = "quic")]
-            ClientDataTransport::Quic(connection) => {
-                tokio::select! {
-                    _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = timeout(counters.policy.timeouts.connect, connection.open_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
-                }
-            }
-        };
-        write_boxed(&mut data, &Message::DataHello(DataHello { session_id, service_id: service.id, connection_id: open.connection_id })).await?;
-        match relay_with_options(target, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
-            Ok(report) => {
-                counters.bytes_upstream.fetch_add(report.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
-                counters.bytes_downstream.fetch_add(report.bytes_downstream, std::sync::atomic::Ordering::Relaxed);
-            }
-            Err(failure) => {
-                counters.bytes_upstream.fetch_add(failure.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
-                counters.bytes_downstream.fetch_add(failure.bytes_downstream, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-        Ok::<(), TunnelError>(())
-    }.await;
-    if let Err(error) = result {
-        counters.record_termination(error.termination_category());
-        tracing::debug!(service_id = service.id.0, termination = ?error.termination_category(), "client data Open ended");
-        if !cancel.is_cancelled() {
-            let _ = out.try_send(Message::OpenReject(OpenReject {
-                connection_id: open.connection_id,
-                code: 1,
-            }));
-        }
-    }
-}
-
 struct CounterGuard(Arc<std::sync::atomic::AtomicUsize>);
 impl CounterGuard {
     fn new(value: Arc<std::sync::atomic::AtomicUsize>) -> Self {
@@ -1660,471 +1397,5 @@ impl Drop for CounterGuard {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use eggtunnel_proto::{RequestedBind, ServiceName, TcpTarget};
-
-    fn config(server_addr: &str) -> ClientConfig {
-        ClientConfig {
-            server_addr: server_addr.to_owned(),
-            tls_server_name: "localhost".to_owned(),
-            ca_pem: None,
-            token: SecretToken::new(b"test-token".to_vec()).unwrap(),
-            services: vec![ClientService::new(
-                ServiceId(1),
-                ServiceName::new("one").unwrap(),
-                RequestedBind::Loopback { port: 0 },
-                TcpTarget::new("127.0.0.1", 80).unwrap(),
-            )],
-        }
-    }
-
-    #[test]
-    fn client_validation_rejects_invalid_endpoint_without_server_feature() {
-        assert!(validate_config(&config("missing-port"), &Default::default()).is_err());
-        assert!(validate_config(&config("localhost:0"), &Default::default()).is_err());
-        assert!(validate_config(&config("localhost:443"), &Default::default()).is_ok());
-    }
-
-    #[test]
-    fn client_validation_rejects_duplicate_service_identity() {
-        let mut config = config("localhost:443");
-        config.services.push(config.services[0].clone());
-        assert!(validate_config(&config, &Default::default()).is_err());
-    }
-
-    #[test]
-    fn client_config_debug_redacts_bearer_token_for_tracing_callers() {
-        let marker = "client-token-must-not-appear";
-        let mut config = config("localhost:443");
-        config.token = SecretToken::new(marker.as_bytes().to_vec()).unwrap();
-        let formatted = format!("{config:?}");
-        assert!(!formatted.contains(marker));
-        assert!(formatted.contains("REDACTED"));
-    }
-
-    fn service(id: u64, name: &str, target_port: u16) -> ClientService {
-        ClientService::new(
-            ServiceId(id),
-            ServiceName::new(name).unwrap(),
-            RequestedBind::Loopback { port: 0 },
-            TcpTarget::new("127.0.0.1", target_port).unwrap(),
-        )
-    }
-
-    async fn fake_connected_client() -> (
-        ClientHandle,
-        Counters,
-        JoinHandle<Result<(), TunnelError>>,
-        BoxStream,
-    ) {
-        fake_connected_client_with_policy(crate::RuntimePolicy::default()).await
-    }
-
-    async fn fake_connected_client_with_policy(
-        policy: crate::RuntimePolicy,
-    ) -> (
-        ClientHandle,
-        Counters,
-        JoinHandle<Result<(), TunnelError>>,
-        BoxStream,
-    ) {
-        let token = SecretToken::new(b"dynamic-registration-test".to_vec()).unwrap();
-        let initial_service = service(1, "initial", 80);
-        let counters = Counters::with_policy(policy);
-        let cancel = CancellationToken::new();
-        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
-        let (commands, command_rx) = mpsc::channel(32);
-        let handle = ClientHandle {
-            cancel: cancel.clone(),
-            counters: counters.clone(),
-            commands,
-            #[cfg(feature = "quic")]
-            quic_client: Arc::new(std::sync::Mutex::new(None)),
-        };
-        let task_counters = counters.clone();
-        let task_cancel = cancel.clone();
-        let task_token = token.clone();
-        let task = tokio::spawn(async move {
-            let mut services = vec![initial_service];
-            let mut command_rx = command_rx;
-            let mut reconnect_delay = Duration::from_millis(500);
-            run_session(
-                Box::new(client_io),
-                SessionRun {
-                    token: &task_token,
-                    transport: ClientDataTransport::TcpTls {
-                        server_addr: "localhost:443".into(),
-                        server_name: "localhost".into(),
-                        tls: build_tls_config(None).unwrap(),
-                        websocket: false,
-                        #[cfg(feature = "outbound-proxy")]
-                        outbound: None,
-                    },
-                    connector: Arc::new(TcpTargetConnector),
-                    cancel: &task_cancel,
-                    counters: &task_counters,
-                    reconnect_delay: &mut reconnect_delay,
-                    services: &mut services,
-                    commands: &mut command_rx,
-                },
-            )
-            .await
-        });
-        let mut peer: BoxStream = Box::new(server_io);
-        assert!(matches!(
-            read_boxed(&mut peer).await.unwrap(),
-            Message::ClientHello(_)
-        ));
-        write_boxed(
-            &mut peer,
-            &Message::ServerHello(ServerHello {
-                version: ProtocolVersion::CURRENT,
-                capabilities: Capabilities::default(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            read_boxed(&mut peer).await.unwrap(),
-            Message::Auth(_)
-        ));
-        write_boxed(
-            &mut peer,
-            &Message::AuthOk(AuthOk {
-                session_id: eggtunnel_proto::SessionId::generate().unwrap(),
-            }),
-        )
-        .await
-        .unwrap();
-        let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
-            panic!("expected initial registration")
-        };
-        write_boxed(
-            &mut peer,
-            &Message::RegisterAck(eggtunnel_proto::RegisterAck {
-                service_id: initial.service_id,
-                effective_bind: EffectiveBind {
-                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
-                    port: 31001,
-                },
-            }),
-        )
-        .await
-        .unwrap();
-        (handle, counters, task, peer)
-    }
-
-    #[tokio::test]
-    async fn dynamic_registration_returns_disconnected_if_ack_is_lost() {
-        let (handle, _, task, mut peer) = fake_connected_client().await;
-
-        let register_handle = handle.clone();
-        let register = tokio::spawn(async move {
-            register_handle
-                .register_service(service(2, "dynamic", 81))
-                .await
-        });
-        let dynamic = tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(dynamic, Message::RegisterService(_)));
-        drop(peer);
-        assert!(matches!(
-            register.await.unwrap(),
-            Err(TunnelError::Disconnected)
-        ));
-        assert!(task.await.unwrap().is_err());
-    }
-
-    #[tokio::test]
-    async fn cancelled_registration_is_unregistered_and_never_becomes_desired_state() {
-        let (handle, counters, task, mut peer) = fake_connected_client().await;
-        let register_handle = handle.clone();
-        let register = tokio::spawn(async move {
-            register_handle
-                .register_service(service(2, "cancelled", 81))
-                .await
-        });
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
-                .await
-                .unwrap()
-                .unwrap(),
-            Message::RegisterService(_)
-        ));
-        register.abort();
-        write_boxed(
-            &mut peer,
-            &Message::RegisterAck(eggtunnel_proto::RegisterAck {
-                service_id: ServiceId(2),
-                effective_bind: EffectiveBind {
-                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
-                    port: 31002,
-                },
-            }),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
-                .await
-                .unwrap()
-                .unwrap(),
-            Message::UnregisterService(eggtunnel_proto::UnregisterService {
-                service_id: ServiceId(2)
-            })
-        ));
-        assert_eq!(counters.snapshot().registered_services, 1);
-        assert!(
-            counters
-                .snapshot()
-                .effective_binds
-                .iter()
-                .all(|(_, service_id, _)| *service_id != ServiceId(2))
-        );
-        drop(peer);
-        assert!(task.await.unwrap().is_err());
-    }
-
-    #[tokio::test]
-    async fn command_from_an_older_session_generation_cannot_register() {
-        let (handle, counters, task, mut peer) = fake_connected_client().await;
-        let (reply, response) = oneshot::channel();
-        let generation = counters
-            .session_generation
-            .load(std::sync::atomic::Ordering::Relaxed);
-        handle
-            .commands
-            .send(ClientCommand::Register {
-                service: service(2, "stale-generation", 82),
-                generation: generation.saturating_sub(1),
-                reply,
-            })
-            .await
-            .unwrap();
-        assert!(matches!(
-            response.await.unwrap(),
-            Err(TunnelError::Disconnected)
-        ));
-        assert_eq!(counters.snapshot().registered_services, 1);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), read_boxed(&mut peer))
-                .await
-                .is_err()
-        );
-        handle.shutdown();
-        assert!(task.await.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn dynamic_registration_ack_timeout_is_typed_and_closes_session() {
-        let mut policy = crate::RuntimePolicy::default();
-        policy.timeouts.handshake = Duration::from_millis(100);
-        let (handle, _, task, mut peer) = fake_connected_client_with_policy(policy).await;
-        let register_handle = handle.clone();
-        let register = tokio::spawn(async move {
-            register_handle
-                .register_service(service(2, "no-ack", 82))
-                .await
-        });
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), read_boxed(&mut peer))
-                .await
-                .unwrap()
-                .unwrap(),
-            Message::RegisterService(_)
-        ));
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(2), register)
-                .await
-                .unwrap()
-                .unwrap(),
-            Err(TunnelError::Timeout)
-        ));
-        assert!(matches!(task.await.unwrap(), Err(TunnelError::Timeout)));
-    }
-
-    #[tokio::test]
-    async fn heartbeat_tracks_rtt_misses_and_recovery_with_one_probe() {
-        let mut policy = crate::RuntimePolicy::default();
-        policy.timeouts.control_idle = Duration::from_secs(2);
-        policy.timeouts.heartbeat_interval = Duration::from_millis(50);
-        let (handle, counters, task, mut peer) = fake_connected_client_with_policy(policy).await;
-        let Message::Ping(first) =
-            tokio::time::timeout(Duration::from_secs(1), read_boxed(&mut peer))
-                .await
-                .unwrap()
-                .unwrap()
-        else {
-            panic!("expected heartbeat Ping")
-        };
-        write_boxed(
-            &mut peer,
-            &Message::Pong(eggtunnel_proto::Pong { nonce: first.nonce }),
-        )
-        .await
-        .unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if counters.snapshot().heartbeat.latest_rtt_ms.is_some() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let Message::Ping(unanswered) = read_boxed(&mut peer).await.unwrap() else {
-            panic!("expected next heartbeat Ping")
-        };
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if counters.snapshot().heartbeat.missed_heartbeats > 0 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        write_boxed(
-            &mut peer,
-            &Message::Pong(eggtunnel_proto::Pong {
-                nonce: unanswered.nonce,
-            }),
-        )
-        .await
-        .unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if counters.snapshot().heartbeat.missed_heartbeats == 0 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(counters.snapshot().heartbeat.last_pong_age_ms.is_some());
-        handle.shutdown();
-        drop(peer);
-        let _ = task.await;
-    }
-
-    #[test]
-    fn client_builder_applies_custom_service_ceiling() {
-        let mut config = config("localhost:443");
-        config.services.push(ClientService::new(
-            ServiceId(2),
-            ServiceName::new("two").unwrap(),
-            RequestedBind::Loopback { port: 0 },
-            TcpTarget::new("127.0.0.1", 81).unwrap(),
-        ));
-        let mut policy = crate::common::RuntimePolicy::default();
-        policy.limits.services_per_session = 1;
-        let builder = ClientBuilder::new(config).runtime_policy(policy);
-        assert!(builder.validate().is_err());
-    }
-
-    #[test]
-    fn client_builder_accepts_tcp_tls_and_default_policy() {
-        assert!(
-            ClientBuilder::new(config("localhost:443"))
-                .validate()
-                .is_ok()
-        );
-        let mut dynamic_only = config("localhost:443");
-        dynamic_only.services.clear();
-        assert!(ClientBuilder::new(dynamic_only).validate().is_ok());
-        let mut custom_ca = config("localhost:443");
-        custom_ca.ca_pem = Some(b"custom CA".to_vec());
-        assert!(ClientBuilder::new(custom_ca).validate().is_ok());
-    }
-
-    #[cfg(feature = "mtls")]
-    #[test]
-    fn client_builder_accepts_tcp_mtls() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
-        assert!(builder.validate().is_ok());
-    }
-
-    #[cfg(feature = "quic")]
-    #[test]
-    fn client_profile_validator_rejects_quic_custom_ca() {
-        let mut config = config("localhost:443");
-        config.ca_pem = Some(b"custom CA".to_vec());
-        let builder = ClientBuilder::new(config).transport(ClientTransportProfile::Quic);
-        assert!(builder.validate().is_err());
-    }
-
-    #[cfg(feature = "quic")]
-    #[test]
-    fn client_profile_validator_accepts_quic_defaults() {
-        assert!(
-            ClientBuilder::new(config("localhost:443"))
-                .transport(ClientTransportProfile::Quic)
-                .validate()
-                .is_ok()
-        );
-    }
-
-    #[cfg(feature = "websocket")]
-    #[test]
-    fn client_profile_validator_accepts_websocket_defaults() {
-        assert!(
-            ClientBuilder::new(config("localhost:443"))
-                .transport(ClientTransportProfile::WebSocket)
-                .validate()
-                .is_ok()
-        );
-    }
-
-    #[cfg(all(feature = "quic", feature = "outbound-proxy"))]
-    #[test]
-    fn client_profile_validator_rejects_quic_proxy() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .transport(ClientTransportProfile::Quic)
-            .outbound_proxy("socks5://localhost:1080");
-        assert!(builder.validate().is_err());
-    }
-
-    #[cfg(all(feature = "quic", feature = "mtls"))]
-    #[test]
-    fn client_profile_validator_rejects_quic_mtls() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .transport(ClientTransportProfile::Quic)
-            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
-        assert!(builder.validate().is_err());
-    }
-
-    #[cfg(all(feature = "websocket", feature = "outbound-proxy"))]
-    #[test]
-    fn client_profile_validator_accepts_websocket_proxy() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .transport(ClientTransportProfile::WebSocket)
-            .outbound_proxy("socks5://localhost:1080");
-        assert!(builder.validate().is_ok());
-    }
-
-    #[cfg(all(feature = "websocket", feature = "mtls"))]
-    #[test]
-    fn client_profile_validator_rejects_websocket_mtls() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .transport(ClientTransportProfile::WebSocket)
-            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
-        assert!(builder.validate().is_err());
-    }
-
-    #[cfg(all(feature = "mtls", feature = "outbound-proxy"))]
-    #[test]
-    fn client_profile_validator_rejects_mtls_proxy() {
-        let builder = ClientBuilder::new(config("localhost:443"))
-            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()))
-            .outbound_proxy("socks5://localhost:1080");
-        assert!(builder.validate().is_err());
-    }
-}
+#[path = "client/tests.rs"]
+mod tests;

@@ -1,12 +1,18 @@
 # Reverse-session client — deep dive
 
 > Parent: [Architecture Overview](overview.md) §3. This file is the
-> review-oriented deep dive for `crates/eggtunnel/src/client.rs`
-> (1181 lines). For the server half see `server.md`; for framing see
+> review-oriented deep dive for the client runtime. Public configuration and
+> target connector contracts live in `crates/eggtunnel/src/client/config.rs`,
+> dynamic Service lifecycle state lives in `client/service_state.rs`,
+> heartbeat state in `client/heartbeat.rs`, and the Open/data path in
+> `client/open.rs`.
+> Client tests are in `client/tests.rs`. For the server half see `server.md`; for framing see
 > `proto-wire-protocol.md`; for shared types see `common-core.md`;
 > for transports see `transports-wire-io.md`.
 
-Scope: the private-side, outbound-only initiator. The client owns one
+Scope: the private-side, outbound-only initiator. The private implementation
+separates public composition/configuration, reconnect/session orchestration,
+session-local Service lifecycle state, and Open/data-path handling. The client owns one
 authenticated control stream per session, registers local services, and
 dials one data connection per server `Open`. It never listens. The server
 owns listeners and picks effective binds; the client owns local targets

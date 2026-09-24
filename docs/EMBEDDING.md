@@ -66,6 +66,9 @@ from the current Session and reconnect state and is safe to repeat. Calls made
 while disconnected return `TunnelError::Disconnected` for registration;
 unregistration can queue through the bounded command channel while the client
 is reconnecting.
+The existing wire `Error` has no ServiceId, so the client permits at most one
+dynamic registration acknowledgement in flight per Session. This bound is
+enforced by the private Service lifecycle state owner without a wire change.
 
 Snapshots expose a bounded heartbeat view: current Session generation, age of
 the last matching Pong, latest RTT in milliseconds, and consecutive missed

@@ -29,13 +29,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M010 ready | M001-M009 and C001 are closed. M010 is the dependency-ready client-runtime modularization handoff. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M010 closing | M001-M009 and C001 are closed. M010 implementation is landed locally; hosted qualification and closure evidence remain. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M010 client runtime modularization/state-machine hardening | ready | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | M009 strictly closed; execute next. |
+| Reverse session | M010 client runtime modularization/state-machine hardening | closing | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | Local implementation and qualification complete; hosted exact-head CI required before strict closure. |
 | Reverse session | M011 sustained robustness/performance qualification | blocked | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | Hard dependency: M010 strict closure. |
 | Reverse session | M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | Hard dependency: M011 strict closure; irreversible publication also requires explicit owner authorization. |
 
