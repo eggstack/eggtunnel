@@ -125,7 +125,7 @@ cloneable `ClientHandle`; the background task owns config, connector,
 cancel token, counters, and command channel.
 
 `validate_outbound_proxy` (`client.rs:471-473`) is re-exported for CLI
-`check` (`lib.rs:18-19`).
+`check` (`lib.rs:20-21`).
 
 ### 2.3 `Client` / `ClientHandle`
 
@@ -189,7 +189,7 @@ outbound queue at `client.rs:1110`).
 
 `docs/EMBEDDING.md:25-31` + `fixtures/embedder`: direct in-process
 connectors skip loopback TCP entirely (no socket). The `DuplexEchoConnector`
-test double (`server.rs:1434-1451`) is the canonical example: refuses
+test double (`server_tests.rs:191-210`) is the canonical example: refuses
 unknown service names, otherwise returns a `duplex` echo pair.
 
 ---

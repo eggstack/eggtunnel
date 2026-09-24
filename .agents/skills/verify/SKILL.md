@@ -21,7 +21,7 @@ cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo test --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo doc --locked --workspace --all-features --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 cargo check --locked --manifest-path fixtures/embedder/Cargo.toml
 cargo audit
 cargo deny check licenses
@@ -33,7 +33,13 @@ cargo deny check licenses
   separate workspace with its own lockfile. Always use
   `--manifest-path fixtures/embedder/Cargo.toml` from the repo root.
 - Focused test run: `cargo test --locked -p eggtunnel --all-features <filter>`
-  (most tests are inline `#[tokio::test]` in `crates/eggtunnel/src/server.rs`).
+  (tests live in `crates/eggtunnel/src/server_tests.rs` +
+  `server_tests/{tcp,mtls,quic,websocket,proxy}.rs` and `client/` modules,
+  not inline in `server.rs`).
 - Do not skip `--all-features`: default features hide the
   `quic`/`websocket`/`mtls`/`outbound-proxy` code paths.
+- Beyond the gate: CI also runs 7 `--no-default-features` feature-slice
+  combos, an MSRV `1.89` check, and a minimal-dependencies check
+  (`client,tls` must not pull quic/websocket/outbound deps) — see
+  `.github/workflows/ci.yml`. Keep feature gates additive.
 - Markdown/docs-only changes need no gate run; say so instead of running them.

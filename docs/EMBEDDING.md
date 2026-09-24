@@ -6,6 +6,8 @@ calling application and does not create a runtime or install a tracing
 subscriber.
 
 ```toml
+# Tracks the published crates.io line (0.1.0); see API.md. Bump to "0.2" only
+# after the owner-authorized 0.2.0 publication.
 eggtunnel = { version = "0.1", default-features = false, features = ["client", "tls"] }
 ```
 

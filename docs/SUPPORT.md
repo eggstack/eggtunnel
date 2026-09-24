@@ -47,5 +47,6 @@ optional transport profiles.
 
 The release workflow produces archives, SHA-256 manifests, and build
 attestations for the four supported targets. Rust crates `eggtunnel-proto`
-and `eggtunnel` are published at `0.1.0`; downstream registry consumption is
+and `eggtunnel` are published at `0.1.0` (workspace candidate `0.2.0`, see
+[distribution](DISTRIBUTION.md)); downstream registry consumption is
 qualified with a registry-dependent consumer build.

@@ -92,10 +92,10 @@ pub(crate) fn expose(&self) -> &[u8] {
 
 | Side | Use site | Behavior |
 |---|---|---|
-| Client | `crates/eggtunnel/src/client.rs:905`: `Auth::new(token.expose().to_vec())?` | Copies the secret into a wire `Auth` message once per session handshake, inside the already-established verified TLS stream. The `Auth` wire type itself has redacted `Debug` (proto layer). |
-| Server | `crates/eggtunnel/src/server.rs:917`: `verify_token(&token, auth.token())` | Never serializes or logs the expected token; compares in constant time (§6.2). On mismatch: records per-source auth failure, drops handshake guards, sleeps 100 ms, bumps `rejected`, sends generic `Error{code:4, "authentication failed"}`, returns `TunnelError::Authentication` (`crates/eggtunnel/src/server.rs:917-931`). No Session is created and no service is registered before this check passes (`docs/SECURITY.md:5-6`). |
+| Client | `crates/eggtunnel/src/client.rs:1046`: `Auth::new(token.expose().to_vec())?` | Copies the secret into a wire `Auth` message once per session handshake, inside the already-established verified TLS stream. The `Auth` wire type itself has redacted `Debug` (proto layer). |
+| Server | `crates/eggtunnel/src/server.rs:1078`: `verify_token(&token, auth.token())` | Never serializes or logs the expected token; compares in constant time (§6.2). On mismatch: records per-source auth failure, drops handshake guards, sleeps 100 ms, bumps `rejected`, sends generic `Error{code:4, "authentication failed"}`, returns `TunnelError::Authentication` (`crates/eggtunnel/src/server.rs:1078-1093`; non-`Auth` message where `Auth` is expected returns `Authentication` at `:1075-1076`). No Session is created and no service is registered before this check passes (`docs/SECURITY.md:5-6`). |
 | Config plumbing | `ServerConfig.token` (`crates/eggtunnel/src/server.rs:59`), `ClientConfig` token, CLI `load_token` (`crates/eggtunnel-cli/src/main.rs:79-82`) | Both configs own a `SecretToken`; construction fails early on empty/oversize input. |
-| Tests | e.g. `crates/eggtunnel/src/server.rs:1464`, `crates/eggtunnel/src/server.rs:1480` | `SecretToken::new(b"...".to_vec()).unwrap()` per test; short literal tokens are fine because the lower bound is 1 byte. |
+| Tests | e.g. `crates/eggtunnel/src/server_tests.rs:47-57` | `SecretToken::new(b"...".to_vec()).unwrap()` per test harness; short literal tokens are fine because the lower bound is 1 byte. |
 
 ---
 
@@ -141,16 +141,16 @@ pub enum RequestedBind {
 
 The difference is exactly one field: `ServiceSpec` has **no `target`**.
 
-- The client registers with a full `RegisterService { service_id, name, requested_bind, target }` built from `ClientService` at `crates/eggtunnel/src/client.rs:912-918`, and consumes `service.target` locally when an `Open` arrives via `TcpTargetConnector::connect` at `crates/eggtunnel/src/client.rs:75-80` (`TcpStream::connect((service.target.host(), service.target.port()))`), or via an embedder-supplied `TargetConnector`.
-- The server reads only `register.service_id`, `register.name`, and `register.requested_bind` at `crates/eggtunnel/src/server.rs:983-1015`. The code comment at `crates/eggtunnel/src/server.rs:1169` is explicit: "The target descriptor is client-owned. The server uses it only as bounded registration metadata." It never dials it, never binds from it, and never echoes it back (the ack carries only `RegisterAck { service_id, effective_bind }` at `crates/eggtunnel/src/server.rs:1015`).
+- The client registers with a full `RegisterService { service_id, name, requested_bind, target }` built from `ClientService` at `crates/eggtunnel/src/client.rs:1064-1070`, and consumes `service.target` locally when an `Open` arrives via `TcpTargetConnector::connect` at `crates/eggtunnel/src/client/config.rs:32-43` (`TcpStream::connect((service.target.host(), service.target.port()))`), or via an embedder-supplied `TargetConnector`.
+- The server reads only `register.service_id`, `register.name`, and `register.requested_bind` at `crates/eggtunnel/src/server.rs:1154-1189` (registration arm at `:1154`). The code comment at `crates/eggtunnel/src/server.rs:1169` is explicit: "The target descriptor is client-owned. The server uses it only as bounded registration metadata." It never dials it, never binds from it, and never echoes it back (the ack carries only `RegisterAck { service_id, effective_bind }` at `crates/eggtunnel/src/server.rs:1189`).
 - This is the `docs/SECURITY.md:11-12` property: "The server ignores the client Target as authority; only the client uses its configured local target after a valid Open."
 
 ### 3.3 Where each is constructed / consumed
 
 | Type | Constructed | Consumed |
 |---|---|---|
-| `ClientService` | CLI `client_services()` (`crates/eggtunnel-cli/src/main.rs:85-90`); `ClientService::new` (`crates/eggtunnel/src/common.rs:60`); ~20 test call sites in `server.rs` tests (e.g. `crates/eggtunnel/src/server.rs:1480`) | Client registration loop `crates/eggtunnel/src/client.rs:912-931`; `TargetConnector::connect(service.clone(), ctx)` at `crates/eggtunnel/src/client.rs:1091`; `active_services: HashMap<ServiceId, ClientService>` at `crates/eggtunnel/src/client.rs:944-945` |
-| `ServiceSpec` | `ServiceSpec::new` (`crates/eggtunnel/src/common.rs:127`); re-exported at `crates/eggtunnel/src/lib.rs:27-30` | **No in-tree consumer.** A repo-wide search finds only the definition, the `lib.rs` re-export, and mentions in `architecture/overview.md` and plans. The live server path consumes the wire `RegisterService` message directly (`crates/eggtunnel/src/server.rs:983`), not `ServiceSpec`. Treat `ServiceSpec` as public embedder-facing vocabulary (the "server view" of a service for policy/registry APIs) rather than a load-bearing runtime type today. |
+| `ClientService` | CLI `client_services()` (`crates/eggtunnel-cli/src/main.rs:85-100`); `ClientService::new` (`crates/eggtunnel/src/common.rs:60`); test call sites in `server_tests/` (e.g. `crates/eggtunnel/src/server_tests.rs:47-57`) | Client registration loop `crates/eggtunnel/src/client.rs:1064-1091`; `TargetConnector::connect(service.clone(), ctx)` in `crates/eggtunnel/src/client/open.rs:12-30`; desired/active lifecycle in `ServiceState` (`crates/eggtunnel/src/client/service_state.rs:47`, `activate_initial`) |
+| `ServiceSpec` | `ServiceSpec::new` (`crates/eggtunnel/src/common.rs:127`); re-exported at `crates/eggtunnel/src/lib.rs:27-30` | **No in-tree consumer.** A repo-wide search finds only the definition, the `lib.rs` re-export, and mentions in `architecture/overview.md` and plans. The live server path consumes the wire `RegisterService` message directly (`crates/eggtunnel/src/server.rs:1154`), not `ServiceSpec`. Treat `ServiceSpec` as public embedder-facing vocabulary (the "server view" of a service for policy/registry APIs) rather than a load-bearing runtime type today. |
 
 Review note: if a future server refactor starts accepting `ServiceSpec` from embedders, the conversion from `RegisterService` must drop `target` explicitly at the boundary and must not let an embedder-supplied `requested_bind` bypass `bind_to_socket` (§4). The current code is safe because the only `requested_bind → socket` path goes through `bind_to_socket`.
 
@@ -286,10 +286,10 @@ Immutable finite ceilings for the caller-selected runtime profile (`RuntimePolic
 | `last_termination` | `Option<TerminationCategory>` | Most recent termination cause. **Last-write-wins** — overwritten by every `record_termination` call. Starts `None` (via `Counters::default`). |
 | `heartbeat` | `HeartbeatSnapshot` | Bounded current-session heartbeat health (`crates/eggtunnel/src/common.rs:164-169`): `session_generation`, `last_pong_age_ms`, `latest_rtt_ms`, `missed_heartbeats`. Reset by `begin_session` on each new generation; see §5.5. |
 | `resource_limits` | `ResourceLimits` | Echoes the selected `RuntimePolicy` limits (`crates/eggtunnel/src/common.rs:377`), not necessarily the default profile (see §5.1). |
-| `reconnects` | `u64` | Client reconnect-loop iterations (`crates/eggtunnel/src/client.rs:677`, `crates/eggtunnel/src/client.rs:830`). |
-| `rejected_connections` | `u64` | Every refused registration / saturated admission / failed auth (`rejected.fetch_add` at ~10 server sites, e.g. `crates/eggtunnel/src/server.rs:986`, `crates/eggtunnel/src/server.rs:999`, `crates/eggtunnel/src/server.rs:1164`). |
-| `bytes_upstream` / `bytes_downstream` | `u64` | Relay byte totals, accumulated from per-connection reports on both sides (`crates/eggtunnel/src/server.rs:1192-1197`, `crates/eggtunnel/src/client.rs:1131-1136`). Monotonic; wrap only at u64 overflow. |
-| `effective_binds` | `Vec<(SessionId, ServiceId, EffectiveBind)>` | Currently bound listeners with server-chosen addresses. Pushed on successful bind (`crates/eggtunnel/src/server.rs:1006`; client echoes acks at `crates/eggtunnel/src/client.rs:922-926`), removed on unregister (`crates/eggtunnel/src/server.rs:1022`). The CLI prints newly observed entries every 250 ms. |
+| `reconnects` | `u64` | Client reconnect-loop iterations (`reconnects.fetch_add` in `reconnect_loop` at `crates/eggtunnel/src/client.rs:792-794` and `record_quic_reconnect` at `crates/eggtunnel/src/client.rs:951-953`). |
+| `rejected_connections` | `u64` | Every refused registration / saturated admission / failed auth (`rejected.fetch_add` at ~10 server sites, e.g. `crates/eggtunnel/src/server.rs:1084-1086`, `crates/eggtunnel/src/server.rs:1157`, `crates/eggtunnel/src/server.rs:1164`). |
+| `bytes_upstream` / `bytes_downstream` | `u64` | Relay byte totals, accumulated from per-connection reports on both sides (`crates/eggtunnel/src/server.rs:1370-1380`, `crates/eggtunnel/src/client/open.rs:67-75`). Monotonic; wrap only at u64 overflow. |
+| `effective_binds` | `Vec<(SessionId, ServiceId, EffectiveBind)>` | Currently bound listeners with server-chosen addresses. Pushed on successful bind (`crates/eggtunnel/src/server.rs:1180`; client echoes acks at `crates/eggtunnel/src/client.rs:1079-1083`), removed on unregister (`crates/eggtunnel/src/server.rs:1196-1197`). The CLI prints newly observed entries every 250 ms. |
 
 ### 5.3 `Counters` — `crates/eggtunnel/src/common.rs:320-344`
 
@@ -324,12 +324,12 @@ pub fn record_join_result<T>(&self, result: &Result<T, tokio::task::JoinError>) 
 
 Counter increment/decrement discipline (spot-checked):
 
-- Sessions: `fetch_add + fetch_max(high_water)` on admit (`crates/eggtunnel/src/server.rs:957-963`); decrement via `SessionGuard` on exit. Client uses `CounterGuard` that **stores 0** on drop rather than decrementing (`crates/eggtunnel/src/client.rs:1177-1180`) — correct because the client has at most one session.
-- Services: `fetch_add + fetch_max` on register (`crates/eggtunnel/src/server.rs:1013-1014`); `fetch_sub` on unregister (`crates/eggtunnel/src/server.rs:1023`). Client stores the count once after bulk registration (`crates/eggtunnel/src/client.rs:936-938`).
-- Pending: `fetch_add + fetch_max` on accept (`crates/eggtunnel/src/server.rs:1170-1171`); `fetch_sub` on consume/reject/expire (`crates/eggtunnel/src/server.rs:1030`, `crates/eggtunnel/src/server.rs:1173`, `crates/eggtunnel/src/server.rs:1187`).
-- Active: `fetch_add + fetch_max` (`crates/eggtunnel/src/server.rs:1222-1225`); `fetch_sub` on relay end (`crates/eggtunnel/src/server.rs:859`).
-- Handshakes: `fetch_add + fetch_max` on accept (`crates/eggtunnel/src/server.rs:711-715`); `fetch_sub` on handshake exit (`crates/eggtunnel/src/server.rs:724`); saturation covered by the `MAX_HANDSHAKES + 1` test (`crates/eggtunnel/src/server.rs:3753-3768`).
-- Open tasks (client): `OpenTaskGuard::new(fetch_add + fetch_max)` (`crates/eggtunnel/src/client.rs:1162-1168`); `fetch_sub` on `Drop` (`crates/eggtunnel/src/client.rs:1172-1175`).
+- Sessions: `fetch_add + fetch_max(high_water)` on admit (`crates/eggtunnel/src/server.rs:1122-1128`); decrement via `SessionGuard` on exit. Client uses `CounterGuard` that **stores 0** on drop rather than decrementing (`crates/eggtunnel/src/client.rs:1103`, def at `:1374-1399`) — correct because the client has at most one session.
+- Services: `fetch_add + fetch_max` on register (`crates/eggtunnel/src/server.rs:1187-1188`); `fetch_sub` on unregister (`crates/eggtunnel/src/server.rs:1196-1197`). Client stores the count once after bulk registration (`crates/eggtunnel/src/client.rs:1095-1098`).
+- Pending: `fetch_add + fetch_max` on accept (`crates/eggtunnel/src/server.rs:1350-1351`); `fetch_sub` on consume/reject/expire (`crates/eggtunnel/src/server.rs:1204-1205` on `OpenReject`, `:1353` on failed `Open` send, `:1366-1368` on relay settle, `remove_service_pending` at `:1424-1433`).
+- Active: `fetch_add + fetch_max` in `ActiveConnectionGuard::new` (`crates/eggtunnel/src/server.rs:1401-1408`); `fetch_sub` on `Drop` (`crates/eggtunnel/src/server.rs:1416-1422`).
+- Handshakes: `HandshakeGuard::new(fetch_add + fetch_max)` (def at `crates/eggtunnel/src/server.rs:839-858`); constructed on accept (`crates/eggtunnel/src/server.rs:562`, `:661`, `:775`); saturation covered by the `MAX_HANDSHAKES + 1` test (`crates/eggtunnel/src/server_tests/tcp.rs:1508-1523`).
+- Open tasks (client): `OpenTaskGuard::new(fetch_add + fetch_max)` (def at `crates/eggtunnel/src/client.rs:1381-1394`); constructed per-`Open` (`crates/eggtunnel/src/client.rs:1177-1180`).
 
 ---
 
@@ -345,14 +345,14 @@ Counter increment/decrement discipline (spot-checked):
 | `Io(#[from] std::io::Error)` | `I/O operation failed: {0}` | Listener bind / dial / relay I/O |
 | `Tls` | `TLS setup or handshake failed` | Unit variant — deliberately carries no rustls detail (avoids leaking handshake internals) |
 | `Protocol(#[from] ProtocolError)` | `protocol error: {0}` | Framing / unexpected message / hostile input |
-| `Authentication` | `server authentication failed` | Unit; bad token, wrong message where `Auth` expected (`crates/eggtunnel/src/server.rs:915`, `crates/eggtunnel/src/server.rs:930`) |
+| `Authentication` | `server authentication failed` | Unit; bad token, wrong message where `Auth` expected (`crates/eggtunnel/src/server.rs:1075-1076`, `crates/eggtunnel/src/server.rs:1078-1093`) |
 | `Authorization` | `service was rejected by server policy` | Unit; covers both policy rejection (`bind_to_socket` failure) and resource-capacity rejection (`sessions` overflow at `crates/eggtunnel/src/server.rs:1116-1118` returns `Authorization` after recording `ResourceExhausted` — see mapping note below) |
 | `Disconnected` | `server connection ended` | Unit; control stream EOF / handshake timeout mapping |
 | `Cancelled` | `operation was cancelled` | Unit; `CancellationToken` / shutdown / `Drain` |
 | `Timeout` | `operation timed out` | Unit; connect/handshake/relay timeouts |
-| `Target` | `local target rejected or failed the connection` | Unit; client-side dial/connect failure (`crates/eggtunnel/src/client.rs:1091` maps connector errors to `Target`) vs `TargetError`/`TargetConnector` trait errors which are the connector's own vocabulary |
+| `Target` | `local target rejected or failed the connection` | Unit; client-side dial/connect failure (`crates/eggtunnel/src/client/open.rs:29` maps connector/timeout errors to `Target`) vs `TargetError`/`TargetConnector` trait errors which are the connector's own vocabulary |
 | `ResourceExhausted` | `runtime resource limit was reached` | Unit; caps, full control queue, saturated semaphores, session-generation exhaustion (`begin_session` at `crates/eggtunnel/src/common.rs:404-414`) |
-| `ServiceAlreadyExists` | `service identifier or name is already registered` | Unit; duplicate service id/name on registration (`crates/eggtunnel/src/server.rs:1163-1167`); maps to `Authorization` termination (`crates/eggtunnel/src/common.rs:476`) |
+| `ServiceAlreadyExists` | `service identifier or name is already registered` | Unit; duplicate service id/name on registration (`crates/eggtunnel/src/server.rs:1163-1166`); maps to `Authorization` termination (`crates/eggtunnel/src/common.rs:476`) |
 | `PeerClosed` | `peer closed the connection` | Unit; clean remote close during relay |
 
 ### 6.2 `termination_category()` mapping — `crates/eggtunnel/src/common.rs:467-481`
@@ -413,7 +413,7 @@ Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exe
 
 ### 8.1 Secret handling
 
-- [ ] New code paths touching `SecretToken` use `expose()` (borrow) rather than adding an owned/cloned accessor; any `.to_vec()` copy is scoped to the handshake message and not logged. (Current copies: `crates/eggtunnel/src/client.rs:905` only.)
+- [ ] New code paths touching `SecretToken` use `expose()` (borrow) rather than adding an owned/cloned accessor; any `.to_vec()` copy is scoped to the handshake message and not logged. (Current copies: `crates/eggtunnel/src/client.rs:1046` only.)
 - [ ] No `Debug`/`Display`/`Serialize` impl is added for `SecretToken`, `Auth` token bytes, proxy credentials, or mTLS key buffers. `Snapshot` must stay credential-free (proxy creds are env-var + redacted per `docs/SECURITY.md:74-78`).
 - [ ] `Clone` derivations on secret-bearing configs are justified; each clone extends zeroize responsibility. Prefer moving over cloning in session setup.
 - [ ] `verify_token` remains the sole comparison; no `==` on token bytes is introduced anywhere (length short-circuit is the only accepted early exit).
@@ -425,16 +425,16 @@ Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exe
 - [ ] `BindPolicy::validate` is called before serving in every constructor. A new constructor that skips it could admit `max_services_per_session = 0` (denial of all registrations) or `> 65536` (above the `validate()` ceiling), or port ranges containing 0.
 - [ ] `ServiceSpec` has no `target`, but the wire `RegisterService` still carries one. Any future use of `ServiceSpec` as a registration input must construct it server-side (dropping `target`) rather than trusting a client-supplied projection.
 - [ ] `Ip{ address: ::1 }` is intentionally treated as loopback (`ip.is_loopback()` at `crates/eggtunnel/src/common.rs:505`). Do not "fix" this into a rejection without also handling IPv4-mapped `::ffff:127.0.0.1`, which `is_loopback()` does *not* flag — changing either behavior alters the loopback allowlist surface.
-- [ ] Auth-then-policy ordering is preserved: `verify_token` (`crates/eggtunnel/src/server.rs:917`) before any `bind_to_socket` on that session, and policy re-evaluated per `RegisterService` (a session cannot escalate by registering after a policy change — each registration checks the live `bind_policy`).
+- [ ] Auth-then-policy ordering is preserved: `verify_token` (`crates/eggtunnel/src/server.rs:1078`) before any `bind_to_socket` on that session, and policy re-evaluated per `RegisterService` (a session cannot escalate by registering after a policy change — each registration checks the live `bind_policy`).
 
 ### 8.3 Counter consistency
 
-- [ ] Every `fetch_add` has a matching `fetch_sub`/guard on all exit paths (normal, error, cancel, panic-abort). Pay attention to the asymmetric client `CounterGuard` (stores 0 on drop, `crates/eggtunnel/src/client.rs:1177-1180`) vs server `SessionGuard` (decrements) — copying one to the other side double-counts or leaks.
-- [ ] Every `fetch_add` that should move the high-water is immediately followed by `fetch_max`. Missing `fetch_max` silently freezes the high-water and breaks capacity-planning assertions (e.g. `crates/eggtunnel/src/server.rs:2922`).
+- [ ] Every `fetch_add` has a matching `fetch_sub`/guard on all exit paths (normal, error, cancel, panic-abort). Pay attention to the asymmetric client `CounterGuard` (stores 0 on drop, `crates/eggtunnel/src/client.rs:1103`, def at `:1374-1399`) vs server `SessionGuard` (decrements) — copying one to the other side double-counts or leaks.
+- [ ] Every `fetch_add` that should move the high-water is immediately followed by `fetch_max`. Missing `fetch_max` silently freezes the high-water and breaks capacity-planning assertions (e.g. `crates/eggtunnel/src/server_tests/tcp.rs:882-887`).
 - [ ] `rejected` is bumped on *every* refusal path (auth fail, duplicate id/name, policy deny, bind error, session/pending/active/handshake saturation). A new refusal that forgets `rejected.fetch_add` is invisible in `Snapshot.rejected_connections`.
 - [ ] `record_termination` is last-write-wins; tests asserting `last_termination` must serialize against concurrent tasks or assert `task_panics`/counters instead. `record_join_result` counts panics only — task cancellation and `Ok(Err(_))` relay errors must not inflate `task_panics`.
 - [ ] All snapshot loads stay `Relaxed`; introducing `SeqCst` or a snapshot mutex around atomics buys nothing (snapshot is already eventually consistent) and risks data-path contention.
-- [ ] `effective_binds` push (`crates/eggtunnel/src/server.rs:1006`) and retain-on-unregister (`crates/eggtunnel/src/server.rs:1022`) stay paired; a leaked entry makes the CLI report a listener that no longer exists, and an unbounded `binds` vec on a churning session is a memory-growth vector (bounded in practice by `max_services_per_session`, but only if unregister/all-pending cleanup at `crates/eggtunnel/src/server.rs:1053-1058` runs).
+- [ ] `effective_binds` push (`crates/eggtunnel/src/server.rs:1180`) and retain-on-unregister (`crates/eggtunnel/src/server.rs:1196-1197`) stay paired; a leaked entry makes the CLI report a listener that no longer exists, and an unbounded `binds` vec on a churning session is a memory-growth vector (bounded in practice by `max_services_per_session`, but only if unregister/`remove_all_pending` cleanup at `crates/eggtunnel/src/server.rs:1228-1233` runs).
 
 ### 8.4 Limit coherence (`common.rs` ↔ `server.rs` ↔ `client.rs`)
 

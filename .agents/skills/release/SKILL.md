@@ -24,7 +24,8 @@ release workflow and (via `publish-release`) crate/GitHub publication.
   (output `THIRD_PARTY_NOTICES.md` is a staged artifact, not committed).
 - Local qualification before tagging:
   `EGGTUNNEL_TEST_TARGET=<host-triple> ./scripts/test-install.sh`
-  (defaults pin `version=0.1.0` and `aarch64-apple-darwin` — override both).
+  (defaults pin the current workspace `version` and `aarch64-apple-darwin` —
+  override both as needed).
 - Crate publication order is `eggtunnel-proto` first, then `eggtunnel`
   (the library has a versioned dependency on proto). `eggtunnel-cli`
   stays `publish = false` and ships only in the binary archives.

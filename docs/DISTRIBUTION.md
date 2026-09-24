@@ -2,13 +2,17 @@
 
 ## Current release state
 
-Eggtunnel is at `0.1.0`. `eggtunnel-proto 0.1.0` and `eggtunnel 0.1.0` are
-published on crates.io (`eggtunnel-proto` first, then `eggtunnel`, matching the
-versioned dependency order). Git tag `v0.1.0` points at the qualified head and
-GitHub release `v0.1.0` carries versioned archives, a SHA-256 manifest, build
-provenance attestations, and `install.sh`. `eggtunnel-cli` remains a private
-workspace package (`publish = false`) and ships only inside the binary
-archive. The CLI crate depends on the library, never the reverse.
+The published release line is `0.1.0`. `eggtunnel-proto 0.1.0` and
+`eggtunnel 0.1.0` are published on crates.io (`eggtunnel-proto` first, then
+`eggtunnel`, matching the versioned dependency order). Git tag `v0.1.0`
+points at the qualified head and GitHub release `v0.1.0` carries versioned
+archives, a SHA-256 manifest, build provenance attestations, and
+`install.sh`. `eggtunnel-cli` remains a private workspace package
+(`publish = false`) and ships only inside the binary archive. The CLI crate
+depends on the library, never the reverse. (The workspace manifest is
+`0.2.0`, the M012 release candidate below; release tags must equal the
+workspace `version` per `release.yml`, so the next tag after authorization
+will be `v0.2.0`.)
 
 ## 0.2.0 candidate status
 

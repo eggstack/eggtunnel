@@ -38,7 +38,7 @@ one postcard payload), and `encode_frame` / `decode_frame` (exactly-one-frame,
 concatenated-frame friendly). I/O adaptation lives one layer up in
 `wire_io.rs:7-58`.
 
-- Wire v1.0 (crate line 0.2.0); major mismatch rejected (`lib.rs:483-485`), minor informational.
+- Wire v1.0 (crate line 0.2.0); major mismatch rejected (`crates/eggtunnel-proto/src/lib.rs:483-485`), minor informational.
 - 14 stable message IDs 1–14: `ClientHello`, `ServerHello`, `Auth`, `AuthOk`,
   `RegisterService`, `RegisterAck`, `UnregisterService`, `Open`, `OpenReject`,
   `Ping`, `Pong`, `Drain`, `Error`, `DataHello`.
@@ -49,7 +49,7 @@ concatenated-frame friendly). I/O adaptation lives one layer up in
 - IDs: `SessionId` / `ConnectionId` (128-bit `getrandom`, constant-time eq for
   the latter, redacted `Debug`, 4-byte-prefix `Debug` for `SessionId`);
   `Auth` token redacted; hostile-input tests + 10k-sample fuzz-style
-  `decode_frame` never-panics test in-crate (`lib.rs:527-754`).
+  `decode_frame` never-panics test in-crate (`crates/eggtunnel-proto/src/lib.rs:527-754`).
 - Session-time re-registration and `Ping`/`Pong` heartbeat reuse the same
   messages; M009 adds no wire message type.
 
@@ -193,7 +193,7 @@ websocket,proxy}.rs`.
 
 - `eggtunnel-cli` (unpublished binary `eggtunnel`, all features):
   `version | check <file> | client <file> | server <file>`
-  (`main.rs:13-26,279-317`). TOML file + `token_env`/`outbound_proxy_env`
+  (`main.rs:13-26,279-320`). TOML file + `token_env`/`outbound_proxy_env`
   indirection (secrets in env, never in file). `check` is structural only —
   no PEM parsing, DNS resolution, or dialing.
 - M008 path: `client_builder` (`main.rs:132-164`) / `server_builder`

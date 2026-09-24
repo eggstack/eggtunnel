@@ -33,15 +33,15 @@ Top level (`/`, see directory read):
 | Path | What it owns | Key review anchor |
 |---|---|---|
 | `Cargo.toml` | Workspace root: resolver 2, 3 members, shared `[workspace.package]` + `[workspace.dependencies]` | `Cargo.toml:1-35` |
-| `Cargo.lock` | Locked graph (226 packages at review time); exact Eggress checksums | `Cargo.lock` (eg. `eggress-transport-tls 1.0.8` checksum block) |
+| `Cargo.lock` | Locked graph (225 packages at review time); exact Eggress checksums | `Cargo.lock` (eg. `eggress-transport-tls 1.0.8` checksum block) |
 | `crates/eggtunnel-proto/` | Runtime-neutral wire DTOs + codec; published to crates.io | `crates/eggtunnel-proto/Cargo.toml:1-19` |
 | `crates/eggtunnel/` | Embeddable library; feature-gated client/server/transports; published to crates.io | `crates/eggtunnel/Cargo.toml:1-48` |
 | `crates/eggtunnel-cli/` | Private binary (`publish = false`); all-features consumer of the library | `crates/eggtunnel-cli/Cargo.toml:1-22` |
 | `docs/` | 9 user-facing guides (see §5) | `docs/` directory listing |
 | `plans/` | Canonical spec + roadmaps + ADRs + implementation/closure evidence (see §6) | `plans/registry.md:1-95` |
-| `architecture/` | Review layer: `overview.md` index + per-module deep dives (proto, core, client, server, transports, CLI, this file) | `architecture/overview.md:1-183` |
+| `architecture/` | Review layer: `overview.md` index + per-module deep dives (proto, core, client, server, transports, CLI, this file) | `architecture/overview.md:1-275` (index table at `:19-27`) |
 | `examples/` | `client.toml`, `server.toml` starter configs | `examples/` |
-| `fixtures/embedder/` | Downstream-shaped embedder proof (see §7); own `Cargo.toml` + `Cargo.lock`, excluded from workspace via `[workspace]` empty table | `fixtures/embedder/Cargo.toml:1-12`, `fixtures/embedder/src/main.rs:1-54` |
+| `fixtures/embedder/` | Downstream-shaped embedder proof (see §7); own `Cargo.toml` + `Cargo.lock`, excluded from workspace via `[workspace]` empty table | `fixtures/embedder/Cargo.toml:1-12`, `fixtures/embedder/src/main.rs:1-70` |
 | `scripts/` | `generate-third-party-notices.py`, `test-install.sh` only | `scripts/` |
 | `install.sh` | Install-only bootstrap script shipped as a release asset | `install.sh:1-60` |
 | `.github/workflows/` | `ci.yml` (per-push/PR gates), `release.yml` (tag-triggered 4-target build) | `.github/workflows/ci.yml:1-25`, `.github/workflows/release.yml:1-91` |
@@ -250,7 +250,7 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
 
 ### 4.1 `Cargo.lock`
 
-- 226 locked dependencies at review time; every Eggress crate pinned to
+- 225 locked dependencies at review time; every Eggress crate pinned to
   `1.0.8` with registry checksums (eg. `eggress-transport-tls 1.0.8`).
 - CI and release both build with `--locked` (`ci.yml:16-20`,
   `release.yml:36`), so a lockfile drift fails loudly rather than resolving
@@ -339,7 +339,7 @@ Why exact (`=`) rather than caret:
 | Doc | Owns | Review anchor |
 |---|---|---|
 | `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-21` |
-| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (doc text still states crate `0.1.x` at `docs/PROTOCOL.md:3-10` while the workspace candidate is `0.2.0`; wire stays `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
+| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (crate line `0.2.0` candidate, published `0.1.0`, wire `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
 | `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-84` |
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-85` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-52` |
@@ -544,8 +544,8 @@ suffices without the CLI, default features, or a library-owned runtime**
   support claims.
 - [ ] Candidate-vs-published sweep (run before any release): `docs/DISTRIBUTION.md:5-20`
   (published `0.1.0` vs `0.2.0` candidate + Eggpack no-interface line),
-  `docs/SUPPORT.md:48-51` (crates published at `0.1.0`),
-  `docs/PROTOCOL.md:3-10` (still states crate `0.1.x`; wire stays `1.0`),
+  `docs/SUPPORT.md:48-51` (crates published at `0.1.0`, workspace candidate `0.2.0`),
+  `docs/PROTOCOL.md:3-6` (crate `0.2.0` candidate / published `0.1.0` / wire `1.0`),
   `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.1`),
   `CHANGELOG.md:3-42` (candidate-only guard), and
   `plans/closure/reverse-session/012-status.md:5-8,56-62,81-87`

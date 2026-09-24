@@ -16,6 +16,8 @@ The CLI is a consumer of the library. A downstream library should depend on
 For a private-side client using TCP/TLS:
 
 ```toml
+# Tracks the published crates.io line (0.1.0). Bump to "0.2" only after the
+# owner-authorized 0.2.0 publication; a "0.2" requirement cannot resolve today.
 eggtunnel = { version = "0.1", default-features = false, features = ["client", "tls"] }
 ```
 
@@ -67,7 +69,9 @@ application's secret store.
 
 ## Compatibility
 
-The crate is version `0.1.x`. Public Rust API changes may be breaking across
+The workspace crate line is `0.2.0` (release candidate; see
+[distribution](DISTRIBUTION.md)); the published crates.io line remains `0.1.0`
+until the owner-authorized publication. Public Rust API changes may be breaking across
 minor releases before `1.0`; compile against the exact version selected by the
 downstream lockfile. `eggtunnel-proto` types and message IDs are wire-facing
 and require extra care: see [protocol compatibility](PROTOCOL.md).

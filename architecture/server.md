@@ -606,7 +606,7 @@ The server updates every field except `connected`/`reconnects`/`open_tasks`
 | `rejected_connections` | every auth/reg/pending/data-hello/admission denial (§6.3) |
 | `bytes_upstream/downstream` | relay reports incl. failure partials (`server.rs:1371-1380`) |
 | `effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>` | push on register (`server.rs:1180`), retain on unregister (`server.rs:1196`), retain on session exit (`server.rs:1467`); CLI polls it every 250 ms |
-| `resource_limits` | `ResourceLimits::default()` (128/64/128/128/64/128/128/32 incl. `client_command_queue: 32`, `common.rs:232-245`) — documents ceilings, not live config |
+| `resource_limits` | `policy.limits` (`common.rs:377`) — echoes the **selected** `RuntimePolicy` (128/64/128/128/64/128/128/32 incl. `client_command_queue: 32` by default, `common.rs:232-245`), pinned by `server_tests/tcp.rs:882` |
 
 `last_termination` retains only the most recent category, never history or
 error text (`docs/OPERATIONS.md:34-35`). `Snapshot` never carries secrets;
