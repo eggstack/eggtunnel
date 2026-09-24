@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-version=0.1.0
+version=0.2.0
 target=${EGGTUNNEL_TEST_TARGET:-aarch64-apple-darwin}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/eggtunnel-install-test.XXXXXX")
 trap 'rm -rf "$tmp" "$root/THIRD_PARTY_NOTICES.md"' EXIT HUP INT TERM

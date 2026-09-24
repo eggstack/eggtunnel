@@ -23,7 +23,7 @@ outbound-proxy = ["client", "dep:eggress-outbound"]
 mtls = ["tls", "dep:tokio-rustls", "dep:webpki-roots", "dep:sha2"]
 
 [dependencies]
-eggtunnel-proto = { path = "../eggtunnel-proto", version = "0.1.0" }
+eggtunnel-proto = { path = "../eggtunnel-proto", version = "0.2.0" }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 eggress-core = { workspace = true, optional = true }

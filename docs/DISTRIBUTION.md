@@ -10,6 +10,15 @@ provenance attestations, and `install.sh`. `eggtunnel-cli` remains a private
 workspace package (`publish = false`) and ships only inside the binary
 archive. The CLI crate depends on the library, never the reverse.
 
+## 0.2.0 candidate status
+
+The workspace is being qualified as `0.2.0` under M012. This is a release
+candidate only: the published version, current release assets, and registry
+consumer remain `0.1.0` until the owner authorizes and completes the release
+sequence. Do not use `0.2.0` as a crates.io dependency until both crates are
+published. The candidate keeps the existing four targets and release workflow;
+Eggpack has no released/adopted end-to-end CI orchestration interface yet.
+
 ## Release targets
 
 The release workflow builds archives for these supported targets:

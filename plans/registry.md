@@ -29,13 +29,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 ready | M011 is strictly closed; M012 release/publication work may proceed, with publication still requiring explicit owner authorization. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 closing | M011 is strictly closed; M012 candidate qualification is assembled and exact-head hosted CI is pending, with publication still requiring explicit owner authorization. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M012 0.2.0 release qualification/publication gate | ready | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | M011 strict closure satisfied; irreversible publication also requires explicit owner authorization. |
+| Reverse session | M012 0.2.0 release qualification/publication gate | closing | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | M011 strict closure satisfied; candidate qualification assembled; exact-head hosted CI pending; irreversible publication also requires explicit owner authorization. |
 
 ## Recently closed implementation plans
 
