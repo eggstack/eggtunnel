@@ -504,3 +504,25 @@ legacy `Client::start_*` functions delegate through it. Runtime ceilings and
 timeouts are read from the policy carried by `Counters`. The 128-slot
 protocol-control and 32-slot handle-command queues remain separate finite
 limits so their defaults match the previous runtime.
+
+### Dynamic Services and heartbeat health (M009)
+
+`ClientHandle::register_service` sends a typed command through the bounded
+command channel and waits for the current Session's RegisterAck. A connected
+session generation is captured at enqueue time; stale commands are rejected.
+Only a matching successful acknowledgement appends the Service to the bounded
+desired-state vector used by subsequent reconnects. There is one dynamic
+registration request in flight at a time because wire Error messages carry no
+ServiceId; RegisterAck does carry the ID. Unregister removes desired state and
+is sent for the current Session when present. A canceled registration keeps a
+bounded tombstone until its response so its late acknowledgement can be
+unregistered without mutating desired state.
+
+Heartbeat health stores one outstanding `(nonce, monotonic send time)` per
+Session. Matching Pong updates RTT and last-success time and clears consecutive
+misses. Unanswered intervals increment a saturating count without sending
+additional probes. `Snapshot.heartbeat` contains only the current generation,
+last-Pong age, latest RTT, and missed count; no unbounded history is kept.
+Tracing events use typed IDs/categories and never format credentials, proxy
+chains, or full config objects. The library emits events only and leaves
+subscriber setup to the embedder.

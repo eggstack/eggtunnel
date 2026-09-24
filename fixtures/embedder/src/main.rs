@@ -47,6 +47,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .runtime_policy(policy)
         .start()
         .await?;
+    let dynamic_service = ClientService::new(
+        ServiceId(2),
+        ServiceName::new("embedded-dynamic-service")?,
+        RequestedBind::Loopback { port: 0 },
+        TcpTarget::new("127.0.0.1", 8081)?,
+    );
+    let _effective_bind = client
+        .handle()
+        .register_service(dynamic_service)
+        .await?;
     tracing::info!("embedder owns logging and runtime policy");
     client.shutdown().await;
     Ok(())

@@ -24,6 +24,19 @@ loopback TCP targets. Use `TargetConnector` and
 `Client::start_with_connector` when the application owns destination dialing.
 Use `ClientHandle::snapshot` for status, `unregister_service` for an active
 session mapping, and `Client::shutdown().await` for joined shutdown.
+Programmatic clients may start with an empty `services` list when all mappings
+will be added dynamically after connection; the CLI still requires at least one
+configured service.
+
+`ClientHandle::register_service(service).await` registers a Service in the
+current authenticated Session and returns the server-assigned `EffectiveBind`.
+Only an acknowledged registration is restored after reconnect. Registration
+while disconnected returns `TunnelError::Disconnected`; duplicate IDs or
+names return `ServiceAlreadyExists`; server bind denial returns
+`Authorization`; runtime capacity rejection returns `ResourceExhausted`.
+Unregistration is idempotent, removes desired state, and remains removed after
+reconnect. Dropping a registration future before its acknowledgement causes
+the client to unregister it when the acknowledgement arrives.
 
 For composed deployments, `ClientBuilder` accepts a typed
 `ClientTransportProfile`, optional `TargetConnector`, and a validated
@@ -46,8 +59,11 @@ requested service listeners and authorizes binds through `BindPolicy`.
 task. `Server::bind_mtls` is available with the `mtls` feature.
 
 The runtime is caller-owned. Eggtunnel does not create a Tokio runtime or
-install a tracing subscriber. Secret token/key values should come from the
-embedding application's secret store.
+install a tracing subscriber. The library emits structured `tracing` events
+when a subscriber is present; applications control filters and output.
+Heartbeat age, latest RTT, missed probes, and session generation are available
+in `Snapshot.heartbeat`. Secret token/key values should come from the embedding
+application's secret store.
 
 ## Compatibility
 

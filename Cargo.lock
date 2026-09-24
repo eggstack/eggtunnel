@@ -593,6 +593,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
+ "tracing",
  "webpki-roots 1.0.9",
  "zeroize",
 ]

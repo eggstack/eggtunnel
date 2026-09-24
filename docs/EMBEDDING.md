@@ -57,3 +57,20 @@ and timeout values. Its `ResourceLimits` and `TimeoutPolicy` fields can be
 adjusted for an embedding application's finite capacity and lifecycle needs;
 call `validate()` to reject zero, excessive, or inconsistent values before
 starting the runtime.
+
+Use `ClientHandle::register_service` to add a validated `ClientService` while
+connected. It waits for `RegisterAck` and returns the authoritative bind. The
+acknowledged Service becomes desired state for reconnects; failed, cancelled,
+or stale-generation registrations do not. `unregister_service` removes it
+from the current Session and reconnect state and is safe to repeat. Calls made
+while disconnected return `TunnelError::Disconnected` for registration;
+unregistration can queue through the bounded command channel while the client
+is reconnecting.
+
+Snapshots expose a bounded heartbeat view: current Session generation, age of
+the last matching Pong, latest RTT in milliseconds, and consecutive missed
+heartbeat intervals. At most one Ping is tracked at a time. Eggtunnel emits
+structured `tracing` events for connection/session and Service lifecycle
+outcomes, admission/rejection categories, DataHello correlation, relay ends,
+and shutdown. It never installs a subscriber or logs credential/configuration
+objects; the embedder owns filtering and output.

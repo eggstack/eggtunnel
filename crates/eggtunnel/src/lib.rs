@@ -25,8 +25,8 @@ pub use client::{
     TargetConnector, TargetContext, TargetError, TargetFuture, TargetStream,
 };
 pub use common::{
-    BindPolicy, ClientService, ResourceLimits, RuntimePolicy, SecretToken, ServiceSpec, Snapshot,
-    TerminationCategory, TimeoutPolicy, TunnelError,
+    BindPolicy, ClientService, HeartbeatSnapshot, ResourceLimits, RuntimePolicy, SecretToken,
+    ServiceSpec, Snapshot, TerminationCategory, TimeoutPolicy, TunnelError,
 };
 pub use eggtunnel_proto as proto;
 #[cfg(feature = "server")]

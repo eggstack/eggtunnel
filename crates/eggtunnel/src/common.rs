@@ -2,6 +2,8 @@ use std::fmt;
 #[cfg(feature = "server")]
 use std::net::SocketAddr;
 #[cfg(any(feature = "client", feature = "server"))]
+use std::time::Instant;
+#[cfg(any(feature = "client", feature = "server"))]
 use std::{
     sync::Arc,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -148,12 +150,30 @@ pub struct Snapshot {
     pub high_water_handshakes: usize,
     pub task_panics: u64,
     pub last_termination: Option<TerminationCategory>,
+    pub heartbeat: HeartbeatSnapshot,
     pub resource_limits: ResourceLimits,
     pub reconnects: u64,
     pub rejected_connections: u64,
     pub bytes_upstream: u64,
     pub bytes_downstream: u64,
     pub effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>,
+}
+
+/// Bounded heartbeat health for the current client Session.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HeartbeatSnapshot {
+    pub session_generation: u64,
+    pub last_pong_age_ms: Option<u64>,
+    pub latest_rtt_ms: Option<u64>,
+    pub missed_heartbeats: u64,
+}
+
+#[cfg(any(feature = "client", feature = "server"))]
+#[derive(Default)]
+struct HeartbeatState {
+    last_pong_at: Option<Instant>,
+    latest_rtt_ms: Option<u64>,
+    missed_heartbeats: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,6 +339,8 @@ pub(crate) struct Counters {
     pub bytes_upstream: Arc<AtomicU64>,
     pub bytes_downstream: Arc<AtomicU64>,
     pub binds: Arc<std::sync::Mutex<Vec<(SessionId, ServiceId, EffectiveBind)>>>,
+    pub session_generation: Arc<AtomicU64>,
+    heartbeat: Arc<std::sync::Mutex<HeartbeatState>>,
 }
 
 #[cfg(any(feature = "client", feature = "server"))]
@@ -353,6 +375,17 @@ impl Counters {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner()),
             resource_limits: self.policy.limits,
+            heartbeat: {
+                let heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
+                HeartbeatSnapshot {
+                    session_generation: self.session_generation.load(Ordering::Relaxed),
+                    last_pong_age_ms: heartbeat
+                        .last_pong_at
+                        .map(|instant| instant.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                    latest_rtt_ms: heartbeat.latest_rtt_ms,
+                    missed_heartbeats: heartbeat.missed_heartbeats,
+                }
+            },
             reconnects: self.reconnects.load(Ordering::Relaxed),
             rejected_connections: self.rejected.load(Ordering::Relaxed),
             bytes_upstream: self.bytes_upstream.load(Ordering::Relaxed),
@@ -366,6 +399,30 @@ impl Counters {
             .last_termination
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = Some(category);
+    }
+
+    pub fn begin_session(&self) -> Result<u64, TunnelError> {
+        let generation = self
+            .session_generation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| TunnelError::ResourceExhausted)?
+            + 1;
+        *self.heartbeat.lock().unwrap_or_else(|p| p.into_inner()) = HeartbeatState::default();
+        Ok(generation)
+    }
+
+    pub fn record_heartbeat_missed(&self) {
+        let mut heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
+        heartbeat.missed_heartbeats = heartbeat.missed_heartbeats.saturating_add(1);
+    }
+
+    pub fn record_heartbeat_pong(&self, sent_at: Instant) {
+        let mut heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
+        heartbeat.last_pong_at = Some(Instant::now());
+        heartbeat.latest_rtt_ms = Some(sent_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        heartbeat.missed_heartbeats = 0;
     }
 
     pub fn record_join_result<T>(&self, result: &Result<T, tokio::task::JoinError>) {
@@ -400,6 +457,8 @@ pub enum TunnelError {
     Target,
     #[error("runtime resource limit was reached")]
     ResourceExhausted,
+    #[error("service identifier or name is already registered")]
+    ServiceAlreadyExists,
     #[error("peer closed the connection")]
     PeerClosed,
 }
@@ -414,6 +473,7 @@ impl TunnelError {
             Self::PeerClosed => TerminationCategory::PeerClosed,
             Self::Authentication => TerminationCategory::Authentication,
             Self::Authorization => TerminationCategory::Authorization,
+            Self::ServiceAlreadyExists => TerminationCategory::Authorization,
             Self::Protocol(_) => TerminationCategory::Protocol,
             Self::Io(_) | Self::Tls | Self::Disconnected => TerminationCategory::Transport,
             Self::Configuration(_) => TerminationCategory::Internal,
@@ -537,5 +597,40 @@ mod runtime_policy_tests {
             ..TimeoutPolicy::default()
         };
         assert!(timeouts.validate().is_err());
+    }
+
+    #[cfg(any(feature = "client", feature = "server"))]
+    #[test]
+    fn heartbeat_snapshot_tracks_only_bounded_current_session_health() {
+        let counters = Counters::default();
+        let generation = counters.begin_session().unwrap();
+        counters.record_heartbeat_missed();
+        assert_eq!(counters.snapshot().heartbeat.missed_heartbeats, 1);
+        counters.record_heartbeat_pong(Instant::now() - std::time::Duration::from_millis(5));
+        let heartbeat = counters.snapshot().heartbeat;
+        assert_eq!(heartbeat.session_generation, generation);
+        assert_eq!(heartbeat.missed_heartbeats, 0);
+        assert!(heartbeat.last_pong_age_ms.is_some());
+        assert!(heartbeat.latest_rtt_ms.is_some());
+
+        let next_generation = counters.begin_session().unwrap();
+        let reset = counters.snapshot().heartbeat;
+        assert_eq!(reset.session_generation, next_generation);
+        assert_eq!(reset.last_pong_age_ms, None);
+        assert_eq!(reset.latest_rtt_ms, None);
+        assert_eq!(reset.missed_heartbeats, 0);
+    }
+
+    #[cfg(any(feature = "client", feature = "server"))]
+    #[test]
+    fn session_generation_exhaustion_fails_closed() {
+        let counters = Counters::default();
+        counters
+            .session_generation
+            .store(u64::MAX, Ordering::Relaxed);
+        assert!(matches!(
+            counters.begin_session(),
+            Err(TunnelError::ResourceExhausted)
+        ));
     }
 }

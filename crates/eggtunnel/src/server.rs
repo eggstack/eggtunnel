@@ -426,6 +426,7 @@ impl Server {
     }
 
     pub async fn shutdown(mut self) {
+        tracing::info!("server shutdown requested");
         self.cancel.cancel();
         if let Some(task) = self.task.take() {
             let _ = task.await;
@@ -549,6 +550,7 @@ async fn server_loop(
                 let Ok(permit) = admission.clone().try_acquire_owned() else {
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     counters.record_termination(TerminationCategory::ResourceExhausted);
+                    tracing::debug!(category = "handshake_admission", "connection rejected");
                     continue;
                 };
                 let tls = tls.clone();
@@ -576,6 +578,7 @@ async fn server_loop(
                         handle_connection(tcp, peer.ip(), tls, token, connection_context, websocket).await
                     {
                         task_counters.record_termination(error.termination_category());
+                        tracing::debug!(termination = ?error.termination_category(), "server connection ended");
                     }
                 });
             }
@@ -907,6 +910,14 @@ async fn handle_connection(
             (Box::new(stream) as BoxStream, principal)
         }
     };
+    tracing::debug!(
+        transport = if websocket {
+            "websocket_tls"
+        } else {
+            "tcp_tls"
+        },
+        "server TLS established"
+    );
     #[cfg(feature = "websocket")]
     let mut stream = if websocket {
         let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
@@ -965,12 +976,20 @@ async fn accept_data_hello(
         .get(&hello.session_id)
         .and_then(std::sync::Weak::upgrade);
     let Some(session) = session else {
+        tracing::warn!(
+            category = "data_hello_session_mismatch",
+            "DataHello rejected"
+        );
         counters
             .rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authentication);
     };
     if session.principal != principal {
+        tracing::warn!(
+            category = "data_hello_principal_mismatch",
+            "DataHello rejected"
+        );
         counters
             .rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -978,6 +997,10 @@ async fn accept_data_hello(
     }
     let pending = session.pending.lock().await.remove(&hello.connection_id);
     let Some(pending) = pending else {
+        tracing::warn!(
+            category = "data_hello_unknown_connection",
+            "DataHello rejected"
+        );
         counters
             .rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -988,11 +1011,19 @@ async fn accept_data_hello(
         .pending
         .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     if pending.service_id != hello.service_id || pending.expires <= Instant::now() {
+        tracing::warn!(
+            category = "data_hello_service_or_expiry_mismatch",
+            "DataHello rejected"
+        );
         counters
             .rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authorization);
     }
+    tracing::debug!(
+        service_id = hello.service_id.0,
+        "DataHello correlated to pending ConnectionId"
+    );
     pending
         .data_tx
         .send(stream)
@@ -1045,6 +1076,7 @@ async fn serve_control(
         _ => return Err(TunnelError::Authentication),
     };
     if !verify_token(&token, auth.token()) {
+        tracing::debug!(category = "authentication", "client authentication failed");
         auth_failures.record_failure(source);
         drop(handshake_guard.take());
         drop(admission.take());
@@ -1066,6 +1098,7 @@ async fn serve_control(
     if cancel.is_cancelled() {
         return Err(TunnelError::Cancelled);
     }
+    tracing::info!(session_id = ?session_id, "authenticated server Session established");
     let context = Arc::new(SessionContext {
         id: session_id,
         principal,
@@ -1113,6 +1146,7 @@ async fn serve_control(
             _ = context.cancel.cancelled() => break,
             _ = &mut idle => {
                 idle_expired = true;
+                tracing::debug!(category = "control_idle_timeout", "server Session idle timeout");
                 break;
             },
             incoming = read_message(&mut reader) => {
@@ -1122,24 +1156,27 @@ async fn serve_control(
                         if services.len() >= bind_policy.max_services_per_session.min(counters.policy.limits.services_per_session) {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             counters.record_termination(TerminationCategory::ResourceExhausted);
+                            tracing::debug!(category = "service_admission", "Service registration rejected");
                             write_registration_error(&mut writer, 5).await?;
                             continue;
                         }
                         if services.contains_key(&register.service_id) || names.contains(register.name.as_str()) {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            tracing::debug!(category = "duplicate_service", service_id = register.service_id.0, "Service registration rejected");
                             write_registration_error(&mut writer, 1).await?;
                             continue;
                         }
                         // The target descriptor is client-owned. The server uses it only as bounded registration metadata.
                         let bind_addr = match bind_to_socket(&register.requested_bind, &bind_policy) {
                             Ok(addr) => addr,
-                            Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); write_registration_error(&mut writer, 2).await?; continue; }
+                            Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); tracing::debug!(category = "bind_authorization", service_id = register.service_id.0, "Service bind rejected"); write_registration_error(&mut writer, 2).await?; continue; }
                         };
                         let listener = match TcpListener::bind(bind_addr).await {
                             Ok(listener) => listener,
-                            Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); write_registration_error(&mut writer, 3).await?; continue; }
+                            Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); tracing::debug!(category = "listener_bind", service_id = register.service_id.0, "Service listener bind failed"); write_registration_error(&mut writer, 3).await?; continue; }
                         };
                         let effective = socket_to_effective(listener.local_addr()?);
+                        tracing::info!(service_id = register.service_id.0, service_name = register.name.as_str(), effective_address = %std::net::Ipv6Addr::from(effective.address), effective_port = effective.port, "Service listener bound");
                         counters.binds.lock().unwrap_or_else(|p| p.into_inner()).push((session_id, register.service_id, effective.clone()));
                         let service_cancel = context.cancel.child_token();
                         let name = register.name.clone();
@@ -1159,6 +1196,7 @@ async fn serve_control(
                             counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(sid, id, _)| *sid != session_id || *id != service_id);
                             counters.services.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             remove_service_pending(&context, service_id).await;
+                            tracing::info!(service_id = service_id.0, "Service listener removed");
                         }
                     }
                     Ok(Message::OpenReject(reject)) => {
@@ -1331,10 +1369,12 @@ async fn run_service(
                     if let Some(data) = outcome {
                         match relay_with_options(external, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
                             Ok(report) => {
+                                tracing::debug!(service_id = service_id.0, termination = "clean", "relay completed");
                                 counters.bytes_upstream.fetch_add(report.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
                                 counters.bytes_downstream.fetch_add(report.bytes_downstream, std::sync::atomic::Ordering::Relaxed);
                             }
                             Err(failure) => {
+                                tracing::debug!(service_id = service_id.0, termination = "transport", "relay ended");
                                 counters.bytes_upstream.fetch_add(failure.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
                                 counters.bytes_downstream.fetch_add(failure.bytes_downstream, std::sync::atomic::Ordering::Relaxed);
                             }

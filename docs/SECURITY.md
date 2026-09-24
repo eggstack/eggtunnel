@@ -83,3 +83,10 @@ CONNECT Basic authentication and SOCKS5 username/password authentication are
 qualified as supported when the corresponding URI userinfo is supplied.
 Two-hop chains using the canonical `__`-separated pproxy URI syntax are
 qualified by one end-to-end SOCKS5+HTTP CONNECT integration test.
+
+Dynamic Service registration accepts only the caller-supplied typed
+`ClientService`; it does not accept server-directed targets. Desired state is
+updated only after an acknowledgement from the current Session generation.
+Library tracing uses coarse event fields and does not format tokens, proxy
+chains, TLS identities, or full configuration objects. The embedder controls
+subscriber filters and storage.

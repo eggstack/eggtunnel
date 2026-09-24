@@ -4,13 +4,14 @@ use eggress_core::BoxStream;
 use eggress_relay::{RelayOptions, relay_with_options};
 use eggress_transport_tls::{TlsClientConfigBuilder, tls_connect};
 use eggtunnel_proto::{
-    Auth, AuthOk, Capabilities, ClientHello, DataHello, MAX_FRAME_BYTES, Message, Open, OpenReject,
-    ProtocolVersion, RegisterService, ServerHello, ServiceId,
+    Auth, AuthOk, Capabilities, ClientHello, DataHello, EffectiveBind, ErrorMessage,
+    MAX_FRAME_BYTES, Message, Open, OpenReject, ProtocolVersion, RegisterService, ServerHello,
+    ServiceId,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
-    sync::{Semaphore, mpsc},
+    sync::{Semaphore, mpsc, oneshot},
     task::{JoinHandle, JoinSet},
     time::timeout,
 };
@@ -206,7 +207,15 @@ pub struct ClientHandle {
 }
 
 enum ClientCommand {
-    Unregister(ServiceId),
+    Register {
+        service: ClientService,
+        generation: u64,
+        reply: oneshot::Sender<Result<EffectiveBind, TunnelError>>,
+    },
+    Unregister {
+        id: ServiceId,
+        reply: oneshot::Sender<Result<(), TunnelError>>,
+    },
 }
 
 impl ClientHandle {
@@ -219,10 +228,44 @@ impl ClientHandle {
     /// Ask the active Session to unregister a service. The configured mapping
     /// is removed and will not be restored after reconnect.
     pub async fn unregister_service(&self, id: ServiceId) -> Result<(), TunnelError> {
-        self.commands
-            .send(ClientCommand::Unregister(id))
-            .await
-            .map_err(|_| TunnelError::Cancelled)
+        let (reply, response) = oneshot::channel();
+        tokio::select! {
+            _ = self.cancel.cancelled() => return Err(TunnelError::Cancelled),
+            result = self.commands.send(ClientCommand::Unregister { id, reply }) => result.map_err(|_| TunnelError::Disconnected)?,
+        }
+        tokio::select! {
+            _ = self.cancel.cancelled() => Err(TunnelError::Cancelled),
+            result = response => result.unwrap_or(Err(TunnelError::Disconnected)),
+        }
+    }
+
+    /// Register a Service in the current authenticated Session. Only a
+    /// server-acknowledged Service becomes desired state for reconnects.
+    pub async fn register_service(
+        &self,
+        service: ClientService,
+    ) -> Result<EffectiveBind, TunnelError> {
+        if self
+            .counters
+            .connected
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 0
+        {
+            return Err(TunnelError::Disconnected);
+        }
+        let generation = self
+            .counters
+            .session_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let (reply, response) = oneshot::channel();
+        tokio::select! {
+            _ = self.cancel.cancelled() => return Err(TunnelError::Cancelled),
+            result = self.commands.send(ClientCommand::Register { service, generation, reply }) => result.map_err(|_| TunnelError::Disconnected)?,
+        }
+        tokio::select! {
+            _ = self.cancel.cancelled() => Err(TunnelError::Cancelled),
+            result = response => result.unwrap_or(Err(TunnelError::Disconnected)),
+        }
     }
 
     #[cfg(all(test, feature = "quic"))]
@@ -559,6 +602,7 @@ impl Client {
     }
 
     pub async fn shutdown(mut self) {
+        tracing::info!("client shutdown requested");
         self.cancel.cancel();
         if let Some(task) = self.task.take() {
             let _ = task.await;
@@ -678,7 +722,7 @@ fn validate_config(
     if config.tls_server_name.is_empty() || config.tls_server_name.len() > 253 {
         return Err(TunnelError::Configuration("TLS server name is invalid"));
     }
-    if config.services.is_empty() || config.services.len() > policy.limits.services_per_session {
+    if config.services.len() > policy.limits.services_per_session {
         return Err(TunnelError::Configuration(
             "service count exceeds the configured per-session limit",
         ));
@@ -775,8 +819,15 @@ async fn reconnect_loop(
         if cancel.is_cancelled() {
             break;
         }
+        tracing::debug!(
+            attempt = counters
+                .reconnects
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_add(1),
+            "client connection attempt"
+        );
         while let Ok(command) = commands.try_recv() {
-            apply_client_command(&mut config.services, command);
+            apply_disconnected_command(&mut config.services, command);
         }
         let outcome = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -790,6 +841,14 @@ async fn reconnect_loop(
                 };
                 match tls_result {
                     Ok(Ok(stream)) => {
+                        tracing::debug!(
+                            transport = if websocket {
+                                "websocket_tls"
+                            } else {
+                                "tcp_tls"
+                            },
+                            "client transport established"
+                        );
                         let stream_result: Result<BoxStream, TunnelError> = async {
                             #[allow(unused_mut)]
                             let mut stream = stream;
@@ -856,6 +915,7 @@ async fn reconnect_loop(
         }
         if let Err(error) = &result {
             counters.record_termination(error.termination_category());
+            tracing::warn!(termination = ?error.termination_category(), "client Session ended");
         }
         counters
             .connected
@@ -935,8 +995,15 @@ async fn quic_reconnect_loop(
         if cancel.is_cancelled() {
             break;
         }
+        tracing::debug!(
+            attempt = counters
+                .reconnects
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_add(1),
+            "QUIC client connection attempt"
+        );
         while let Ok(command) = commands.try_recv() {
-            apply_client_command(&mut config.services, command);
+            apply_disconnected_command(&mut config.services, command);
         }
         let quic_config = QuicClientConfig {
             server_name: config.tls_server_name.clone(),
@@ -952,6 +1019,7 @@ async fn quic_reconnect_loop(
                 match result {
                     Ok(Ok(client)) => client,
                     _ => {
+                        tracing::debug!(category = "quic_connect", "QUIC connection attempt failed");
                         record_quic_reconnect(&counters, &cancel, &mut delay).await;
                         continue;
                     }
@@ -968,6 +1036,7 @@ async fn quic_reconnect_loop(
                 .await
                 .map_err(|_| TunnelError::Timeout)?
                 .map_err(|_| TunnelError::Disconnected)?;
+            tracing::debug!(transport = "quic", "QUIC transport established");
             run_session(
                 control,
                 SessionRun {
@@ -999,6 +1068,7 @@ async fn quic_reconnect_loop(
         }
         if let Err(error) = &result {
             counters.record_termination(error.termination_category());
+            tracing::warn!(termination = ?error.termination_category(), "QUIC client Session ended");
         }
         if cancel.is_cancelled() {
             break 'reconnect;
@@ -1119,6 +1189,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         Message::AuthOk(AuthOk { session_id }) => session_id,
         _ => return Err(TunnelError::Authentication),
     };
+    let generation = counters.begin_session()?;
+    tracing::info!(
+        session_generation = generation,
+        "authenticated client Session established"
+    );
 
     for service in services.iter() {
         let registration = RegisterService {
@@ -1139,7 +1214,8 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     .binds
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .push((session_id, service.id, ack.effective_bind));
+                    .push((session_id, service.id, ack.effective_bind.clone()));
+                tracing::info!(service_id = service.id.0, service_name = service.name.as_str(), effective_address = %std::net::Ipv6Addr::from(ack.effective_bind.address), effective_port = ack.effective_bind.port, "initial Service registered");
             }
             Message::Error(_) => return Err(TunnelError::Authorization),
             _ => return Err(TunnelError::Authorization),
@@ -1157,8 +1233,21 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         .store(1, std::sync::atomic::Ordering::Relaxed);
     *reconnect_delay = counters.policy.timeouts.reconnect_initial;
     let _connected_guard = CounterGuard::new(counters.sessions.clone());
+    tracing::info!(
+        session_generation = generation,
+        registered_services = services.len(),
+        "client Session ready"
+    );
     let mut active_services: HashMap<ServiceId, ClientService> =
         services.iter().cloned().map(|s| (s.id, s)).collect();
+    let mut pending_registrations = HashMap::<
+        ServiceId,
+        (
+            ClientService,
+            u64,
+            Option<oneshot::Sender<Result<EffectiveBind, TunnelError>>>,
+        ),
+    >::new();
     let semaphore = Arc::new(Semaphore::new(counters.policy.limits.client_open_tasks));
     let (out_tx, mut out_rx) = mpsc::channel(counters.policy.limits.control_queue);
     let (mut reader, mut writer) = tokio::io::split(stream);
@@ -1169,6 +1258,9 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         counters.policy.timeouts.heartbeat_interval,
     );
     let mut heartbeat_nonce = 0u64;
+    let mut heartbeat_outstanding: Option<(u64, tokio::time::Instant)> = None;
+    let mut registration_deadline: Option<tokio::time::Instant> = None;
+    let mut registration_timed_out = false;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -1178,8 +1270,32 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                 break;
             }
             _ = heartbeat.tick() => {
-                heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
-                let _ = out_tx.try_send(Message::Ping(eggtunnel_proto::Ping { nonce: heartbeat_nonce }));
+                if heartbeat_outstanding.is_some() {
+                    counters.record_heartbeat_missed();
+                    tracing::debug!(session_generation = generation, "heartbeat response missed");
+                } else {
+                    heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
+                    match out_tx.try_send(Message::Ping(eggtunnel_proto::Ping { nonce: heartbeat_nonce })) {
+                        Ok(()) => heartbeat_outstanding = Some((heartbeat_nonce, tokio::time::Instant::now())),
+                        Err(_) => counters.record_heartbeat_missed(),
+                    }
+                }
+            }
+            _ = async {
+                if let Some(deadline) = registration_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if registration_deadline.is_some() => {
+                if let Some((_, _, reply)) = pending_registrations.values_mut().next()
+                    && let Some(reply) = reply.take()
+                {
+                    let _ = reply.send(Err(TunnelError::Timeout));
+                }
+                registration_timed_out = true;
+                tracing::debug!(session_generation = generation, "Service registration acknowledgement timed out");
+                break;
             }
             incoming = read_message(&mut reader) => {
                 match incoming {
@@ -1187,6 +1303,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         let Some(service) = active_services.get(&open.service_id).cloned() else {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             counters.record_termination(crate::common::TerminationCategory::Authorization);
+                            tracing::debug!(category = "unknown_service", service_id = open.service_id.0, "Open rejected");
                             let _ = out_tx.try_send(Message::OpenReject(OpenReject { connection_id: open.connection_id, code: 1 }));
                             continue;
                         };
@@ -1194,6 +1311,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         let Ok(permit) = permit else {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             counters.record_termination(crate::common::TerminationCategory::ResourceExhausted);
+                            tracing::debug!(category = "open_task_admission", service_id = open.service_id.0, "Open rejected");
                             let _ = out_tx.try_send(Message::OpenReject(OpenReject { connection_id: open.connection_id, code: 2 }));
                             continue;
                         };
@@ -1218,8 +1336,54 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         });
                     }
                     Ok(Message::Ping(ping)) => { let _ = out_tx.try_send(Message::Pong(eggtunnel_proto::Pong { nonce: ping.nonce })); }
-                    Ok(Message::Pong(_)) => {}
+                    Ok(Message::Pong(pong)) => {
+                        if let Some((nonce, sent_at)) = heartbeat_outstanding
+                            && nonce == pong.nonce
+                        {
+                            counters.record_heartbeat_pong(sent_at.into_std());
+                            heartbeat_outstanding = None;
+                        }
+                    }
+                    Ok(Message::RegisterAck(ack)) => {
+                        registration_deadline = None;
+                        let Some((service, ack_generation, reply)) = pending_registrations.remove(&ack.service_id) else {
+                            return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage));
+                        };
+                        if ack_generation != generation {
+                            if let Some(reply) = reply {
+                                let _ = reply.send(Err(TunnelError::Disconnected));
+                            }
+                            continue;
+                        }
+                        if reply.as_ref().is_none_or(oneshot::Sender::is_closed) {
+                            write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id })).await?;
+                            continue;
+                        }
+                        counters.binds.lock().unwrap_or_else(|p| p.into_inner()).push((session_id, service.id, ack.effective_bind.clone()));
+                        active_services.insert(service.id, service.clone());
+                        services.push(service.clone());
+                        counters.services.store(active_services.len(), std::sync::atomic::Ordering::Relaxed);
+                        counters.high_water_services.fetch_max(active_services.len(), std::sync::atomic::Ordering::Relaxed);
+                        tracing::info!(service_id = service.id.0, service_name = service.name.as_str(), effective_address = %std::net::Ipv6Addr::from(ack.effective_bind.address), effective_port = ack.effective_bind.port, session_generation = generation, "Service registered");
+                        if let Some(reply) = reply {
+                            let _ = reply.send(Ok(ack.effective_bind));
+                        }
+                    }
+                    Ok(Message::Error(error)) => {
+                        registration_deadline = None;
+                        let pending_id = pending_registrations.keys().next().copied();
+                        if let Some((_, _, reply)) = pending_id.and_then(|id| pending_registrations.remove(&id)) {
+                            let error = registration_error(error);
+                            tracing::debug!(registration_error = ?error.termination_category(), session_generation = generation, "Service registration rejected");
+                            if let Some(reply) = reply {
+                                let _ = reply.send(Err(error));
+                            }
+                        } else {
+                            return Err(TunnelError::Authorization);
+                        }
+                    }
                     Ok(Message::Drain(_)) => {
+                        tracing::info!(session_generation = generation, "server requested Session drain");
                         session_cancel.cancel();
                         break;
                     }
@@ -1230,14 +1394,68 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             Some(message) = out_rx.recv() => { write_message(&mut writer, &message).await?; }
             Some(command) = commands.recv() => {
                 match command {
-                    ClientCommand::Unregister(id) => {
+                    ClientCommand::Register { service, generation: command_generation, reply } => {
+                        if command_generation != generation {
+                            let _ = reply.send(Err(TunnelError::Disconnected));
+                            continue;
+                        }
+                        let duplicate = services.iter().any(|existing| existing.id == service.id || existing.name == service.name)
+                            || pending_registrations.values().any(|(pending, _, _)| pending.id == service.id || pending.name == service.name);
+                        if duplicate {
+                            let _ = reply.send(Err(TunnelError::ServiceAlreadyExists));
+                            continue;
+                        }
+                        if !pending_registrations.is_empty() {
+                            let _ = reply.send(Err(TunnelError::ResourceExhausted));
+                            continue;
+                        }
+                        if services.len().saturating_add(pending_registrations.len()) >= counters.policy.limits.services_per_session {
+                            let _ = reply.send(Err(TunnelError::ResourceExhausted));
+                            continue;
+                        }
+                        let registration = RegisterService {
+                            service_id: service.id,
+                            name: service.name.clone(),
+                            requested_bind: service.requested_bind.clone(),
+                            target: service.target.clone(),
+                        };
+                        if reply.is_closed() {
+                            continue;
+                        }
+                        match timeout(
+                            counters.policy.timeouts.handshake,
+                            write_message(&mut writer, &Message::RegisterService(registration)),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => return Err(error.into()),
+                            Err(_) => {
+                                let _ = reply.send(Err(TunnelError::Timeout));
+                                registration_timed_out = true;
+                                break;
+                            }
+                        }
+                        registration_deadline = Some(
+                            tokio::time::Instant::now() + counters.policy.timeouts.handshake,
+                        );
+                        pending_registrations.insert(service.id, (service, command_generation, Some(reply)));
+                    }
+                    ClientCommand::Unregister { id, reply } => {
+                        if let Some((_, _, register_reply)) = pending_registrations.get_mut(&id)
+                            && let Some(register_reply) = register_reply.take()
+                        {
+                            let _ = register_reply.send(Err(TunnelError::Cancelled));
+                        }
                         let was_present = active_services.remove(&id).is_some();
                         if was_present {
-                            apply_client_command(services, ClientCommand::Unregister(id));
+                            services.retain(|service| service.id != id);
                             counters.services.store(active_services.len(), std::sync::atomic::Ordering::Relaxed);
                             counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, service_id, _)| *service_id != id);
-                            write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id })).await?;
+                            tracing::info!(service_id = id.0, session_generation = generation, "Service unregistered");
                         }
+                        write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id })).await?;
+                        let _ = reply.send(Ok(()));
                     }
                 }
             }
@@ -1255,12 +1473,49 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     counters
         .connected
         .store(0, std::sync::atomic::Ordering::Relaxed);
-    Ok(())
+    let pending_error = if registration_timed_out {
+        TunnelError::Timeout
+    } else if cancel.is_cancelled() {
+        TunnelError::Cancelled
+    } else {
+        TunnelError::Disconnected
+    };
+    for (_, (_, _, reply)) in pending_registrations {
+        if let Some(reply) = reply {
+            let _ = reply.send(Err(match pending_error {
+                TunnelError::Cancelled => TunnelError::Cancelled,
+                _ => TunnelError::Disconnected,
+            }));
+        }
+    }
+    if registration_timed_out {
+        Err(TunnelError::Timeout)
+    } else {
+        Ok(())
+    }
 }
 
-fn apply_client_command(services: &mut Vec<ClientService>, command: ClientCommand) {
+fn apply_disconnected_command(services: &mut Vec<ClientService>, command: ClientCommand) {
     match command {
-        ClientCommand::Unregister(id) => services.retain(|service| service.id != id),
+        ClientCommand::Register { reply, .. } => {
+            let _ = reply.send(Err(TunnelError::Disconnected));
+        }
+        ClientCommand::Unregister { id, reply } => {
+            services.retain(|service| service.id != id);
+            tracing::info!(
+                service_id = id.0,
+                "desired Service unregistered while disconnected"
+            );
+            let _ = reply.send(Ok(()));
+        }
+    }
+}
+
+fn registration_error(error: ErrorMessage) -> TunnelError {
+    match error.code {
+        1 => TunnelError::ServiceAlreadyExists,
+        5 => TunnelError::ResourceExhausted,
+        _ => TunnelError::Authorization,
     }
 }
 
@@ -1363,6 +1618,7 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
     }.await;
     if let Err(error) = result {
         counters.record_termination(error.termination_category());
+        tracing::debug!(service_id = service.id.0, termination = ?error.termination_category(), "client data Open ended");
         if !cancel.is_cancelled() {
             let _ = out.try_send(Message::OpenReject(OpenReject {
                 connection_id: open.connection_id,
@@ -1438,6 +1694,327 @@ mod tests {
     }
 
     #[test]
+    fn client_config_debug_redacts_bearer_token_for_tracing_callers() {
+        let marker = "client-token-must-not-appear";
+        let mut config = config("localhost:443");
+        config.token = SecretToken::new(marker.as_bytes().to_vec()).unwrap();
+        let formatted = format!("{config:?}");
+        assert!(!formatted.contains(marker));
+        assert!(formatted.contains("REDACTED"));
+    }
+
+    fn service(id: u64, name: &str, target_port: u16) -> ClientService {
+        ClientService::new(
+            ServiceId(id),
+            ServiceName::new(name).unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", target_port).unwrap(),
+        )
+    }
+
+    async fn fake_connected_client() -> (
+        ClientHandle,
+        Counters,
+        JoinHandle<Result<(), TunnelError>>,
+        BoxStream,
+    ) {
+        fake_connected_client_with_policy(crate::RuntimePolicy::default()).await
+    }
+
+    async fn fake_connected_client_with_policy(
+        policy: crate::RuntimePolicy,
+    ) -> (
+        ClientHandle,
+        Counters,
+        JoinHandle<Result<(), TunnelError>>,
+        BoxStream,
+    ) {
+        let token = SecretToken::new(b"dynamic-registration-test".to_vec()).unwrap();
+        let initial_service = service(1, "initial", 80);
+        let counters = Counters::with_policy(policy);
+        let cancel = CancellationToken::new();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (commands, command_rx) = mpsc::channel(32);
+        let handle = ClientHandle {
+            cancel: cancel.clone(),
+            counters: counters.clone(),
+            commands,
+            #[cfg(feature = "quic")]
+            quic_client: Arc::new(std::sync::Mutex::new(None)),
+        };
+        let task_counters = counters.clone();
+        let task_cancel = cancel.clone();
+        let task_token = token.clone();
+        let task = tokio::spawn(async move {
+            let mut services = vec![initial_service];
+            let mut command_rx = command_rx;
+            let mut reconnect_delay = Duration::from_millis(500);
+            run_session(
+                Box::new(client_io),
+                SessionRun {
+                    token: &task_token,
+                    transport: ClientDataTransport::TcpTls {
+                        server_addr: "localhost:443".into(),
+                        server_name: "localhost".into(),
+                        tls: build_tls_config(None).unwrap(),
+                        websocket: false,
+                        #[cfg(feature = "outbound-proxy")]
+                        outbound: None,
+                    },
+                    connector: Arc::new(TcpTargetConnector),
+                    cancel: &task_cancel,
+                    counters: &task_counters,
+                    reconnect_delay: &mut reconnect_delay,
+                    services: &mut services,
+                    commands: &mut command_rx,
+                },
+            )
+            .await
+        });
+        let mut peer: BoxStream = Box::new(server_io);
+        assert!(matches!(
+            read_boxed(&mut peer).await.unwrap(),
+            Message::ClientHello(_)
+        ));
+        write_boxed(
+            &mut peer,
+            &Message::ServerHello(ServerHello {
+                version: ProtocolVersion::CURRENT,
+                capabilities: Capabilities::default(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_boxed(&mut peer).await.unwrap(),
+            Message::Auth(_)
+        ));
+        write_boxed(
+            &mut peer,
+            &Message::AuthOk(AuthOk {
+                session_id: eggtunnel_proto::SessionId::generate().unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+        let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+            panic!("expected initial registration")
+        };
+        write_boxed(
+            &mut peer,
+            &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+                service_id: initial.service_id,
+                effective_bind: EffectiveBind {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 31001,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+        (handle, counters, task, peer)
+    }
+
+    #[tokio::test]
+    async fn dynamic_registration_returns_disconnected_if_ack_is_lost() {
+        let (handle, _, task, mut peer) = fake_connected_client().await;
+
+        let register_handle = handle.clone();
+        let register = tokio::spawn(async move {
+            register_handle
+                .register_service(service(2, "dynamic", 81))
+                .await
+        });
+        let dynamic = tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(dynamic, Message::RegisterService(_)));
+        drop(peer);
+        assert!(matches!(
+            register.await.unwrap(),
+            Err(TunnelError::Disconnected)
+        ));
+        assert!(task.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelled_registration_is_unregistered_and_never_becomes_desired_state() {
+        let (handle, counters, task, mut peer) = fake_connected_client().await;
+        let register_handle = handle.clone();
+        let register = tokio::spawn(async move {
+            register_handle
+                .register_service(service(2, "cancelled", 81))
+                .await
+        });
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
+                .await
+                .unwrap()
+                .unwrap(),
+            Message::RegisterService(_)
+        ));
+        register.abort();
+        write_boxed(
+            &mut peer,
+            &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+                service_id: ServiceId(2),
+                effective_bind: EffectiveBind {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 31002,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
+                .await
+                .unwrap()
+                .unwrap(),
+            Message::UnregisterService(eggtunnel_proto::UnregisterService {
+                service_id: ServiceId(2)
+            })
+        ));
+        assert_eq!(counters.snapshot().registered_services, 1);
+        assert!(
+            counters
+                .snapshot()
+                .effective_binds
+                .iter()
+                .all(|(_, service_id, _)| *service_id != ServiceId(2))
+        );
+        drop(peer);
+        assert!(task.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn command_from_an_older_session_generation_cannot_register() {
+        let (handle, counters, task, mut peer) = fake_connected_client().await;
+        let (reply, response) = oneshot::channel();
+        let generation = counters
+            .session_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        handle
+            .commands
+            .send(ClientCommand::Register {
+                service: service(2, "stale-generation", 82),
+                generation: generation.saturating_sub(1),
+                reply,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            response.await.unwrap(),
+            Err(TunnelError::Disconnected)
+        ));
+        assert_eq!(counters.snapshot().registered_services, 1);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_boxed(&mut peer))
+                .await
+                .is_err()
+        );
+        handle.shutdown();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn dynamic_registration_ack_timeout_is_typed_and_closes_session() {
+        let mut policy = crate::RuntimePolicy::default();
+        policy.timeouts.handshake = Duration::from_millis(100);
+        let (handle, _, task, mut peer) = fake_connected_client_with_policy(policy).await;
+        let register_handle = handle.clone();
+        let register = tokio::spawn(async move {
+            register_handle
+                .register_service(service(2, "no-ack", 82))
+                .await
+        });
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), read_boxed(&mut peer))
+                .await
+                .unwrap()
+                .unwrap(),
+            Message::RegisterService(_)
+        ));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), register)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(TunnelError::Timeout)
+        ));
+        assert!(matches!(task.await.unwrap(), Err(TunnelError::Timeout)));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_tracks_rtt_misses_and_recovery_with_one_probe() {
+        let mut policy = crate::RuntimePolicy::default();
+        policy.timeouts.control_idle = Duration::from_secs(2);
+        policy.timeouts.heartbeat_interval = Duration::from_millis(50);
+        let (handle, counters, task, mut peer) = fake_connected_client_with_policy(policy).await;
+        let Message::Ping(first) =
+            tokio::time::timeout(Duration::from_secs(1), read_boxed(&mut peer))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("expected heartbeat Ping")
+        };
+        write_boxed(
+            &mut peer,
+            &Message::Pong(eggtunnel_proto::Pong { nonce: first.nonce }),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if counters.snapshot().heartbeat.latest_rtt_ms.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let Message::Ping(unanswered) = read_boxed(&mut peer).await.unwrap() else {
+            panic!("expected next heartbeat Ping")
+        };
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if counters.snapshot().heartbeat.missed_heartbeats > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        write_boxed(
+            &mut peer,
+            &Message::Pong(eggtunnel_proto::Pong {
+                nonce: unanswered.nonce,
+            }),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if counters.snapshot().heartbeat.missed_heartbeats == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(counters.snapshot().heartbeat.last_pong_age_ms.is_some());
+        handle.shutdown();
+        drop(peer);
+        let _ = task.await;
+    }
+
+    #[test]
     fn client_builder_applies_custom_service_ceiling() {
         let mut config = config("localhost:443");
         config.services.push(ClientService::new(
@@ -1459,6 +2036,9 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+        let mut dynamic_only = config("localhost:443");
+        dynamic_only.services.clear();
+        assert!(ClientBuilder::new(dynamic_only).validate().is_ok());
         let mut custom_ca = config("localhost:443");
         custom_ca.ca_pem = Some(b"custom CA".to_vec());
         assert!(ClientBuilder::new(custom_ca).validate().is_ok());

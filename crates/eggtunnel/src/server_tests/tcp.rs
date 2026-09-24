@@ -1,4 +1,192 @@
-use super::*;
+    use super::*;
+
+    #[tokio::test]
+    async fn acknowledged_dynamic_service_survives_reconnect_and_unregister_persists() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"dynamic-service-reconnect".to_vec()).unwrap();
+        let config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        };
+        let server_config = |listen_addr| ServerConfig {
+            listen_addr,
+            certificate_pem: config.certificate_pem.clone(),
+            private_key_pem: config.private_key_pem.clone(),
+            token: config.token.clone(),
+            allow_public_service_binds: false,
+        };
+        let server = Server::bind(config.clone()).await.unwrap();
+        let addr = server.local_addr();
+        let mut client_policy = crate::RuntimePolicy::default();
+        client_policy.limits.services_per_session = 2;
+        let client = crate::ClientBuilder::new(ClientConfig {
+            server_addr: addr.to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.clone().into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("static-service").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 80).unwrap(),
+            )],
+        })
+        .runtime_policy(client_policy)
+        .start()
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.handle().snapshot().effective_binds.len() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let handle = client.handle();
+        let duplicate_id = ClientService::new(
+            ServiceId(1),
+            ServiceName::new("other-name").unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", 82).unwrap(),
+        );
+        assert!(matches!(handle.register_service(duplicate_id).await, Err(crate::TunnelError::ServiceAlreadyExists)));
+        let duplicate_name = ClientService::new(
+            ServiceId(3),
+            ServiceName::new("static-service").unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", 83).unwrap(),
+        );
+        assert!(matches!(handle.register_service(duplicate_name).await, Err(crate::TunnelError::ServiceAlreadyExists)));
+        let denied_bind = ClientService::new(
+            ServiceId(4),
+            ServiceName::new("denied-bind").unwrap(),
+            RequestedBind::Ip { address: [0; 16], port: 0 },
+            TcpTarget::new("127.0.0.1", 84).unwrap(),
+        );
+        assert!(matches!(handle.register_service(denied_bind).await, Err(crate::TunnelError::Authorization)));
+
+        let dynamic = ClientService::new(
+            ServiceId(2),
+            ServiceName::new("dynamic-service").unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", 81).unwrap(),
+        );
+        let effective = client.handle().register_service(dynamic).await.unwrap();
+        assert_ne!(effective.port, 0);
+        assert!(matches!(
+            handle.register_service(ClientService::new(
+                ServiceId(3),
+                ServiceName::new("over-limit").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 85).unwrap(),
+            )).await,
+            Err(crate::TunnelError::ResourceExhausted)
+        ));
+
+        server.shutdown().await;
+        let server = Server::bind(server_config(addr)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if server.handle().snapshot().effective_binds.len() == 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let unregister_handle = client.handle();
+        let unregister = tokio::spawn(async move {
+            unregister_handle
+                .unregister_service(ServiceId(2))
+                .await
+        });
+        server.shutdown().await;
+        assert!(tokio::time::timeout(Duration::from_secs(5), unregister)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_ok());
+        let server = Server::bind(server_config(addr)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if server.handle().snapshot().effective_binds.len() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.handle().unregister_service(ServiceId(2)).await.unwrap();
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dynamic_registration_maps_server_service_limit_rejection() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"dynamic-server-limit".to_vec()).unwrap();
+        let server = crate::ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .bind_policy(BindPolicy {
+            max_services_per_session: 1,
+            ..BindPolicy::default()
+        })
+        .bind()
+        .await
+        .unwrap();
+        let client = Client::start(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("limited").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 80).unwrap(),
+            )],
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if server.handle().snapshot().effective_binds.len() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let result = client
+            .handle()
+            .register_service(ClientService::new(
+                ServiceId(2),
+                ServiceName::new("over-server-limit").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 81).unwrap(),
+            ))
+            .await;
+        assert!(matches!(result, Err(crate::TunnelError::ResourceExhausted)));
+        assert_eq!(client.handle().snapshot().registered_services, 1);
+        client.shutdown().await;
+        server.shutdown().await;
+    }
 
     #[tokio::test]
     async fn application_target_connector_relays_without_loopback_target() {

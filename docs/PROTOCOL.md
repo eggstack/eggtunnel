@@ -37,3 +37,11 @@ Credentials are represented only by the Auth payload and must only be sent
 after a secure transport is established. After DataHello, data streams carry
 opaque application bytes; application payload frames are not part of the
 control protocol.
+
+RegisterService and UnregisterService remain valid control messages throughout
+an established authenticated Session, not only during initial setup. Each
+RegisterService is answered with a RegisterAck or a bounded Error; clients
+correlate acknowledgements by ServiceId within that Session. Ping and Pong may
+also repeat during the Session and correlate by nonce. These existing message
+meanings are unchanged; dynamic registration and heartbeat reporting require
+no new wire messages.

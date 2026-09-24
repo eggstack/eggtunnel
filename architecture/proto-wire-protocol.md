@@ -362,3 +362,12 @@ Caveats a reviewer should carry into `client.rs` / `server.rs`:
 *See also: [Architecture Overview](overview.md) §§1–2 and §8 for session-lifecycle context;
 `docs/PROTOCOL.md` for the normative wire statement; `crates/eggtunnel/src/wire_io.rs:7-58`
 for the header-first network adapter.*
+
+### Session-time registration and heartbeat (M009)
+
+The established Session accepts RegisterService and UnregisterService
+repeatedly. RegisterAck correlates by ServiceId; Error carries only a code,
+so the client permits only one dynamic registration request in flight and
+correlates that response to the sole pending registration. Ping and Pong may
+repeat during the Session and correlate by nonce. M009 does not change these
+wire messages or add a message type.

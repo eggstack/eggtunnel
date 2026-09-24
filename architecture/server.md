@@ -666,3 +666,10 @@ legacy `Server::bind_*` helpers delegate through the builder. Session,
 handshake, service, pending, active-connection, queue, and timeout behavior
 comes from the immutable finite policy held by `Counters`; `BindPolicy` can
 further restrict service binds.
+
+Dynamic client registration reuses the established control protocol. Server
+registration handling continues to validate duplicate identity, service
+capacity, bind authorization, and listener creation before sending
+RegisterAck. UnregisterService remains idempotent and removes the listener and
+its pending ConnectionIds. Structured events report coarse outcomes without
+emitting bearer tokens or TLS material.

@@ -447,3 +447,7 @@ control idle 90 s, pending ConnectionId 30 s, relay drain 15 s, shutdown grace
 1 s, reconnect 500 ms to 30 s, and heartbeat 20 s. Validation requires
 positive durations no longer than 24 hours, an initial reconnect delay no
 greater than its maximum, and heartbeat shorter than control idle.
+
+`Snapshot.heartbeat` is a fixed-size view: generation, matching-Pong age in
+milliseconds, latest RTT in milliseconds, and consecutive missed heartbeat
+intervals. Shared counters reset this state at each new client generation.

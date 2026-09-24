@@ -14,8 +14,8 @@ categories = ["network-programming"]
 
 [features]
 default = ["client", "tls"]
-client = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:getrandom", "dep:rustls", "tls"]
-server = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:rustls", "tls"]
+client = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:getrandom", "dep:rustls", "dep:tracing", "tls"]
+server = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:rustls", "dep:tracing", "tls"]
 tls = ["dep:eggress-transport-tls"]
 quic = ["client", "server", "dep:eggress-transport-quic"]
 websocket = ["client", "server", "dep:eggress-protocol-websocket", "dep:tokio-tungstenite"]
@@ -41,6 +41,7 @@ tokio-rustls = { workspace = true, optional = true }
 webpki-roots = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 rcgen = "0.13"
