@@ -8,15 +8,13 @@ the sibling dives (proto / client / server / transports / CLI).
 
 ## 0. Scope and claim boundary
 
-- Workspace `0.2.0` candidate (`Cargo.toml:6`, proto pin `0.2.0`); published
-  crates.io line, tag, and GitHub release remain `0.1.0` until
-  owner-authorized M012 publication — `docs/DISTRIBUTION.md:5-20`,
-  `plans/closure/reverse-session/012-status.md`. (This file's older
-  `0.1.0`-only historical quotes are marked as such.)
+- Workspace `0.2.0` is the current published line (`Cargo.toml:6`, proto pin
+  `0.2.0`); crates.io packages, tag `v0.2.0`, and GitHub release are `0.2.0`
+  — `docs/DISTRIBUTION.md:5-9`, `plans/closure/reverse-session/012-status.md`.
+  (Older `0.1.0`-only historical quotes are marked as such.)
 - Wire protocol stays v1.0; crate version is independent.
 - M007–M011 closed, M012 conditionally closed, corrective addendum archived
-  (`plans/registry.md`); `scripts/test-install.sh` already bumped to
-  `0.2.0`.
+  (`plans/registry.md`); `scripts/test-install.sh` pins `0.2.0`.
 - "Supported" in this repo means **hosted build + checksum + per-runner
   install/version smoke for that archive** — `docs/DISTRIBUTION.md:24-28`,
   `docs/SUPPORT.md:41-47`. It does **not** mean interactive tunnel runtime
@@ -55,9 +53,9 @@ Workspace membership and shared metadata:
 - Members declared at `Cargo.toml:3`: `crates/eggtunnel-proto`,
   `crates/eggtunnel`, `crates/eggtunnel-cli`.
 - Shared version/edition/MSRV/license at `Cargo.toml:5-10`: version `0.2.0`
-  (candidate; published crates.io line still `0.1.0` per §0),
+  (current published crates.io line per §0),
   edition `2024`, `rust-version = "1.89"`, `license = "MIT"`. The library's
-  versioned dependency on the proto crate pins the same candidate
+  versioned dependency on the proto crate pins the same line
   (`crates/eggtunnel/Cargo.toml:26`: `eggtunnel-proto ... version = "0.2.0"`).
 - `fixtures/embedder` is deliberately **not** a workspace member
   (`fixtures/embedder/Cargo.toml:7` empty `[workspace]` severs membership), so
@@ -113,22 +111,23 @@ thresholds.
   first version line in the file — today that is the `[workspace.package]`
   version, but it is position-sensitive rather than TOML-aware.
 
-### 3.2 Build matrix — candidate targets and qualification state
+### 3.2 Build matrix — supported targets and qualification state
 
 `release.yml:13-24`:
 
-| Target | Runner | Qualification state (per `docs/DISTRIBUTION.md:22-37`, `docs/SUPPORT.md:38-51`, `plans/closure/reverse-session/006-status.md:31-41` for the published `0.1.0` line, `plans/closure/reverse-session/012-status.md:45-62` for the `0.2.0` candidate) |
+| Target | Runner | Qualification state (per `docs/DISTRIBUTION.md:11-21`, `docs/SUPPORT.md:38-47`, `plans/closure/reverse-session/006-status.md:31-41` for the published `0.1.0` line, `plans/closure/reverse-session/012-status.md:45-54` for the published `0.2.0` line) |
 |---|---|---|
-| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Supported (build + install/version smoke). Published-line release run `35804871876` linux-x64 ~1m40s; no `0.2.0` tag workflow run yet — awaiting owner-authorized release |
-| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | Supported (build + install/version smoke). No `0.2.0` tag workflow run yet — awaiting owner-authorized release |
-| `x86_64-apple-darwin` | `macos-15-intel` | Supported (build + install/version smoke). No `0.2.0` tag workflow run yet — awaiting owner-authorized release |
-| `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native candidate local archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42`). Only target with off-runner consumer evidence |
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Supported (build + install/version smoke). Published-line release runs: `35804871876` for `0.1.0`; `0.2.0` run recorded in `012-status.md` and the post-publication closure |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | Supported (build + install/version smoke). `0.2.0` evidence in `012-status.md` and the post-publication closure |
+| `x86_64-apple-darwin` | `macos-15-intel` | Supported (build + install/version smoke). `0.2.0` evidence in `012-status.md` and the post-publication closure |
+| `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42` plus post-publication closure). Only target with off-runner consumer evidence |
 
-Candidate CI evidence (not a release): exact-head hosted CI run
+Hosted CI evidence for the published `0.2.0` line: exact-head hosted CI run
 `36012640890` passed all standard jobs, all seven feature slices, MSRV, and
 the minimal-dependency guard on the `0.2.0` candidate SHA
-(`012-status.md:21,43`). No `v0.2.0` tag, GitHub release, or crates.io
-publication exists (`012-status.md:22,83-87`).
+(`012-status.md:21,43`). The `v0.2.0` tag, four-target release workflow,
+GitHub release assets, and crates.io publication are recorded in
+`012-status.md` and any post-publication closure record.
 
 Unqualified / unsupported (explicitly called out so reviewers do not infer
 support from toolchain availability):
@@ -178,17 +177,15 @@ Published crate order (not GitHub assets): `eggtunnel-proto` first, then
 `eggtunnel` once the proto line is resolvable from the registry, because the
 library has a versioned dependency on the proto crate
 (`crates/eggtunnel/Cargo.toml:26` pins `0.2.0`; `docs/DISTRIBUTION.md:62-69`).
-Nothing for `0.2.0` is published yet: `012-status.md:56-62` leaves
-`eggtunnel-proto 0.2.0` and `eggtunnel 0.2.0` unpublished, the clean
-`eggtunnel = "0.2"` registry consumer unresolvable, and the tag-triggered
-four-target workflow awaiting explicit owner authorization. The M006 closure
-records the ordering proof for the published `0.1.0` line as historical
-evidence: dry-run publish of the library before the proto crate failed with
-`no matching package named eggtunnel-proto found`
+The M006 closure records the ordering proof for the published `0.1.0` line
+as historical evidence: dry-run publish of the library before the proto
+crate failed with `no matching package named eggtunnel-proto found`
 (`plans/closure/reverse-session/006-status.md:50`); M012 re-confirmed the
 same ordering constraint for the candidate via a command-scoped local proto
 patch, which is qualification-only and absent from package metadata
-(`012-status.md:34`).
+(`012-status.md:34`). The publication evidence (tag workflow run IDs,
+crates.io order confirmation, clean registry consumer) is recorded in
+`012-status.md` plus any post-publication closure.
 `eggtunnel-cli` stays `publish = false` and ships only inside the binary
 archive (`crates/eggtunnel-cli/Cargo.toml:10`, `docs/DISTRIBUTION.md:9-11`).
 
@@ -339,12 +336,12 @@ Why exact (`=`) rather than caret:
 | Doc | Owns | Review anchor |
 |---|---|---|
 | `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-21` |
-| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (crate line `0.2.0` candidate, published `0.1.0`, wire `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
+| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
 | `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-84` |
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-85` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-52` |
 | `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring | `docs/OPERATIONS.md:1-49` |
-| `DISTRIBUTION.md` | Release state (**published `0.1.0`** at `docs/DISTRIBUTION.md:5-11` + **`0.2.0` candidate** at `:13-20`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface, `:20`), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-84` |
+| `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:11-14`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-84` |
 | `API.md` | Crate roles + publication intent, recommended `default-features = false` dependency lines, client/server surface pointers, semver warning (breaking changes allowed pre-1.0) | `docs/API.md:1-53` |
 | `EMBEDDING.md` | Caller-owned runtime/tracing/config/connector recipe, `start_with_connector` variants, per-transport entry points, secret-store guidance | `docs/EMBEDDING.md:1-51` |
 
@@ -371,14 +368,12 @@ Doc-vs-code consistency risks (check these first in any behavior change):
 5. **Wire-vs-crate versioning** (PROTOCOL + API + roadmap §13): the "no 1.x
    guarantee" disclaimer must survive any copy-edit; deleting it would imply a
    stability promise the code does not keep. Wire stays `1.0` while the crate
-   candidate is `0.2.0` — never conflate the two numbers.
-6. **Candidate-vs-published language** (`docs/DISTRIBUTION.md:5-20`,
-   `docs/SUPPORT.md:48-51`, `CHANGELOG.md:3-42`,
-   `plans/closure/reverse-session/012-status.md:5-8,81-87`): until the
-   owner-authorized M012 publication sequence completes, the published line,
-   current release assets, and registry consumer stay `0.1.0`; `0.2.0` is a
-   candidate only. Any edit that presents `0.2.0` as published, or drops the
-   "do not use as a dependency / do not tag" guard, lies.
+   line is `0.2.0` — never conflate the two numbers.
+6. **Published language** (`docs/DISTRIBUTION.md:5-9`, `docs/SUPPORT.md:48-51`,
+   `CHANGELOG.md:3-43`, `plans/closure/reverse-session/012-status.md:5-22`):
+   the current published line is `0.2.0`. Any edit that reverts to "candidate
+   only" / "do not use as a dependency / do not tag" guards or claims `0.1.0`
+   as the current published release is stale.
 
 ## 6. Plans system — how planning and evidence flow
 
@@ -433,13 +428,11 @@ suffices without the CLI, default features, or a library-owned runtime**
   candidate (`012-status.md:35-36`); the M006 registry-consumption variant
   (published `eggtunnel = "0.1"` from crates.io, lockfile `07edbb9a…`)
   compiled and ran (`006-status.md:23`) and remains the frozen historical
-  record for the `0.1.0` line. Own `fixtures/embedder/Cargo.lock` proves the
-  downstream resolution independently of the workspace lockfile. Published
-  snippets in `docs/API.md:19` and `docs/EMBEDDING.md:9` intentionally still
-  read `version = "0.1"` until the authorized `0.2.0` publication; the M012
-  record states the clean `eggtunnel = "0.2"` registry consumer cannot resolve
-  until the proto-then-library sequence succeeds (`012-status.md:28,56-62`).
-  Do not bump the snippet or claim a `0.2` registry consumer before then.
+  record for the `0.1.0` line. The clean post-publication registry consumer
+  is `eggtunnel = "0.2"` from crates.io (resolved by the M012 publication
+  sequence). Own `fixtures/embedder/Cargo.lock` proves the downstream
+  resolution independently of the workspace lockfile; the path-based fixture
+  uses the workspace crate directly and does not pin a registry version.
 
 ## 8. Review checklist — gaps, drift, and stale-state risks
 
@@ -473,11 +466,9 @@ suffices without the CLI, default features, or a library-owned runtime**
   self-update, no service-manager integration by design
   (`docs/DISTRIBUTION.md:47-60`). Any "update" request reopens the Eggup
   deferral decision — needs an ADR, not a script patch.
-- [ ] Post-tag tree discipline (M012 gate): no `v0.2.0` tag exists and none
-  may be created without explicit owner authorization
-  (`012-status.md:5-8,81-87`; `CHANGELOG.md:41-42`). After the authorized tag,
-  confirm no production, dependency, workflow, or packaging input changed
-  after the tag the way M006 did (diff tag commit vs closure tree;
+- [ ] Post-tag tree discipline (M012 gate): after the authorized tag, confirm
+  no production, dependency, workflow, or packaging input changed after the
+  tag the way M006 did (diff tag commit vs closure tree;
   `006-status.md:12`). The M012 record additionally requires the
   documentation-to-published-state closure commit plus rerun CI
   (`012-status.md:61-62`).
@@ -542,17 +533,17 @@ suffices without the CLI, default features, or a library-owned runtime**
   consistent with `006-status.md:37-41` build-only claims today — if new triple
   directories appear, confirm they are check-only experiments and not nascent
   support claims.
-- [ ] Candidate-vs-published sweep (run before any release): `docs/DISTRIBUTION.md:5-20`
-  (published `0.1.0` vs `0.2.0` candidate + Eggpack no-interface line),
-  `docs/SUPPORT.md:48-51` (crates published at `0.1.0`, workspace candidate `0.2.0`),
-  `docs/PROTOCOL.md:3-6` (crate `0.2.0` candidate / published `0.1.0` / wire `1.0`),
-  `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.1`),
-  `CHANGELOG.md:3-42` (candidate-only guard), and
-  `plans/closure/reverse-session/012-status.md:5-8,56-62,81-87`
-  (no tag/publication/registry consumer yet) must all agree that `0.2.0` is
-  a candidate until the authorized publication sequence completes. After
-  publication, flip them together plus rerun CI per `012-status.md:61-62`.
-  Never write crate `0.2.0` where wire `1.0` is meant (see §5 sync-point #5).
+- [ ] Published-vs-previous sweep (run before any release): `docs/DISTRIBUTION.md:5-9`
+  (current published `0.2.0` vs `0.1.0` historical line + Eggpack no-interface line),
+  `docs/SUPPORT.md:48-51` (crates published at `0.2.0`),
+  `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.0`),
+  `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.2`),
+  `CHANGELOG.md:3-43` (released entry), and
+  `plans/closure/reverse-session/012-status.md:5-22` (tag, GitHub release,
+  crates.io publication, clean registry consumer) must all agree on the
+  current published line. Re-flip them together plus rerun CI if any future
+  release rewinds state. Never write crate `0.2.0` where wire `1.0` is
+  meant (see §5 sync-point #5).
 - [ ] Eggpack re-validation (`plans/registry.md:116`, `012-status.md:32`):
   Eggpack `main` at `4d673b90` has manifest/ReleasePlan/bootstrap foundations
   but CI orchestration is plan-only and adoption is blocked — no end-to-end

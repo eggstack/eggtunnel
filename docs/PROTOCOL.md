@@ -1,14 +1,13 @@
 # Native protocol, version 1.0
 
-The wire version is distinct from the Rust crate version. The current crate
-line is Eggtunnel `0.2.0` (workspace candidate; published crates.io line
-remains `0.1.0`) and uses wire version `1.0`. The crates are
-pre-1.0: Rust API compatibility is not promised across minor releases until a
-1.0 library release. Wire major-version mismatches are rejected. Minor
-versions are currently informational; there is no backward-peer support
-window or capability negotiation beyond exchanging the current empty
-capability set. Do not infer a long-term 1.x protocol guarantee from the
-current wire number.
+The wire version is distinct from the Rust crate version. The current
+published crate line is Eggtunnel `0.2.0` and uses wire version `1.0`. The
+crates are pre-1.0: Rust API compatibility is not promised across minor
+releases until a 1.0 library release. Wire major-version mismatches are
+rejected. Minor versions are currently informational; there is no
+backward-peer support window or capability negotiation beyond exchanging the
+current empty capability set. Do not infer a long-term 1.x protocol guarantee
+from the current wire number.
 
 Each control frame has a 14-byte header followed by one postcard payload:
 

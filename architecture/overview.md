@@ -6,9 +6,10 @@ services through server-owned listeners. Each external connection opens a
 separate TLS data connection back through the client to a client-owned target.
 
 Workspace `0.2.0` (crate line `0.2.0`, wire protocol v1.0 — wire and crate
-versions are independent). Published crates.io line and tag remain `0.1.0`
-until the owner-authorized M012 publication; see `docs/DISTRIBUTION.md` and
-`architecture/ops-tooling-distribution.md`.
+versions are independent). The current published crates.io line, tag, and
+GitHub release are `0.2.0` (M012 release qualification,
+`plans/closure/reverse-session/012-status.md`); see `docs/DISTRIBUTION.md`
+and `architecture/ops-tooling-distribution.md`.
 
 This document is the birds-eye view and the index for discrete deep dives in
 this directory. Each section below summarizes one module/component and links
@@ -214,28 +215,28 @@ websocket,proxy}.rs`.
 
 ## 7. Ops, tooling, distribution, process docs ([deep dive](ops-tooling-distribution.md))
 
-- Workspace `0.2.0` candidate (`Cargo.toml:6`, proto pin `0.2.0`); published
-  crates.io line, tag `v0.1.0`, and GitHub release remain `0.1.0` until
-  owner-authorized M012 publication (`docs/DISTRIBUTION.md:5-20`,
+- Workspace `0.2.0` is the current published line (`Cargo.toml:6`, proto pin
+  `0.2.0`); published crates.io line, tag `v0.2.0`, and GitHub release are
+  `0.2.0` (`docs/DISTRIBUTION.md:5-9`,
   `plans/closure/reverse-session/012-status.md`). Wire stays v1.0.
 - Release surface unchanged: 4 targets (linux x64/arm64, macOS Intel/arm64),
   tag-triggered `release.yml`, per-runner install/version smoke, global
   `SHA256SUMS` + attestations, `install.sh` allowlist.
-  `scripts/test-install.sh` already bumped to `0.2.0`.
+  `scripts/test-install.sh` pins `0.2.0`.
 - CI still 4 jobs (check / 7 feature slices / MSRV 1.89 / minimal-deps);
   M007–M011 closed, M012 conditionally closed with exact-head hosted CI;
   sustained fuzz/soak stays developer-invoked, not per-push.
 - Supply chain: Eggress `=1.0.8`, `cargo audit` 0 vulns + 1 informational
   `atomic-polyfill` unmaintained finding, `cargo deny check licenses` pass
-  (4 clarifies). API/EMBEDDING `0.1` snippets intentionally frozen until
-  publication.
+  (4 clarifies). API/EMBEDDING snippets at `version = "0.2"` track the
+  published line.
 - `scripts/generate-third-party-notices.py`, `scripts/test-install.sh`,
   `install.sh`, `.github/workflows/ci.yml` + `release.yml`,
   `deny.toml` (`cargo deny`), `Cargo.lock`.
 - `docs/` (ARCHITECTURE, PROTOCOL, CONFIGURATION, SECURITY, SUPPORT,
   OPERATIONS, DISTRIBUTION, API, EMBEDDING) and `plans/` (spec, terminology,
   roadmap, ADRs, implementation/closure evidence incl. M007–M012, subsystem
-  roadmaps). Candidate release targets + qualification state in
+  roadmaps). Supported release targets + qualification state in
   `docs/DISTRIBUTION.md`.
 
 ## 8. How everything fits together

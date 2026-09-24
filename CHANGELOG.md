@@ -1,10 +1,11 @@
 # Changelog
 
-## 0.2.0 candidate — not yet published
+## 0.2.0 — 2026-09-24
 
-This candidate expands the pre-1.0 public library API and hardens the existing
-reverse-session implementation. Wire protocol compatibility remains version
-1.0. The crate version is independent of the wire version.
+The post-0.1 line adds material additive capability to the public library API
+and hardens the existing reverse-session implementation. Wire protocol
+compatibility remains version 1.0. The crate version is independent of the wire
+version.
 
 ### Added and clarified
 
@@ -34,9 +35,22 @@ reverse-session implementation. Wire protocol compatibility remains version
 - QUIC rejects custom CA and mTLS; WSS rejects mTLS; outbound proxy rejects
   QUIC and mTLS. WebSocket relay does not promise TCP half-close semantics.
 - There is no self-update engine. The CLI remains a private archive binary.
-- Candidate `cargo audit` found no known vulnerabilities and one
-  target-gated, transitive unmaintained advisory for `atomic-polyfill 1.0.3`;
-  see `docs/DISTRIBUTION.md` and the M012 closure record for its disposition.
+- `cargo audit` finds no known vulnerabilities and one target-gated,
+  transitive unmaintained advisory for `atomic-polyfill 1.0.3`; see
+  `docs/DISTRIBUTION.md` and the M012 closure record for its disposition.
 
-The candidate is not a published release. Do not create tag `v0.2.0`, publish
-crates, or publish a GitHub release until explicit owner authorization.
+### Pre-1.0 compatibility note
+
+Public Rust API changes may be breaking across minor releases until `1.0`.
+Compile against the exact version selected by the downstream lockfile.
+`eggtunnel-proto` types and message IDs are wire-facing and require extra care;
+see [the protocol guide](docs/PROTOCOL.md).
+
+## 0.1.0 — initial published release
+
+First public release. Authenticated TCP/TLS reverse-session library and CLI,
+optional QUIC, WebSocket, outbound-proxy, and mTLS profiles, four supported
+binary targets, and supply-chain review (`cargo audit` 0 vulns,
+`cargo deny check licenses` pass). See
+[`v0.1.0`](https://github.com/eggstack/eggtunnel/releases/tag/v0.1.0) for
+release assets and the M006 closure record for qualification evidence.

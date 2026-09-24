@@ -541,11 +541,10 @@ Properties to hold in review:
 - **Session semantics unchanged.** QUIC/WS "do not change Service,
   authorization, TargetConnector, or ConnectionId semantics"
   (`docs/SUPPORT.md:10`).
-- **Support-table caveat.** `docs/SUPPORT.md:50-51` still states crates
-  `eggtunnel-proto` and `eggtunnel` "are published at `0.1.0`" while the
-  workspace `version` is `0.2.0` (`Cargo.toml:6`); treat the SUPPORT.md publish
-  claim as a `0.2.0`-candidate until that line is updated (cross-drift, not
-  fixed here).
+- **Support-table caveat.** `docs/SUPPORT.md:48-51` documents that crates
+  `eggtunnel-proto` and `eggtunnel` are published at `0.2.0`, matching the
+  workspace `version = "0.2.0"` (`Cargo.toml:6`). The transport profile
+  matrix is unchanged from `0.1.0`.
 
 ---
 

@@ -2,26 +2,18 @@
 
 ## Current release state
 
-The published release line is `0.1.0`. `eggtunnel-proto 0.1.0` and
-`eggtunnel 0.1.0` are published on crates.io (`eggtunnel-proto` first, then
-`eggtunnel`, matching the versioned dependency order). Git tag `v0.1.0`
-points at the qualified head and GitHub release `v0.1.0` carries versioned
-archives, a SHA-256 manifest, build provenance attestations, and
-`install.sh`. `eggtunnel-cli` remains a private workspace package
-(`publish = false`) and ships only inside the binary archive. The CLI crate
-depends on the library, never the reverse. (The workspace manifest is
-`0.2.0`, the M012 release candidate below; release tags must equal the
-workspace `version` per `release.yml`, so the next tag after authorization
-will be `v0.2.0`.)
+The current release line is `0.2.0` (published 2026-09-24). `eggtunnel-proto
+0.2.0` and `eggtunnel 0.2.0` are published on crates.io (`eggtunnel-proto`
+first, then `eggtunnel`, matching the versioned dependency order). Git tag
+`v0.2.0` points at the qualified head and the GitHub release `v0.2.0`
+carries versioned archives, a SHA-256 manifest, build provenance
+attestations, and `install.sh`. `eggtunnel-cli` remains a private workspace
+package (`publish = false`) and ships only inside the binary archive. The CLI
+crate depends on the library, never the reverse.
 
-## 0.2.0 candidate status
-
-The workspace is being qualified as `0.2.0` under M012. This is a release
-candidate only: the published version, current release assets, and registry
-consumer remain `0.1.0` until the owner authorizes and completes the release
-sequence. Do not use `0.2.0` as a crates.io dependency until both crates are
-published. The candidate keeps the existing four targets and release workflow;
-Eggpack has no released/adopted end-to-end CI orchestration interface yet.
+The previous published line `0.1.0` remains immutable on crates.io and on
+the GitHub release of the same tag for historical reference; future work
+builds on `0.2.0`.
 
 ## Release targets
 
@@ -66,11 +58,11 @@ Eggup transaction machinery into the CLI. No update engine is embedded.
 ## Publication ordering
 
 The Rust publication order is `eggtunnel-proto`, then `eggtunnel` (which has
-a versioned dependency on the former). Both were published for `0.1.0` after
-package inspection, downstream compile qualification, dependency/license
-review, and acceptance of the release support matrix. The CLI remains
-unpublished. No automatic crate publication is configured; each publish is an
-explicit authorized action.
+a versioned dependency on the former). Both are published after package
+inspection, downstream compile qualification, dependency/license review, and
+acceptance of the release support matrix. The CLI remains unpublished. No
+automatic crate publication is configured; each publish is an explicit
+authorized action.
 
 ## Supply-chain review
 
@@ -85,4 +77,10 @@ explicit authorized action.
   is present. Four legacy `/`-separated license declarations are clarified to
   SPDX equivalents pinned by license-file hashes.
 - Both checks run in CI on every push and pull request. The exact outcomes for
-  the release head were verified before tagging.
+  the release head are verified before tagging.
+
+## Release evidence
+
+The current release evidence is in the M012 closure record
+(`plans/closure/reverse-session/012-status.md`) and any follow-up closure
+records covering the authorized publication and registry consumer steps.
