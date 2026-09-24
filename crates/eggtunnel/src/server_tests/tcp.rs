@@ -342,6 +342,60 @@ use super::*;
     }
 
     #[tokio::test]
+    async fn custom_control_idle_timeout_is_reported_as_timeout() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"custom-control-idle-timeout".to_vec()).unwrap();
+        let mut server_policy = crate::RuntimePolicy::default();
+        server_policy.timeouts.control_idle = Duration::from_millis(400);
+        server_policy.timeouts.heartbeat_interval = Duration::from_millis(100);
+        let server = crate::ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .runtime_policy(server_policy)
+        .bind()
+        .await
+        .unwrap();
+        let mut client_policy = crate::RuntimePolicy::default();
+        client_policy.timeouts.control_idle = Duration::from_secs(3);
+        client_policy.timeouts.heartbeat_interval = Duration::from_secs(2);
+        let client = crate::ClientBuilder::new(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("idle-timeout").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )],
+        })
+        .runtime_policy(client_policy)
+        .start()
+        .await
+        .unwrap();
+        let handle = server.handle();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                if handle.snapshot().last_termination
+                    == Some(crate::TerminationCategory::Timeout)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn tcp_tls_reverse_session_registers_and_relays_data() {
         let (cert, key) = certificate();
         let token = SecretToken::new(b"test-secret".to_vec()).unwrap();

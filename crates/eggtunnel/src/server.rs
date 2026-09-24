@@ -1107,10 +1107,14 @@ async fn serve_control(
     let idle_timeout = counters.policy.timeouts.control_idle;
     let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);
+    let mut idle_expired = false;
     loop {
         tokio::select! {
             _ = context.cancel.cancelled() => break,
-            _ = &mut idle => break,
+            _ = &mut idle => {
+                idle_expired = true;
+                break;
+            },
             incoming = read_message(&mut reader) => {
                 match incoming {
                     Ok(Message::RegisterService(register)) => {
@@ -1189,7 +1193,11 @@ async fn serve_control(
     children.abort_all();
     while children.join_next().await.is_some() {}
     remove_all_pending(&context).await;
-    Ok(())
+    if idle_expired {
+        Err(TunnelError::Timeout)
+    } else {
+        Ok(())
+    }
 }
 
 /// Bounded sliding-window limiter keyed by the TCP peer address. It retains no
