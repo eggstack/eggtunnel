@@ -1,6 +1,6 @@
 # Reverse Session M011 — Sustained Robustness and Performance Qualification
 
-Status: closing
+Status: closed
 
 Planning baseline: 0c8830e76d92c209485eaf955cbdb51bdc953413
 
@@ -249,3 +249,5 @@ Create `plans/closure/reverse-session/011-status.md` with:
 - optional Eggbench/Eggchaos evidence, clearly supplemental;
 - full verification and hosted CI;
 - residual findings/disposition.
+
+Closure record: `plans/closure/reverse-session/011-status.md`.

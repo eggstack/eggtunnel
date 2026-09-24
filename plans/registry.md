@@ -29,20 +29,20 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M011 closing | M010 is strictly closed. M011 implementation and local evidence are complete; hosted CI run 36003630154 on 950f027 remains queued. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 ready | M011 is strictly closed; M012 release/publication work may proceed, with publication still requiring explicit owner authorization. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M011 sustained robustness/performance qualification | closing | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | Local gates and sustained evidence complete; hosted exact-head CI run 36003630154 is queued. |
-| Reverse session | M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | Hard dependency: M011 strict closure; irreversible publication also requires explicit owner authorization. |
+| Reverse session | M012 0.2.0 release qualification/publication gate | ready | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | M011 strict closure satisfied; irreversible publication also requires explicit owner authorization. |
 
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
 | Reverse session | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md; private runtime ownership, explicit Service lifecycle/heartbeat state, and exact-head hosted qualification. |
+| Reverse session | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md; bounded fuzz/soak/footprint evidence and exact-head hosted CI passed. |
 | Reverse session | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md; dynamic lifecycle, bounded heartbeat and secret-safe tracing qualified on hosted CI. |
 | Reverse session | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md; canonical builders, finite configurable policy, supported profile validation, and hosted qualification. |
 | Reverse session | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md; Rust 1.89, seven feature slices, minimal graph, PEM parser replacement, and full hosted CI passed. |
@@ -80,6 +80,14 @@ M010 closure record at plans/closure/reverse-session/010-status.md records the
 private responsibility boundaries, explicit dynamic-Service state owner,
 heartbeat state, moved client tests, local/hosted feature and MSRV evidence,
 and minimal dependency guard. No high/medium finding remains open.
+
+### M011 sustained qualification (closed)
+
+M011 closure record at plans/closure/reverse-session/011-status.md records the
+bounded decoder fuzz run, deterministic lifecycle sequence, TCP/TLS and
+optional-transport soaks, host-specific footprint data, full local gates, and
+exact-head hosted CI. M012 is ready; publication authorization remains a
+separate operational gate.
 
 ## Current architecture constraints
 
