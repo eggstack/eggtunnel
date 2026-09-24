@@ -1,6 +1,6 @@
 # Reverse Session M009 — Dynamic Service Lifecycle and Operational Observability
 
-Status: ready
+Status: closed
 
 Planning baseline: 2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e
 
@@ -24,7 +24,7 @@ This milestone adds no new transport and no new wire message. It uses the existi
 
 ## 2. Readiness and dependency status
 
-M008 is strictly closed at `plans/closure/reverse-session/008-status.md`. Dynamic Service state and heartbeat policy can now use its canonical runtime policy and composition surface instead of introducing another temporary configuration path. M009 is ready under ADR-0001 while preserving the existing RegisterService/UnregisterService and Ping/Pong wire semantics.
+M008 is strictly closed at `plans/closure/reverse-session/008-status.md`. Dynamic Service state and heartbeat policy used its canonical runtime policy and composition surface. M009 is closed under ADR-0001 with the existing RegisterService/UnregisterService and Ping/Pong wire semantics preserved; see `plans/closure/reverse-session/009-status.md`.
 
 No new ADR is required if this milestone uses the existing wire semantics exactly as defined.
 

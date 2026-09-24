@@ -29,18 +29,19 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M009 ready | M001-M008 and C001 are closed; M009 is ready under ADR-0001. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M009 closed | M001-M009 and C001 are closed; later negotiated-protocol and Eggpack work remains gated by its stated prerequisites. |
 | Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M009 dynamic Service lifecycle/observability | ready | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | M008 strict closure recorded at plans/closure/reverse-session/008-status.md; no new ADR is needed while existing wire semantics are preserved. |
+
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
+| Reverse session | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md; dynamic lifecycle, bounded heartbeat and secret-safe tracing qualified on hosted CI. |
 | Reverse session | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md; canonical builders, finite configurable policy, supported profile validation, and hosted qualification. |
 | Reverse session | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md; Rust 1.89, seven feature slices, minimal graph, PEM parser replacement, and full hosted CI passed. |
 | Reverse session | M006 distribution/downstream qualification | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md; tag v0.1.0, hosted 4-target release with install/version smoke, crates.io publication of eggtunnel-proto then eggtunnel, registry-consumer qualification, audit (0 vulns) + deny licenses pass. |

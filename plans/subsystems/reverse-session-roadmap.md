@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M008 and C001 closed; M009 ready
+Status: active — M001-M009 and C001 closed; later work remains gated
 
 Canonical references:
 
@@ -169,7 +169,7 @@ M004 and M005 have a hard dependency on M003 but only soft/interface dependencie
 
 M006 depends on M003 plus whichever optional transport profiles are declared part of the first published support matrix.
 
-M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is now strictly closed; M009 is ready under ADR-0001 provided existing RegisterService/UnregisterService and Ping/Pong semantics remain unchanged.
+M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is strictly closed and M009 is now closed under ADR-0001 with existing RegisterService/UnregisterService and Ping/Pong semantics preserved.
 
 A future negotiated-protocol milestone requires a concrete extension plus an accepted ADR. A future Eggpack distribution cutover requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces. Neither is dependency-ready today.
 
@@ -414,7 +414,7 @@ Exit conditions:
 
 ### Milestone M009 — Dynamic Service lifecycle and operational observability
 
-Status: ready — M008 strict closure recorded at `plans/closure/reverse-session/008-status.md`.
+Status: closed — closure recorded at `plans/closure/reverse-session/009-status.md`.
 
 Implementation plan:
 
@@ -513,7 +513,7 @@ Do not accumulate unbounded event history in the runtime.
 
 The CLI may render snapshots as human-readable text and JSON.
 
-Libraries emit tracing events without installing subscribers. This intended contract is not fully implemented at the M007 planning baseline; M009 owns the bounded tracing/heartbeat implementation after M008 stabilizes runtime policy.
+Libraries emit tracing events without installing subscribers. This intended contract was incomplete at the M007 planning baseline; M009 implements bounded tracing and heartbeat health after M008 stabilized runtime policy.
 
 ## 16. Performance and footprint
 
@@ -594,4 +594,4 @@ Explicitly deferred until after M006 or a new ADR:
 | M006 distribution/downstream | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md | none |
 | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md | Rust 1.89, feature slices, dependency guard, PEM parser, and hosted CI passed |
 | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md | M007 strict closure |
-| M009 dynamic Service lifecycle/observability | ready | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | — | M008 strict closure recorded |
+| M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
