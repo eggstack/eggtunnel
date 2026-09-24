@@ -1,6 +1,6 @@
 # Reverse Session M008 — Configurable Runtime Policy and API Composition
 
-Status: blocked
+Status: ready
 
 Planning baseline: 2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e
 
@@ -22,11 +22,11 @@ Replace hard-coded operational policy and constructor proliferation with validat
 
 The result should let embedders tune finite resource ceilings/timeouts and compose transport/identity/proxy choices without adding another constructor for every feature combination.
 
-## 2. Why this milestone is blocked
+## 2. Why this milestone was blocked; readiness update
 
 The work is technically feasible now, but M007 intentionally stabilizes module boundaries and continuous feature/MSRV qualification first. Performing the public/configuration refactor before that cleanup would mix structural movement with API semantics and make regression attribution harder.
 
-Once M007 closes, this plan becomes dependency-ready without another architecture decision so long as the work remains within ADR-0001.
+M007 is strictly closed at `plans/closure/reverse-session/007-status.md`. Its hosted MSRV, feature-slice, minimal-dependency, and broad verification evidence is recorded there. The hard dependency is satisfied; this plan is ready without another architecture decision so long as work remains within ADR-0001.
 
 ## 3. Invariants
 

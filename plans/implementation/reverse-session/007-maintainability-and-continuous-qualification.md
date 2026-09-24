@@ -1,6 +1,6 @@
 # Reverse Session M007 — Maintainability and Continuous Qualification
 
-Status: closing
+Status: closed
 
 Planning baseline: 2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e
 

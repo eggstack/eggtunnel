@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M006 and C001 closed; M007 closing
+Status: active — M001-M007 and C001 closed; M008 ready
 
 Canonical references:
 
@@ -363,7 +363,7 @@ M006 is closed: the hosted 4-target release, crates.io publication, downstream r
 
 ### Milestone M007 — Maintainability and continuous qualification
 
-Status: ready
+Status: closed
 
 Implementation plan:
 
@@ -390,7 +390,7 @@ Exit conditions:
 
 ### Milestone M008 — Configurable runtime policy and API composition
 
-Status: blocked on M007 strict closure
+Status: ready
 
 Implementation plan:
 
@@ -592,6 +592,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M005 WSS/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md | M003/M004 closed; supplemental evidence at plans/closure/reverse-session-post-closure-corrective/001-status.md |
 | C001 optional-transport corrective | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md | M004/M005 historical closures + post-closure corrective workstream |
 | M006 distribution/downstream | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md | none |
-| M007 maintainability/continuous qualification | closing | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | — | Local gates pass; hosted CI evidence pending |
-| M008 configurable runtime policy/API composition | blocked | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | — | M007 strict closure |
+| M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md | Rust 1.89, feature slices, dependency guard, PEM parser, and hosted CI passed |
+| M008 configurable runtime policy/API composition | ready | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | — | M007 strict closure |
 | M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | — | M008 strict closure |
