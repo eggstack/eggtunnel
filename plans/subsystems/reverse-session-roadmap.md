@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M006 closed; C001 closed (supplemental transport-specific evidence)
+Status: active — M001-M006 and C001 closed; M007 ready
 
 Canonical references:
 
@@ -33,7 +33,8 @@ It owns:
 - shutdown/drain;
 - transport adapters;
 - secret-free snapshots/diagnostics;
-- downstream embedding boundary.
+- downstream embedding boundary;
+- post-0.1 runtime policy, dynamic Service lifecycle, and bounded operational observability.
 
 It consumes generic networking primitives from Eggress where the supported published API fits.
 
@@ -102,6 +103,8 @@ At the initial planning baseline the repository contained planning documents onl
 
 The current Eggress integration baseline is 1.0.8. The TLS, relay, and core stream APIs were inspected before adding dependencies.
 
+A post-0.1 repository review at baseline `2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e` found no open correctness blocker, but identified maintenance/evolution work that should precede additional breadth: concentrated server/test topology, lack of continuous MSRV and supported feature-slice qualification, a direct unmaintained PEM parser, hard-coded operational policy, constructor/profile proliferation, no dynamic runtime Service registration, and a documented tracing/heartbeat observability contract that is only partially implemented. These findings are sequenced as M007-M009 below.
+
 ## 4. Target architecture
 
 Standalone or embedded client:
@@ -152,10 +155,23 @@ M004 QUIC transport     M005 WSS/outbound-proxy
      \                     /
       v                   v
        M006 distribution/downstream qualification
+                    |
+                    v
+       M007 maintainability/continuous qualification
+                    |
+                    v
+       M008 runtime policy/API composition
+                    |
+                    v
+       M009 dynamic Service lifecycle/observability
 
 M004 and M005 have a hard dependency on M003 but only soft/interface dependencies on each other.
 
 M006 depends on M003 plus whichever optional transport profiles are declared part of the first published support matrix.
+
+M007 starts the post-0.1 maintenance line. M008 has a hard dependency on M007 so public/configuration refactoring is not mixed with structural/test movement. M009 has a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface.
+
+A future negotiated-protocol milestone requires a concrete extension plus an accepted ADR. A future Eggpack distribution cutover requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces. Neither is dependency-ready today.
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
@@ -341,7 +357,91 @@ The M004/M005 historical closure records intentionally retain the limitations ob
 - C001 plan: plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md
 - C001 status: closed (historical; closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md)
 
-M006 is closed: the hosted 4-target release, crates.io publication, downstream registry-consumption, and advisory/license review all have recorded evidence. Deferred follow-up (PEM-parser replacement, broader runtime qualification) is not gated on M006.
+M006 is closed: the hosted 4-target release, crates.io publication, downstream registry-consumption, and advisory/license review all have recorded evidence.
+
+## Post-0.1 maintenance and evolution
+
+### Milestone M007 — Maintainability and continuous qualification
+
+Status: ready
+
+Implementation plan:
+
+- plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md
+
+Primary class: polish / invariant
+
+Objective:
+
+- reduce review/maintenance concentration without semantic change;
+- move the cross-transport integration suite out of the monolithic server source;
+- add continuous Rust 1.89 MSRV and supported feature-slice qualification;
+- make rustdoc warnings fail CI;
+- replace the direct unmaintained PEM parser through a maintained ownership-correct path;
+- continuously guard the narrow Eggtunnel/Eggress boundary, including absence of `eggress-protocol-reverse` from the native Session dependency graph.
+
+Exit conditions:
+
+- behavior/wire compatibility unchanged;
+- feature/MSRV support claims continuously executable;
+- direct PEM-parser maintenance debt resolved or explicitly stopped on a documented dependency tradeoff;
+- minimal client graph remains narrow;
+- no high/medium finding remains.
+
+### Milestone M008 — Configurable runtime policy and API composition
+
+Status: blocked on M007 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md
+
+Primary class: capability / infrastructure
+
+Objective:
+
+- promote hard-coded finite resource/time policy into validated caller-configurable policy with identical secure defaults;
+- replace transport/identity/proxy constructor multiplication with one typed composition/validation path;
+- make CLI `check` and runtime startup share the same semantic validator.
+
+Exit conditions:
+
+- defaults are behavior-equivalent to the 0.1 runtime;
+- non-default finite limits/timeouts are supported;
+- unsupported profile combinations fail through one canonical validator;
+- convenience constructors remain compatibility wrappers;
+- no wire change or optional dependency leakage.
+
+### Milestone M009 — Dynamic Service lifecycle and operational observability
+
+Status: blocked on M008 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md
+
+Primary class: capability
+
+Objective:
+
+- add bounded runtime Service registration complementary to existing unregistration;
+- make acknowledged dynamic Services reconnect-stable;
+- emit structured secret-safe tracing without installing a subscriber;
+- turn existing Ping/Pong into bounded RTT/missed-heartbeat state exposed through snapshots.
+
+Exit conditions:
+
+- an embedder can add/remove Services without restarting the Client;
+- stale/unacknowledged registration cannot enter desired state;
+- reconnect restores acknowledged dynamic Services;
+- tracing and heartbeat health are bounded and secret-safe;
+- no wire change.
+
+### Later gated work
+
+Protocol capability negotiation is intentionally not assigned an executable milestone yet. The current protocol exchanges an empty capability set and treats minor versions as informational. The first change to that compatibility meaning must have a concrete extension and an accepted ADR before an implementation plan is registered.
+
+Eggpack release/bootstrap/CI adoption is also intentionally not assigned an executable Eggtunnel milestone yet. Eggtunnel's current release workflow remains authoritative until Eggpack exposes stable build/qualification, bootstrap-installer, and generated-CI contracts capable of preserving the closed M006 release evidence.
 
 ## 12. Security considerations across milestones
 
@@ -413,7 +513,7 @@ Do not accumulate unbounded event history in the runtime.
 
 The CLI may render snapshots as human-readable text and JSON.
 
-Libraries emit tracing events without installing subscribers.
+Libraries emit tracing events without installing subscribers. This intended contract is not fully implemented at the M007 planning baseline; M009 owns the bounded tracing/heartbeat implementation after M008 stabilizes runtime policy.
 
 ## 16. Performance and footprint
 
@@ -477,7 +577,9 @@ Explicitly deferred until after M006 or a new ADR:
 - P2P hole punching;
 - traffic inspection;
 - remote execution semantics;
-- bandwidth billing.
+- bandwidth billing;
+- negotiated capability/version semantics until a concrete extension and ADR exist;
+- Eggpack release-workflow cutover until stable producer interfaces are available.
 
 ## 19. Status table
 
@@ -490,3 +592,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M005 WSS/proxy traversal | closed | plans/implementation/reverse-session/005-restricted-network-transports-and-proxy-traversal.md | plans/closure/reverse-session/005-status.md | M003/M004 closed; supplemental evidence at plans/closure/reverse-session-post-closure-corrective/001-status.md |
 | C001 optional-transport corrective | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md | M004/M005 historical closures + post-closure corrective workstream |
 | M006 distribution/downstream | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md | none |
+| M007 maintainability/continuous qualification | ready | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | — | M001-M006/C001 closed |
+| M008 configurable runtime policy/API composition | blocked | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | — | M007 strict closure |
+| M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | — | M008 strict closure |

@@ -29,13 +29,16 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M006 closed | M001-M006 closed; C001 closed (supplemental). No open implementation dependency. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M007 ready | M001-M006 and C001 closed. M007 is the dependency-ready post-0.1 maintenance/continuous-qualification handoff. |
 | Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Reverse session | M007 maintainability/continuous qualification | ready | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | M001-M006/C001 closed; execute next. |
+| Reverse session | M008 configurable runtime policy/API composition | blocked | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | Hard dependency: M007 strict closure. |
+| Reverse session | M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | Hard dependency: M008 strict closure. |
 ## Recently closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
@@ -63,8 +66,10 @@ M006 closure record at plans/closure/reverse-session/006-status.md records
 the hosted 4-target release, crates.io publication (proto then library),
 downstream registry-consumption, advisory/license review, and the supported
 platform claims. No high/medium correctness or security findings remain open.
-Deferred follow-up (PEM-parser replacement, broader runtime qualification) is
-not gated on M006.
+Post-0.1 follow-up is now sequenced through M007-M009. M007 owns PEM-parser
+maintenance, structural cleanup, and continuous MSRV/feature qualification;
+M008 owns runtime policy/API composition; M009 owns dynamic Service lifecycle
+and bounded tracing/heartbeat observability.
 
 ## Current architecture constraints
 
@@ -84,12 +89,12 @@ The following are not optional implementation preferences:
 - No production unbounded channels/tasks.
 - Library APIs remain process-neutral for downstream embedding.
 
-## External/deferred work
+## Blocked / future work
 
-These are not M006 implementation blockers:
+These are not M007 implementation blockers:
 
-- hosted release-target evidence remains M006;
-- crates.io publication remains M006 and requires explicit release authorization;
-- eggup downloader/self-update integration remains deferred because the inspected interface does not provide the required released bootstrap/downloader surface;
-- Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain M006/deferred support work;
+- protocol capability/minor-version negotiation remains unplanned until a concrete extension exists and an ADR defines compatibility semantics;
+- Eggpack release/bootstrap/CI cutover remains unplanned until Eggpack exposes stable build/qualification, bootstrap-installer, and generated-CI interfaces that can preserve M006 evidence;
+- Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel;
+- Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain future support work requiring explicit evidence;
 - QUIC custom CA/mTLS and QUIC proxy traversal remain unsupported current profiles unless a later plan/ADR changes the transport boundary.

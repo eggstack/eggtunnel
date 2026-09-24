@@ -290,6 +290,88 @@ Phases 2 and the selected production transports intended for 0.1.
 - Release artifacts carry provenance/checksum evidence according to Eggstack conventions.
 - No documentation claims unsupported platform/transport behavior.
 
+## Phase 6 — Post-0.1 maintainability and continuous qualification
+
+### Objective
+
+Make the published 0.1 architecture cheaper to evolve without changing protocol or supported transport semantics.
+
+### Deliverables
+
+- decompose concentrated runtime/test topology;
+- continuously verify Rust 1.89 MSRV;
+- continuously verify supported Cargo feature slices and minimal dependency isolation;
+- treat rustdoc warnings as CI failures;
+- resolve direct unmaintained PEM-parser maintenance debt;
+- explicitly guard the Eggtunnel native Session boundary from Eggress's separate pproxy-compatible reverse protocol.
+
+### Dependencies
+
+Phase 5 closed.
+
+### Exit criteria
+
+- support claims are continuously executable rather than closure-only evidence;
+- structural cleanup does not change wire/runtime semantics;
+- minimal embedding graph remains narrow;
+- no unresolved high/medium finding remains.
+
+## Phase 7 — Runtime policy and API composition
+
+### Objective
+
+Turn hard-coded operational defaults and transport-specific constructor growth into validated, transport-neutral policy/composition surfaces.
+
+### Deliverables
+
+- caller-supplied finite resource ceilings and lifecycle timeouts with current values as defaults;
+- typed client/server composition/profile API;
+- one canonical supported/rejected transport/identity/proxy validator;
+- CLI reuse of library validation;
+- compatibility wrappers for existing convenience constructors.
+
+### Dependencies
+
+Phase 6 closed.
+
+### Exit criteria
+
+- secure defaults are behavior-equivalent to 0.1;
+- embedders can tune finite limits/timeouts;
+- profile validation cannot drift between CLI and library;
+- no wire change.
+
+## Phase 8 — Dynamic Service lifecycle and operational observability
+
+### Objective
+
+Support long-running embedders whose Service set changes at runtime and expose bounded operational health.
+
+### Deliverables
+
+- dynamic ClientHandle Service registration using existing RegisterService/RegisterAck;
+- reconnect-stable desired Service state;
+- structured secret-safe tracing without global subscriber installation;
+- bounded Ping/Pong RTT and missed-heartbeat state in snapshots.
+
+### Dependencies
+
+Phase 7 closed.
+
+### Exit criteria
+
+- runtime Service add/remove works without Client restart;
+- stale/unacknowledged registration cannot enter desired state;
+- reconnect restores acknowledged dynamic Services;
+- observability is bounded and secret-safe;
+- no wire change.
+
+## Future gated continuation
+
+Do not register an executable negotiated-protocol milestone until a concrete extension exists and an ADR defines capability/minor-version compatibility semantics.
+
+Do not replace the closed Phase 5 release workflow with Eggpack-generated release/bootstrap/CI machinery until Eggpack exposes stable interfaces that can preserve the current release support/evidence contract.
+
 ## Deferred roadmap candidates
 
 The following do not belong in Phases 0-5 and require new evidence plus an ADR/subsystem roadmap:
@@ -324,6 +406,15 @@ Phase 3 QUIC     Phase 4 WSS/proxy
      \             /
       v           v
         Phase 5 distribution/downstream qualification
+                    |
+                    v
+        Phase 6 maintainability/qualification
+                    |
+                    v
+        Phase 7 runtime policy/API composition
+                    |
+                    v
+        Phase 8 dynamic Services/observability
 
 ## Initial planning decomposition
 
