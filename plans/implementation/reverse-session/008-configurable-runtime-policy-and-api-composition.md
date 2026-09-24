@@ -1,6 +1,6 @@
 # Reverse Session M008 — Configurable Runtime Policy and API Composition
 
-Status: active
+Status: closed
 
 Planning baseline: 2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e
 

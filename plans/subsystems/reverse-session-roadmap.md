@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M007 and C001 closed; M008 active
+Status: active — M001-M008 and C001 closed; M009 ready
 
 Canonical references:
 
@@ -169,7 +169,7 @@ M004 and M005 have a hard dependency on M003 but only soft/interface dependencie
 
 M006 depends on M003 plus whichever optional transport profiles are declared part of the first published support matrix.
 
-M007 starts the post-0.1 maintenance line. M008 has a hard dependency on M007 so public/configuration refactoring is not mixed with structural/test movement. M009 has a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface.
+M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is now strictly closed; M009 is ready under ADR-0001 provided existing RegisterService/UnregisterService and Ping/Pong semantics remain unchanged.
 
 A future negotiated-protocol milestone requires a concrete extension plus an accepted ADR. A future Eggpack distribution cutover requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces. Neither is dependency-ready today.
 
@@ -390,7 +390,7 @@ Exit conditions:
 
 ### Milestone M008 — Configurable runtime policy and API composition
 
-Status: active
+Status: closed
 
 Implementation plan:
 
@@ -414,7 +414,7 @@ Exit conditions:
 
 ### Milestone M009 — Dynamic Service lifecycle and operational observability
 
-Status: blocked on M008 strict closure
+Status: ready — M008 strict closure recorded at `plans/closure/reverse-session/008-status.md`.
 
 Implementation plan:
 
@@ -593,5 +593,5 @@ Explicitly deferred until after M006 or a new ADR:
 | C001 optional-transport corrective | closed | plans/implementation/reverse-session-post-closure-corrective/001-optional-transport-qualification-and-planning-reconciliation.md | plans/closure/reverse-session-post-closure-corrective/001-status.md | M004/M005 historical closures + post-closure corrective workstream |
 | M006 distribution/downstream | closed | plans/implementation/reverse-session/006-distribution-and-downstream-qualification.md | plans/closure/reverse-session/006-status.md | none |
 | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md | Rust 1.89, feature slices, dependency guard, PEM parser, and hosted CI passed |
-| M008 configurable runtime policy/API composition | active | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | — | M007 strict closure |
-| M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | — | M008 strict closure |
+| M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md | M007 strict closure |
+| M009 dynamic Service lifecycle/observability | ready | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | — | M008 strict closure recorded |

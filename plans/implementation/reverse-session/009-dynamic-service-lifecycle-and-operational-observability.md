@@ -1,6 +1,6 @@
 # Reverse Session M009 — Dynamic Service Lifecycle and Operational Observability
 
-Status: blocked
+Status: ready
 
 Planning baseline: 2e2f3981a6e78596c32dfe5daf5b2585bfc37f1e
 
@@ -14,7 +14,7 @@ Applicable ADR:
 
 Primary class: capability
 
-Hard dependency: M008 strict closure.
+Hard dependency: M008 strict closure, satisfied at `plans/closure/reverse-session/008-status.md`.
 
 ## 1. Objective
 
@@ -22,9 +22,9 @@ Make the embedding surface suitable for long-running applications whose local Se
 
 This milestone adds no new transport and no new wire message. It uses the existing RegisterService/UnregisterService and Ping/Pong protocol semantics.
 
-## 2. Why this milestone is blocked
+## 2. Readiness and dependency status
 
-M008 first establishes the canonical runtime policy and composition surface. Dynamic Service state and heartbeat policy should be added after those ownership/configuration boundaries are stable rather than creating another temporary configuration path.
+M008 is strictly closed at `plans/closure/reverse-session/008-status.md`. Dynamic Service state and heartbeat policy can now use its canonical runtime policy and composition surface instead of introducing another temporary configuration path. M009 is ready under ADR-0001 while preserving the existing RegisterService/UnregisterService and Ping/Pong wire semantics.
 
 No new ADR is required if this milestone uses the existing wire semantics exactly as defined.
 
