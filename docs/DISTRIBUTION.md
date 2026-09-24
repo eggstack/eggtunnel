@@ -61,12 +61,11 @@ explicit authorized action.
 
 ## Supply-chain review
 
-- `cargo audit`: no vulnerabilities across the locked dependency graph. Two
-  `unmaintained` warnings remain open: `atomic-polyfill 1.0.3` (transitive via
-  `postcard`/`heapless`, only compiled on targets without native atomics) and
-  `rustls-pemfile 2.2.0` (direct `mtls` dependency for PEM parsing). Neither
-  has a known vulnerability; replacing the PEM parser is deferred follow-up
-  work, not a release blocker.
+- `cargo audit`: no vulnerabilities across the locked dependency graph. The current repository review has one informational `unmaintained` warning:
+  `atomic-polyfill 1.0.3` (transitive via `postcard`/`heapless`, only compiled
+  on targets without native atomics). M007 removed direct `rustls-pemfile` use
+  and now parses PEM through Rustls pki-types. The M006 closure record retains
+  the two-warning result observed at that historical head.
 - `cargo deny check licenses` with `deny.toml`: passes. Every third-party
   dependency resolves to a permissive license (MIT/Apache-2.0 family, ISC,
   BSD, Zlib, Unlicense, CDLA-Permissive-2.0, Unicode-3.0); no copyleft license

@@ -532,28 +532,19 @@ fn build_mtls_tls_config(
     config: &ClientConfig,
     identity: ClientIdentity,
 ) -> Result<Arc<rustls::ClientConfig>, TunnelError> {
-    use std::io::Cursor;
-
     let mut roots = rustls::RootCertStore::empty();
     if let Some(ca_pem) = config.ca_pem.as_deref() {
-        let ca_certs = rustls_pemfile::certs(&mut Cursor::new(ca_pem))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| TunnelError::Tls)?;
+        let ca_certs = crate::pem::certificates(ca_pem).map_err(|_| TunnelError::Tls)?;
         for cert in ca_certs {
             roots.add(cert).map_err(|_| TunnelError::Tls)?;
         }
     } else {
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
-    let certificates = rustls_pemfile::certs(&mut Cursor::new(&identity.certificate_pem))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| TunnelError::Tls)?;
-    let private_key = rustls_pemfile::private_key(&mut Cursor::new(&identity.private_key_pem))
-        .map_err(|_| TunnelError::Tls)?
-        .ok_or(TunnelError::Tls)?;
-    if certificates.is_empty() {
-        return Err(TunnelError::Tls);
-    }
+    let certificates =
+        crate::pem::certificates(&identity.certificate_pem).map_err(|_| TunnelError::Tls)?;
+    let private_key =
+        crate::pem::private_key(&identity.private_key_pem).map_err(|_| TunnelError::Tls)?;
     let tls = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_client_auth_cert(certificates, private_key)
@@ -1177,5 +1168,40 @@ impl Drop for OpenTaskGuard {
 impl Drop for CounterGuard {
     fn drop(&mut self) {
         self.0.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eggtunnel_proto::{RequestedBind, ServiceName, TcpTarget};
+
+    fn config(server_addr: &str) -> ClientConfig {
+        ClientConfig {
+            server_addr: server_addr.to_owned(),
+            tls_server_name: "localhost".to_owned(),
+            ca_pem: None,
+            token: SecretToken::new(b"test-token".to_vec()).unwrap(),
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("one").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 80).unwrap(),
+            )],
+        }
+    }
+
+    #[test]
+    fn client_validation_rejects_invalid_endpoint_without_server_feature() {
+        assert!(validate_config(&config("missing-port")).is_err());
+        assert!(validate_config(&config("localhost:0")).is_err());
+        assert!(validate_config(&config("localhost:443")).is_ok());
+    }
+
+    #[test]
+    fn client_validation_rejects_duplicate_service_identity() {
+        let mut config = config("localhost:443");
+        config.services.push(config.services[0].clone());
+        assert!(validate_config(&config).is_err());
     }
 }

@@ -170,7 +170,7 @@ Crate features: `crates/eggtunnel/Cargo.toml:15-23`. Workspace pins:
 | `quic` | ❌ | `client` + `server` + `eggress-transport-quic` (`crates/eggtunnel/Cargo.toml:20`) | `ClientDataTransport::Quic` (`client.rs:34-35`); `Client::start_quic*` (`client.rs:247-319`), `quic_reconnect_loop` (`client.rs:716-837`); `Server::bind_quic*` (`server.rs:159-259`), `quic_server_loop*`, `handle_quic_connection`, `handle_quic_data_stream` (`server.rs:479-684`); `max_active_data_streams` field on `ConnectionContext` (`server.rs:701-702`) |
 | `websocket` | ❌ | `client` + `server` + `eggress-protocol-websocket` + `tokio-tungstenite` (`crates/eggtunnel/Cargo.toml:21`) | `websocket: bool` threading through `start_with_tls_config` (`client.rs:356-399`), `reconnect_loop` upgrade (`client.rs:598-616`), `handle_open` data-path upgrade (`client.rs:1104-1115`); server `websocket: bool` through `bind_with_tls_profile` (`server.rs:283-318`), `handle_connection` upgrade (`server.rs:780-800`); `Server::bind_websocket`, `Client::start_websocket*` |
 | `outbound-proxy` | ❌ | `client` + `eggress-outbound` with `pproxy-compat` (`crates/eggtunnel/Cargo.toml:22`, `Cargo.toml:27`) | `outbound: Option<Arc<OutboundConnector>>` on `ClientDataTransport::TcpTls` (`client.rs:31-32`) and `start_with_tls_config` (`client.rs:361-363`); `parse_outbound_proxy` via `OutboundConnector::from_pproxy_uri` (`client.rs:418-425`); `connect_server` proxy branch (`client.rs:687-714`); `validate_outbound_proxy` re-export (`lib.rs:18-19`); `start_with_outbound_proxy*`, `start_websocket_with_outbound_proxy*` (`client.rs:199-245`) |
-| `mtls` | ❌ | `tls` + `tokio-rustls`, `rustls-pemfile`, `webpki-roots`, `sha2` (`crates/eggtunnel/Cargo.toml:23`) | `ServerTls::Mutual` (`server.rs:35-36`); `Server::bind_mtls*` (`server.rs:261-281`), `build_mtls_server_config` (`server.rs:358-389`), `certificate_principal` SHA-256 (`server.rs:391-395`); `Client::start_with_mtls*`, `ClientIdentity` + redacted `Debug` + `zeroize` drop (`client.rs:427-459`), `build_mtls_tls_config` (`client.rs:530-562`) |
+| `mtls` | ❌ | `tls` + `tokio-rustls`, `webpki-roots`, `sha2` (`crates/eggtunnel/Cargo.toml:23`) | `ServerTls::Mutual` (`server.rs:35-36`); `Server::bind_mtls*` (`server.rs:261-281`), `build_mtls_server_config` (`server.rs:358-389`), `certificate_principal` SHA-256 (`server.rs:391-395`); `Client::start_with_mtls*`, `ClientIdentity` + redacted `Debug` + `zeroize` drop (`client.rs:427-459`), `build_mtls_tls_config` (`client.rs:530-562`) |
 
 Notes:
 
@@ -226,7 +226,7 @@ Notes:
   `TlsServerConfigBuilder` come from `eggress-transport-tls 1.0.8`. Eggtunnel
   never constructs `rustls::{Client,Server}Config` directly on this path
   (contrast the mTLS path, §3.4 of the server/client dives, which drops to
-  `rustls` + `tokio-rustls` + `rustls-pemfile` directly).
+  `rustls` + `tokio-rustls` directly; PEM decoding uses the Rustls pki-types parser).
 - **Ring provider.** Per `docs/SECURITY.md:41-43`, the Eggress 1.0.8 builders
   "install the Rustls ring provider as the process default if no provider has
   been set". Workspace features corroborate: `rustls` with `ring/std/tls12`,

@@ -20,7 +20,7 @@ tls = ["dep:eggress-transport-tls"]
 quic = ["client", "server", "dep:eggress-transport-quic"]
 websocket = ["client", "server", "dep:eggress-protocol-websocket", "dep:tokio-tungstenite"]
 outbound-proxy = ["client", "dep:eggress-outbound"]
-mtls = ["tls", "dep:tokio-rustls", "dep:rustls-pemfile", "dep:webpki-roots", "dep:sha2"]
+mtls = ["tls", "dep:tokio-rustls", "dep:webpki-roots", "dep:sha2"]
 
 [dependencies]
 eggtunnel-proto = { path = "../eggtunnel-proto", version = "0.1.0" }
@@ -38,7 +38,6 @@ zeroize.workspace = true
 getrandom = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
-rustls-pemfile = { workspace = true, optional = true }
 webpki-roots = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true

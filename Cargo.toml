@@ -28,7 +28,6 @@ eggress-outbound = { version = "=1.0.8", default-features = false, features = ["
 tokio-tungstenite = { version = "0.26.2", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-rustls-pemfile = "2"
 webpki-roots = "1"
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }

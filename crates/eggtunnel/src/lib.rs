@@ -5,6 +5,8 @@
 //! runtime or tracing state. Optional transports remain Cargo-feature gated.
 
 mod common;
+#[cfg(feature = "mtls")]
+mod pem;
 #[cfg(any(feature = "client", feature = "server"))]
 mod wire_io;
 

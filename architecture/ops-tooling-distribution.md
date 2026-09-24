@@ -56,24 +56,19 @@ Workspace membership and shared metadata:
 
 ## 2. CI — `.github/workflows/ci.yml`
 
-Single job, no OS/feature matrix. File is 25 lines; every line is load-bearing.
+CI runs a main qualification job plus a supported feature-slice matrix, a Rust
+1.89 MSRV job, and a minimal-client dependency guard. All jobs run on
+`ubuntu-latest`; distribution still has separate release-runner evidence.
 
-| Step (`ci.yml` line) | Command | What it gates |
-|---|---|---|
-| `ci.yml:8-9` | `check` on `ubuntu-latest`, triggers `push` + `pull_request` (`ci.yml:3-5`) | Everything below must pass before merge |
-| `ci.yml:15` | `cargo fmt --all -- --check` | Formatting; M006 re-verified at closure head (`plans/closure/reverse-session/006-status.md:54`) |
-| `ci.yml:16` | `cargo check --locked --workspace --all-targets` | Locked, all-targets compile (default features) |
-| `ci.yml:17` | `cargo test --locked --workspace --all-targets --all-features` | **Full feature-union test run.** This is the "test matrix": not a Build matrix but `--all-features` (client+server+tls+mtls+quic+websocket+outbound-proxy via `crates/eggtunnel/Cargo.toml:15-23` + CLI's all-features dep at `crates/eggtunnel-cli/Cargo.toml:13`). M006 closure additionally records per-slice runs (24 quic / 19 websocket / 29 websocket+proxy tests) at `plans/closure/reverse-session/006-status.md:62` — CI itself does not split those slices |
-| `ci.yml:18` | `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | Zero-warning lint |
-| `ci.yml:19` | `cargo doc --locked --workspace --all-features --no-deps` | Doc build (note: CI does not pass `RUSTDOCFLAGS="-D warnings"`; the M006 closure verification did — `plans/closure/reverse-session/006-status.md:58`) |
-| `ci.yml:20` | `cargo check --locked --manifest-path fixtures/embedder/Cargo.toml` | Downstream-shaped compile proof (see §7) |
-| `ci.yml:21-24` | `taiki-e/install-action` → `cargo audit` + `cargo deny check licenses` | Supply-chain gates (see §4). Note CI runs bare `cargo audit` (exit 0 with unmaintained warnings) and `deny check licenses` only — not `deny check advisories/bans/sources` |
+| Job | Qualification |
+|---|---|
+| `check` | fmt, workspace check/test/clippy, rustdoc with `-D warnings`, downstream embedder check, audit, license deny |
+| `feature-slices` | Locked compile and test for `client,tls`; `client,server,tls`; mTLS; QUIC; WebSocket; outbound proxy; and WebSocket+proxy profiles |
+| `msrv` | Rust 1.89 checks for proto, minimal client, and client+server TLS |
+| `minimal-dependencies` | Asserts `client,tls` excludes QUIC, WebSocket, outbound proxy, and Eggress reverse protocol crates |
 
-What must pass before merge: **all seven runnable steps on `ubuntu-latest`**.
-There is no Windows/macOS CI leg, no `--no-default-features` / minimal-slice
-CI leg (minimal-slice evidence is M003/M006 closure-time only,
-`plans/closure/reverse-session/006-status.md:61`), and no install-smoke leg —
-`scripts/test-install.sh` is a manual/local script, not a CI step.
+The matrix is library-profile qualification, not an OS support claim. The
+full all-features run remains required alongside the slices.
 
 ## 3. Release / distribution
 
@@ -216,14 +211,12 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
   `release.yml:36`), so a lockfile drift fails loudly rather than resolving
   silently.
 - `cargo audit` runs on every push/PR (`ci.yml:24`). Recorded M006 outcome:
-  **0 vulnerabilities, 2 `unmaintained` warnings** —
+  **0 vulnerabilities, 1 `unmaintained` warning** —
   `atomic-polyfill 1.0.3` (RUSTSEC-2023-0089, transitive via
-  `postcard`/`heapless`, only compiled on targets without native atomics) and
-  `rustls-pemfile 2.2.0` (RUSTSEC-2025-0134, direct `mtls` PEM-parsing dep)
-  (`docs/DISTRIBUTION.md:64-69`,
-  `plans/closure/reverse-session/006-status.md:66`). Bare `cargo audit` exits
-  0; `--deny warnings` would exit 1. PEM-parser replacement is deferred
-  follow-up, explicitly not a release blocker.
+  `postcard`/`heapless`, only compiled on targets without native atomics). The
+  direct `rustls-pemfile` dependency was removed in M007 in favor of Rustls
+  pki-types PEM parsing. M006 closure remains historical evidence of the earlier
+  two-warning result.
 
 ### 4.2 `deny.toml` policy
 
@@ -440,8 +433,8 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [ ] `cargo audit` vs `cargo deny advisories`: audit covers RustSec DB on
   every push (`ci.yml:24`), but bare `cargo audit` tolerates the two recorded
   `unmaintained` findings. If policy ever hardens to `--deny warnings`, both
-  `atomic-polyfill` and `rustls-pemfile` become blockers — track the deferred
-  PEM-parser replacement (`docs/DISTRIBUTION.md:68-69`, `006-status.md:71`).
+  `atomic-polyfill` and current audit policy is permissive for this informational warning; the
+  `rustls-pemfile` finding was resolved by M007.
 
 ### E. Stale docs / plans sweep (run before any release)
 

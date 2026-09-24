@@ -429,99 +429,20 @@ expected but worth knowing when comparing client vs server snapshots.
 
 ## 9. Test inventory for client behavior
 
-`client.rs` itself contains **no `#[cfg(test)]` module** — only
-test-gated helpers: `quic_client_for_test` (`client.rs:146-153`),
-`start_quic_insecure_for_test` (`client.rs:306-312`), and
-`start_quic_insecure_with_connector_for_test` (`client.rs:313-319`).
-All client behavior tests live in `server.rs:1306-4513` (`#[cfg(all(test,
-feature="client"))]`) as end-to-end client↔server sessions. Grouped by
-what each proves about the client:
+Client-side validation is independently qualified in `client.rs` under
+`#[cfg(test)]`, so minimal `client,tls` builds exercise endpoint and duplicate
+Service identity rejection without enabling the server. Cross-transport
+integration tests are organized under `server_tests/` by TCP/lifecycle, mTLS,
+QUIC, WebSocket, and outbound-proxy behavior. The shared test fixtures live in
+`server_tests.rs`; no test-only seam is exposed by release builds.
 
-**Happy path + API surface.**
-
-- `tcp_tls_reverse_session_registers_and_relays_data` (`server.rs:2835`):
-  two services register, both relay (`roundtrip`), client+server byte
-  counters `>0`, resource-limit/high-water assertions
-  (`high_water_client_open_tasks >= 1`), then `unregister_service(1)`
-  shrinks server binds `2→1`, then shutdown drains the active external
-  to EOF with zero pending/active. Covers §§2–4, 8 in one test.
-- `application_target_connector_relays_without_loopback_target`
-  (`server.rs:1462`): custom `TargetConnector` (`DuplexEchoConnector`,
-  `server.rs:1434-1451`) proves in-process targets work and that unknown
-  service names yield `TargetError::Refused`.
-- `websocket_tls_session_registers_and_relays_data_paths`
-  (`server.rs:1517`): WSS control + data upgrade registers and relays.
-- `quic_session_multiplexes_isolated_data_streams_for_two_services`
-  (`server.rs:2969`): one QUIC connection, two services, isolated
-  streams.
-
-**Failure / resilience.**
-
-- `bad_token_does_not_create_a_registered_session` (`server.rs:3167`):
-  wrong bearer → no session; exercises the no-reconnect auth path (§3.3).
-- `wrong_tls_server_name_is_rejected_before_authentication`
-  (`server.rs:3212`): SNI verification fires before any `Auth`.
-- `refused_target_rejects_external_connection_and_releases_pending_capacity`
-  (`server.rs:3303`): dial-refused target → external sees EOF/empty,
-  server pending returns to 0 — proves `OpenReject` + capacity release.
-- `client_reconnects_and_restores_services_in_a_new_session_generation`
-  (`server.rs:3371`): server restart → client re-registers with a *new*
-  `SessionId`, `reconnects > 0`.
-- `client_cancellation_releases_pending_direct_connector_and_external_peer`
-  (`server.rs:1915`): `PendingConnector` (never resolves,
-  `server.rs:1453-1459`) + `client.shutdown()` → server pending/active
-  return to 0, external drains. Proves cancellation tears down
-  in-flight `Open` tasks (§§4–5).
-- `repeated_client_server_start_stop_returns_runtime_counts_to_zero`
-  (`server.rs:3622`): start/stop cycles leave counters at zero — no
-  task/counter leak.
-- `data_hello_is_session_service_bound_and_single_use` (`server.rs:3439`)
-  and `wrong_service_and_expired_data_hellos_consume_and_reject_pending_state`
-  (`server.rs:3500`): server-side correlation, but they pin the contract
-  the client's `DataHello` must satisfy.
-- `owned_task_panic_is_counted_as_internal_termination`
-  (`server.rs:3672`): `record_join_result` path (`task_panics`,
-  `Internal`).
-- `server_shutdown_cancels_incomplete_tls_and_authentication_handshakes`
-  (`server.rs:3685`) and
-  `unauthenticated_handshake_admission_caps_at_limit_and_recovers`
-  (`server.rs:3740`): server admission, but bound client handshake
-  timeouts (10 s) are the client-visible counterpart.
-
-**Transports / proxy / mTLS.**
-
-- `outbound_http_connect_keeps_eggtunnel_tls_end_to_end`
-  (`server.rs:1732`), `outbound_socks5_keeps_eggtunnel_tls_end_to_end`
-  (`server.rs:1818`): proxy traversal preserves end-to-end TLS.
-- `outbound_proxy_refused_endpoint_terminates_without_secret_in_diagnostic`
-  (`server.rs:1984`), `outbound_proxy_handshake_timeout_tears_down_bounded`
-  (`server.rs:2048`), `outbound_proxy_cancellation_terminates_in_progress_handshake`
-  (`server.rs:2118`): typed, bounded, secret-free proxy failures — the
-  no-fallback claim with evidence.
-- `outbound_http_connect_auth_success…` (`server.rs:2176`) /
-  `…_failure_rejects_without_secret_leak` (`server.rs:2278`) and the
-  SOCKS5 pair (`server.rs:2358`, `server.rs:2487`): URI-userinfo auth
-  qualified both ways.
-- `outbound_two_hop_socks5_then_http_connect_routes_end_to_end`
-  (`server.rs:2568`): canonical `__`-separated multi-hop chain.
-- `mtls_requires_trusted_client_certificate_and_keeps_server_name_validation`
-  (`server.rs:2704`) and `mtls_principal_mismatch_cannot_attach_data_stream`
-  (`server.rs:3569`): bearer-still-required + leaf-identity binding.
-- WSS edge: `wss_peer_close_during_active_relay_terminates_cleanly`
-  (`server.rs:1576`), `wss_payload_larger_than_message_cap_roundtrips_multiple_frames`
-  (`server.rs:1655`).
-- QUIC edge: `quic_connection_replacement_creates_new_session_and_reregisters_services`
-  (`server.rs:3056`),
-  `production_quic_profile_rejects_untrusted_server_certificate`
-  (`server.rs:3125`), wrong-session/replay/stale/saturation/half-close
-  suite (`server.rs:3906,4025,4149,4260,4435`).
-
-Gaps inherited from `docs/SUPPORT.md:21-34`: WSS is not TCP-half-close
-equivalent; multi-hop beyond SOCKS5+HTTP is unverified. No client-unit
-tests for `validate_config`/`valid_endpoint` in isolation — covered only
-indirectly via CLI `check` and end-to-end failures.
-
----
+The end-to-end suite covers registration and relay, custom target connectors,
+reconnect restoration, cancellation/resource recovery, authentication and SNI
+failure, stale/single-use DataHello handling, mTLS identity binding, transport
+replacement/saturation/half-close, WebSocket close/backpressure, and proxy
+credential/refusal/timeout/cancellation behavior. Run the complete matrix with
+`cargo test --locked --workspace --all-targets --all-features`; CI also runs
+per-profile `cargo test` for each supported library feature slice.
 
 ## 10. Review checklist
 

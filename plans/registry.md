@@ -29,14 +29,14 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M007 ready | M001-M006 and C001 closed. M007 is the dependency-ready post-0.1 maintenance/continuous-qualification handoff. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M007 closing | M001-M006 and C001 closed. M007 implementation and local qualification are assembled; hosted CI is pending before strict closure. |
 | Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M007 maintainability/continuous qualification | ready | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | M001-M006/C001 closed; execute next. |
+| Reverse session | M007 maintainability/continuous qualification | closing | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | Local gates pass; hosted CI evidence pending. M008 remains blocked until strict closure. |
 | Reverse session | M008 configurable runtime policy/API composition | blocked | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | Hard dependency: M007 strict closure. |
 | Reverse session | M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | Hard dependency: M008 strict closure. |
 ## Recently closed implementation plans

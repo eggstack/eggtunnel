@@ -10,7 +10,7 @@ Sources: `crates/eggtunnel/src/server.rs`, `crates/eggtunnel/src/common.rs`
 (server sections), `docs/OPERATIONS.md`.
 
 All anchors are `file:line` in the workspace root. Line numbers below track
-the inspected revision (`server.rs` 1–4513, `common.rs` 1–366).
+the current implementation (`server.rs` contains runtime code; transport and lifecycle tests are in focused `server_tests/` modules).
 
 ---
 
@@ -105,7 +105,7 @@ additionally parameterises `max_concurrent_streams` / stream admission for
 the saturation test.
 
 `build_mtls_server_config` (`server.rs:359-389`): parses server cert/key +
-client CA with `rustls-pemfile`, rejects empty chains, builds
+client CA with Rustls’s maintained `rustls-pki-types` PEM parser, rejects empty chains and ambiguous multiple private keys, builds
 `WebPkiClientVerifier` + single-cert `ServerConfig`.
 
 `certificate_principal` (`server.rs:392-395`): `SHA-256(DER)` of the leaf,

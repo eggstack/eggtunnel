@@ -16,10 +16,46 @@ jobs:
       - run: cargo check --locked --workspace --all-targets
       - run: cargo test --locked --workspace --all-targets --all-features
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - run: cargo doc --locked --workspace --all-features --no-deps
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
       - run: cargo check --locked --manifest-path fixtures/embedder/Cargo.toml
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit,cargo-deny
       - run: cargo audit
       - run: cargo deny check licenses
+
+  feature-slices:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - client,tls
+          - client,server,tls
+          - client,server,tls,mtls
+          - client,server,tls,quic
+          - client,server,tls,websocket
+          - client,tls,outbound-proxy
+          - client,server,tls,websocket,outbound-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --locked -p eggtunnel --no-default-features --features "${{ matrix.features }}"
+      - run: cargo test --locked -p eggtunnel --no-default-features --features "${{ matrix.features }}" -- --test-threads=1
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - run: cargo check --locked -p eggtunnel-proto
+      - run: cargo check --locked -p eggtunnel --no-default-features --features client,tls
+      - run: cargo check --locked -p eggtunnel --no-default-features --features client,server,tls
+
+  minimal-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls -e normal > /tmp/client-tree.txt
+      - run: '! grep -E "eggress-(transport-quic|protocol-websocket|outbound)|eggress-protocol-reverse|tokio-tungstenite" /tmp/client-tree.txt'
