@@ -20,6 +20,18 @@ Primary sources (line anchors are load-bearing for review):
 Related overview sections: [wire protocol](proto-wire-protocol.md) (framing),
 [client](client.md), [server](server.md).
 
+> M008 note: canonical composition is now `ClientBuilder` / `ServerBuilder`
+> + `Client/ServerTransportProfile` + `RuntimePolicy`
+> (`client/config.rs:68-156`, `server.rs:80-159`); `Client::start*` /
+> `Server::bind*` are conveniences. Finite ceilings/timeouts come from
+> `RuntimePolicy` (`common.rs:196-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in
+> `server.rs` are test-only. QUIC `max_concurrent_streams` is
+> policy-derived (`active/client_open_tasks + 1` = 129 by default), and both
+> relays use `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` at
+> `client/open.rs:67` and `server.rs:1370`. WSS sets 1 MiB
+> `max_message_size` only. Pre-Builder `client.rs`/`server.rs` line anchors
+> in this file are stale where they cite old constructors/constants.
+
 ---
 
 ## 1. `wire_io.rs`: bounded framing over any `AsyncRead/AsyncWrite`

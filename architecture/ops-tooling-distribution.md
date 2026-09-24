@@ -8,8 +8,15 @@ the sibling dives (proto / client / server / transports / CLI).
 
 ## 0. Scope and claim boundary
 
-- Current release line: `0.1.0` — `docs/DISTRIBUTION.md:5`, `Cargo.toml:6`,
-  `README.md:25-26`.
+- Workspace `0.2.0` candidate (`Cargo.toml:6`, proto pin `0.2.0`); published
+  crates.io line, tag, and GitHub release remain `0.1.0` until
+  owner-authorized M012 publication — `docs/DISTRIBUTION.md:5-20`,
+  `plans/closure/reverse-session/012-status.md`. (This file's older
+  `0.1.0`-only language is stale where not yet refreshed.)
+- Wire protocol stays v1.0; crate version is independent.
+- M007–M011 closed, M012 conditionally closed, corrective addendum archived
+  (`plans/registry.md`); `scripts/test-install.sh` already bumped to
+  `0.2.0`.
 - "Supported" in this repo means **hosted build + checksum + per-runner
   install/version smoke for that archive** — `docs/DISTRIBUTION.md:24-28`,
   `docs/SUPPORT.md:41-47`. It does **not** mean interactive tunnel runtime
@@ -47,7 +54,8 @@ Workspace membership and shared metadata:
 
 - Members declared at `Cargo.toml:3`: `crates/eggtunnel-proto`,
   `crates/eggtunnel`, `crates/eggtunnel-cli`.
-- Shared version/edition/MSRV/license at `Cargo.toml:5-10`: version `0.1.0`,
+- Shared version/edition/MSRV/license at `Cargo.toml:5-10`: version `0.2.0`
+  (candidate; published line still `0.1.0` per §0),
   edition `2024`, `rust-version = "1.89"`, `license = "MIT"`.
 - `fixtures/embedder` is deliberately **not** a workspace member
   (`fixtures/embedder/Cargo.toml:7` empty `[workspace]` severs membership), so
@@ -145,10 +153,12 @@ others; each uploads its own `release-<target>` artifact with 7-day retention
   closure explicitly records "no manual release narrative was written.
   Acceptable for 0.1.0" (`plans/closure/reverse-session/006-status.md:73`).
 
-Published crate order (not GitHub assets): `eggtunnel-proto 0.1.0` first, then
-`eggtunnel 0.1.0` (`docs/DISTRIBUTION.md:5-7,55-60`), because the library has a
+Published crate order (not GitHub assets): `eggtunnel-proto 0.2.0` first, then
+`eggtunnel 0.2.0` at publication time (today's published line is `0.1.0`; see
+§0), because the library has a
 versioned dependency on the proto crate (`crates/eggtunnel/Cargo.toml:26` pins
-`version = "0.1.0"`). The closure records the ordering proof: dry-run publish
+the workspace version). The M006 closure records the ordering proof for the
+`0.1.0` line: dry-run publish
 of the library before the proto crate failed with `no matching package named
 eggtunnel-proto found` (`plans/closure/reverse-session/006-status.md:50`).
 `eggtunnel-cli` stays `publish = false` and ships only inside the binary
@@ -192,13 +202,14 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
 `scripts/test-install.sh:1-37` is the local installer qualification harness
 (not run in CI):
 
-- Pins `version=0.1.0` (`test-install.sh:5`) and defaults
+- Pins `version=0.2.0` (`test-install.sh:5`) and defaults
   `EGGTUNNEL_TEST_TARGET=aarch64-apple-darwin` (`:6`) — both drift candidates
   when the version bumps or when run on Linux (caller must override the env).
 - Builds the release binary `--locked`, regenerates notices, stages
   `eggtunnel + LICENSE-MIT + THIRD_PARTY_NOTICES.md + VERSION` into a tarball,
   writes a `SHA256SUMS` with `shasum` (`:11-20`), then installs via
-  `file://` base URL and asserts `eggtunnel version` prints `eggtunnel 0.1.0`
+   `file://` base URL and asserts `eggtunnel version` prints the workspace
+   version (`eggtunnel 0.2.0` at the current candidate)
   (`:22-25`).
 - Negative cases: appends a byte to the archive and asserts the installer
   **rejects** it (`:27-32`); asserts `unsupported-target` is rejected
@@ -404,8 +415,9 @@ suffices without the CLI, default features, or a library-owned runtime**
 
 ### C. Script drift
 
-- [ ] `scripts/test-install.sh:5` hardcodes `version=0.1.0` — must be bumped
-  with every release (or parameterized). Default test target
+- [x] `scripts/test-install.sh:5` hardcoded `version=0.1.0` — resolved:
+  now `version=0.2.0` tracking the workspace candidate (keep parameterized
+  with every release). Default test target
   `aarch64-apple-darwin` (`:6`) mismatches Linux CI hosts unless
   `EGGTUNNEL_TEST_TARGET` is overridden.
 - [ ] `test-install.sh` is not invoked by CI or `release.yml`; the release

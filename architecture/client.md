@@ -10,13 +10,28 @@
 > `proto-wire-protocol.md`; for shared types see `common-core.md`;
 > for transports see `transports-wire-io.md`.
 
-Scope: the private-side, outbound-only initiator. The private implementation
-separates public composition/configuration, reconnect/session orchestration,
-session-local Service lifecycle state, and Open/data-path handling. The client owns one
+Scope: the private-side, outbound-only initiator. `client.rs` (~1410 lines)
+is the orchestrator (reconnect/session loops, validation); composable logic
+lives in `client/config.rs` (`ClientConfig`, canonical `ClientBuilder`,
+target contract), `client/service_state.rs` (dynamic-Service lifecycle,
+M009), `client/heartbeat.rs` (one-outstanding-Ping probe), and
+`client/open.rs` (data path per `Open`). Tests live in `client/tests.rs`,
+`client/qualification_tests.rs` (deterministic 10k-step seeded sequence),
+plus unit tests in `service_state.rs`/`heartbeat.rs`; cross-transport E2E
+remains under `server_tests/`. The client owns one
 authenticated control stream per session, registers local services, and
 dials one data connection per server `Open`. It never listens. The server
 owns listeners and picks effective binds; the client owns local targets
 and picks where bytes land.
+
+> M008/M009 note: `ClientBuilder` (`client/config.rs:78-156`) is the
+> canonical composition path (transport/connector/identity/proxy/
+> `RuntimePolicy`); legacy `Client::start*` delegate through it. Finite
+> ceilings/timeouts come from `RuntimePolicy` (`common.rs:196-316`), not
+> `client.rs` constants. Dynamic `register_service` is generation-gated with
+> one registration in flight per session (`service_state.rs`); heartbeat
+> health is a bounded `HeartbeatSnapshot`. Pre-split `client.rs` line
+> anchors elsewhere in this file are stale; prefer the module paths above.
 
 Primary sources: `crates/eggtunnel/src/client.rs` (full read),
 `crates/eggtunnel/src/common.rs` (`ClientService`, `Snapshot`/`Counters`,

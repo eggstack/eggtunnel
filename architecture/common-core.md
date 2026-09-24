@@ -2,11 +2,23 @@
 
 > Index: [architecture/overview.md](overview.md) §2. This is the deep dive for component #2 (shared vocabulary for client + server: secrets, policy, observability, errors).
 
-`common.rs` is 366 lines, `forbid(unsafe_code)` via `crates/eggtunnel/src/lib.rs:1`, with no socket, Tokio, timer, or task dependencies of its own. It defines the types both sides agree on, plus the server-only policy/token enforcement helpers. The library facade re-exports the public vocabulary unconditionally at `crates/eggtunnel/src/lib.rs:25-28`:
+`common.rs` is 636 lines, `forbid(unsafe_code)` via `crates/eggtunnel/src/lib.rs:1`, with no socket, Tokio, timer, or task dependencies of its own. It defines the types both sides agree on, plus the server-only policy/token enforcement helpers. The library facade re-exports the public vocabulary at `crates/eggtunnel/src/lib.rs:27-30`:
 
 ```rust
-pub use common::{BindPolicy, ClientService, ResourceLimits, SecretToken, ServiceSpec, Snapshot, TerminationCategory, TunnelError};
+pub use common::{BindPolicy, ClientService, HeartbeatSnapshot, ResourceLimits, RuntimePolicy, SecretToken, ServiceSpec, Snapshot, TerminationCategory, TimeoutPolicy, TunnelError};
 ```
+
+> M008 note: finite ceilings and timeouts moved from per-module constants
+> into `ResourceLimits` (8 fields incl. `client_command_queue = 32`,
+> validated `1..=65536`) + `TimeoutPolicy` (9 durations) composed as
+> `RuntimePolicy` (`common.rs:196-316`). `Counters` owns
+> `Arc<RuntimePolicy>` (`with_policy()`); `snapshot().resource_limits`
+> echoes the selected policy. `BindPolicy::validate` ceiling is now 65536
+> (decoupled from the 64 default). `Snapshot` gains bounded
+> `HeartbeatSnapshot`; `TunnelError` gains `ServiceAlreadyExists`
+> (→ `Authorization`). Details below are being refreshed; treat this file's
+> pre-M008 line anchors and limit tables as stale where they cite
+> `server.rs`/`client.rs` constants.
 
 ---
 

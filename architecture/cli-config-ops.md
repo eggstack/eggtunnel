@@ -2,7 +2,15 @@
 
 > Parent: [Architecture Overview](overview.md) §6. This file is the review-oriented deep dive for the configuration frontend, runtime CLI loops, library facade, and embedding/operations docs.
 
-Sources (all paths relative to repo root): `crates/eggtunnel-cli/src/main.rs` (333 lines), `crates/eggtunnel-cli/Cargo.toml`, `crates/eggtunnel/src/lib.rs`, `crates/eggtunnel/Cargo.toml`, `examples/client.toml`, `examples/server.toml`, `fixtures/embedder/src/main.rs`, `fixtures/embedder/Cargo.toml`, `docs/CONFIGURATION.md`, `docs/API.md`, `docs/EMBEDDING.md`, `docs/OPERATIONS.md`.
+Sources (all paths relative to repo root): `crates/eggtunnel-cli/src/main.rs` (320 lines), `crates/eggtunnel-cli/Cargo.toml`, `crates/eggtunnel/src/lib.rs` (33 lines), `crates/eggtunnel/Cargo.toml`, `examples/client.toml`, `examples/server.toml`, `fixtures/embedder/src/main.rs`, `fixtures/embedder/Cargo.toml`, `docs/CONFIGURATION.md`, `docs/API.md`, `docs/EMBEDDING.md`, `docs/OPERATIONS.md`.
+
+> M008 note: the CLI builds `client_builder` (`main.rs:132-164`) /
+> `server_builder` (`main.rs:166-196`) and shares `validate()` between
+> `check` and startup (`start()`/`bind()`); the typed
+> QUIC/WSS/proxy/mTLS matrix is library-owned
+> (`validate_client_profile` at `client.rs:524`,
+> `validate_server_profile` at `server.rs:459`). `main.rs` line anchors
+> elsewhere in this file track the pre-builder layout and are stale.
 
 ---
 

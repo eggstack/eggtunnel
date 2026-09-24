@@ -1,6 +1,18 @@
 # Reverse-session server — `crates/eggtunnel/src/server.rs`
 
-> Largest module (~4513 lines incl. tests). Reachable rendezvous + ingress.
+> Runtime is `server.rs` (1489 lines); transport and lifecycle tests live in
+> `server_tests.rs` (harness + `ServerBuilder::validate` tests) plus
+> `server_tests/{tcp,mtls,quic,websocket,proxy}.rs`. Pre-split `server.rs`
+> line anchors elsewhere in this file track the older ~4.5 kLOC layout and
+> are stale — prefer the module paths above and `architecture/overview.md`
+> §4 for the current map.
+>
+> M008 note: `ServerBuilder` (`server.rs:89-159`) is the canonical surface
+> (`ServerTransportProfile` + `BindPolicy` + `RuntimePolicy` + optional
+> client CA); legacy `Server::bind*` helpers delegate through it. Finite
+> ceilings/timeouts come from validated `RuntimePolicy`
+> (`common.rs:196-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in `server.rs` are
+> test-only.
 > See [Architecture Overview](overview.md) §4 for the birds-eye map and
 > component index. Companion dives: `common-core.md` (shared vocabulary),
 > `client.md`, `proto-wire-protocol.md`, `transports-wire-io.md`.

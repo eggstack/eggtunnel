@@ -202,7 +202,7 @@ multibyte input fails closed (non-ASCII bytes are rejected). `TcpTarget` control
 | Item | Rule | Code / doc |
 |---|---|---|
 | Wire version | `1.0` | `PROTOCOL_MAJOR = 1`, `PROTOCOL_MINOR = 0` (`crates/eggtunnel-proto/src/lib.rs:21-22`); `ProtocolVersion::CURRENT` (`crates/eggtunnel-proto/src/lib.rs:30-35`); `docs/PROTOCOL.md:1` |
-| Crate version | workspace `0.1.0` line (`crates/eggtunnel-proto/Cargo.toml:4` inherits `version.workspace`; root `Cargo.toml:6` sets `version = "0.1.0"`) | `docs/PROTOCOL.md:3-6`: “The wire version is distinct from the Rust crate version. The current crate release line is Eggtunnel `0.1.x` and uses wire version `1.0`. The crates are pre-1.0: Rust API compatibility is not promised across minor releases until a 1.0 library release.” |
+| Crate version | workspace `0.2.0` line (`crates/eggtunnel-proto/Cargo.toml:4` inherits `version.workspace`; root `Cargo.toml:6` sets `version = "0.2.0"`) | `docs/PROTOCOL.md:3-6` still references the `0.1.x` crate line and is stale relative to the workspace version: “The wire version is distinct from the Rust crate version. … The crates are pre-1.0: Rust API compatibility is not promised across minor releases until a 1.0 library release.” |
 | Major | reject on mismatch | `decode_frame` returns `UnsupportedVersion(major, minor)` if `major != PROTOCOL_MAJOR` (`crates/eggtunnel-proto/src/lib.rs:483-485`); tested with major 2 at `crates/eggtunnel-proto/src/lib.rs:660-666` |
 | Minor | informational only | minor is decoded (`crates/eggtunnel-proto/src/lib.rs:482`) but never compared; `encode_frame` always stamps `1.0` (`crates/eggtunnel-proto/src/lib.rs:464-465`); `docs/PROTOCOL.md:6-10`: “Minor versions are currently informational; there is no backward-peer support window … Do not infer a long-term 1.x protocol guarantee.” |
 | Capabilities | exchanged but not negotiated | `ClientHello`/`ServerHello` carry `Capabilities` (`crates/eggtunnel-proto/src/lib.rs:271-280`); doc says “no … capability negotiation beyond exchanging the current empty capability set” (`docs/PROTOCOL.md:7-9`); tests use `Capabilities::default()` (`crates/eggtunnel-proto/src/lib.rs:537`, `crates/eggtunnel-proto/src/lib.rs:541`) |
@@ -267,8 +267,8 @@ Caveats a reviewer should carry into `client.rs` / `server.rs`:
   (`crates/eggtunnel-proto/src/lib.rs:481-485`). A future `1.1` peer’s new optional fields would
   decode as `InvalidPayload` today, not negotiate. Confirm product decision in
   `docs/PROTOCOL.md:6-10` still holds before relying on minor for features.
-- [ ] **Wire vs. crate version confusion.** Wire `1.0` ≠ crate `0.1.x`
-  (`docs/PROTOCOL.md:1-10`, root `Cargo.toml:6`). Do not gate wire behavior on
+- [ ] **Wire vs. crate version confusion.** Wire `1.0` ≠ crate `0.2.0`
+  (root `Cargo.toml:6`; `docs/PROTOCOL.md:3-4` still says `0.1.x` and is stale). Do not gate wire behavior on
   `CARGO_PKG_VERSION`; gate only on `PROTOCOL_MAJOR` / `MessageType`.
 - [ ] **`Capabilities` is currently a placeholder.** Default/empty is the only exercised value
   (`crates/eggtunnel-proto/src/lib.rs:537`, `crates/eggtunnel-proto/src/lib.rs:541`). Any
