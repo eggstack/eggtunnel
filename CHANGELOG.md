@@ -7,6 +7,19 @@ and hardens the existing reverse-session implementation. Wire protocol
 compatibility remains version 1.0. The crate version is independent of the wire
 version.
 
+Published release artifacts:
+
+- GitHub release [`v0.2.0`](https://github.com/eggstack/eggtunnel/releases/tag/v0.2.0)
+  carries the four target archives (`x86_64-unknown-linux-gnu`,
+  `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`,
+  `aarch64-apple-darwin`), the global `SHA256SUMS` manifest,
+  `install.sh`, and build provenance attestations.
+- `eggtunnel-proto 0.2.0` and `eggtunnel 0.2.0` are published on
+  crates.io in dependency order.
+- Qualification evidence: `plans/closure/reverse-session/012-status.md`
+  (release-candidate qualification) + `plans/closure/reverse-session/013-status.md`
+  (publication event).
+
 ### Added and clarified
 
 - Typed `ClientBuilder` and `ServerBuilder` composition for validated

@@ -7,8 +7,9 @@ separate TLS data connection back through the client to a client-owned target.
 
 Workspace `0.2.0` (crate line `0.2.0`, wire protocol v1.0 — wire and crate
 versions are independent). The current published crates.io line, tag, and
-GitHub release are `0.2.0` (M012 release qualification,
-`plans/closure/reverse-session/012-status.md`); see `docs/DISTRIBUTION.md`
+GitHub release are `0.2.0` (M012 release qualification
+`plans/closure/reverse-session/012-status.md` + M013 publication event
+`plans/closure/reverse-session/013-status.md`); see `docs/DISTRIBUTION.md`
 and `architecture/ops-tooling-distribution.md`.
 
 This document is the birds-eye view and the index for discrete deep dives in
@@ -218,7 +219,8 @@ websocket,proxy}.rs`.
 - Workspace `0.2.0` is the current published line (`Cargo.toml:6`, proto pin
   `0.2.0`); published crates.io line, tag `v0.2.0`, and GitHub release are
   `0.2.0` (`docs/DISTRIBUTION.md:5-9`,
-  `plans/closure/reverse-session/012-status.md`). Wire stays v1.0.
+  `plans/closure/reverse-session/012-status.md` +
+  `plans/closure/reverse-session/013-status.md`). Wire stays v1.0.
 - Release surface unchanged: 4 targets (linux x64/arm64, macOS Intel/arm64),
   tag-triggered `release.yml`, per-runner install/version smoke, global
   `SHA256SUMS` + attestations, `install.sh` allowlist.

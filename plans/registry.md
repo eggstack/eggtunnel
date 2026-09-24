@@ -29,7 +29,7 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 conditionally closed | M011 and candidate qualification are complete; target release workflow and registry publication remain gated on explicit owner authorization. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012/M013 closed | M011 sustained qualification closed; M012 release-candidate qualification and M013 publication event are both closed; the current published line is `0.2.0`. |
 
 ## Active and ready implementation plans
 
@@ -40,7 +40,8 @@ Accepted architectural decisions:
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
-| Reverse session | M012 0.2.0 release qualification/publication gate | conditionally closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md; exact candidate passed local and hosted gates; tag workflow/publication/registry consumer await explicit authorization. |
+| Reverse session | M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md; tag v0.2.0, hosted 4-target release with install/version smoke (run 36058175606), crates.io publication of eggtunnel-proto then eggtunnel, clean registry consumer resolving `eggtunnel = "0.2"` from crates.io, audit (0 vulns) + deny licenses pass. |
+| Reverse session | M012 0.2.0 release qualification/publication gate | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md; exact candidate passed local and hosted gates. Publication event captured by M013. |
 | Reverse session | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md; private runtime ownership, explicit Service lifecycle/heartbeat state, and exact-head hosted qualification. |
 | Reverse session | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md; bounded fuzz/soak/footprint evidence and exact-head hosted CI passed. |
 | Reverse session | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md; dynamic lifecycle, bounded heartbeat and secret-safe tracing qualified on hosted CI. |
@@ -86,9 +87,9 @@ and minimal dependency guard. No high/medium finding remains open.
 M011 closure record at plans/closure/reverse-session/011-status.md records the
 bounded decoder fuzz run, deterministic lifecycle sequence, TCP/TLS and
 optional-transport soaks, host-specific footprint data, full local gates, and
-exact-head hosted CI. M012's 0.2.0 candidate is conditionally closed after
-local and exact-head hosted qualification; its tag/publication sequence awaits
-explicit owner authorization.
+exact-head hosted CI. M012 release-candidate qualification is closed
+(`012-status.md`); M013 publication event is closed
+(`013-status.md`); the current published line is `0.2.0`.
 
 ## Current architecture constraints
 

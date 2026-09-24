@@ -40,9 +40,10 @@ generated `THIRD_PARTY_NOTICES.md`. Release assets include a SHA-256
 asset corruption when the manifest is trusted; they are not a signature or
 independent authenticity proof.
 
-`install.sh <version> [destination]` supports the four candidate Linux/macOS
-targets, verifies the archive against the release checksum manifest, extracts
-to a private temporary directory, and installs to the selected destination.
+`install.sh <version> [destination]` supports the four supported
+Linux/macOS targets, verifies the archive against the release checksum
+manifest, extracts to a private temporary directory, and installs to the
+selected destination.
 It does not require root and does not update an existing service manager.
 There is no self-update command.
 
@@ -82,5 +83,12 @@ authorized action.
 ## Release evidence
 
 The current release evidence is in the M012 closure record
-(`plans/closure/reverse-session/012-status.md`) and any follow-up closure
-records covering the authorized publication and registry consumer steps.
+(`plans/closure/reverse-session/012-status.md`, release-candidate
+qualification) and the M013 closure record
+(`plans/closure/reverse-session/013-status.md`, publication event:
+
+- GitHub release `v0.2.0` — release workflow run `36058175606`.
+- `eggtunnel-proto 0.2.0` then `eggtunnel 0.2.0` published to crates.io
+  in the dependency order recorded in M012.
+- Clean registry consumer: `eggtunnel = "0.2"` resolved from
+  `registry+https://github.com/rust-lang/crates.io-index`.

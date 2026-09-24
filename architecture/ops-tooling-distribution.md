@@ -10,11 +10,13 @@ the sibling dives (proto / client / server / transports / CLI).
 
 - Workspace `0.2.0` is the current published line (`Cargo.toml:6`, proto pin
   `0.2.0`); crates.io packages, tag `v0.2.0`, and GitHub release are `0.2.0`
-  — `docs/DISTRIBUTION.md:5-9`, `plans/closure/reverse-session/012-status.md`.
+  — `docs/DISTRIBUTION.md:5-9`,
+  `plans/closure/reverse-session/012-status.md` (qualification) +
+  `plans/closure/reverse-session/013-status.md` (publication event).
   (Older `0.1.0`-only historical quotes are marked as such.)
 - Wire protocol stays v1.0; crate version is independent.
-- M007–M011 closed, M012 conditionally closed, corrective addendum archived
-  (`plans/registry.md`); `scripts/test-install.sh` pins `0.2.0`.
+- M007–M013 closed, corrective addendum archived (`plans/registry.md`);
+  `scripts/test-install.sh` pins `0.2.0`.
 - "Supported" in this repo means **hosted build + checksum + per-runner
   install/version smoke for that archive** — `docs/DISTRIBUTION.md:24-28`,
   `docs/SUPPORT.md:41-47`. It does **not** mean interactive tunnel runtime
@@ -93,6 +95,9 @@ M012 re-ran the full gate (fmt, workspace check/test/clippy, rustdoc
 `-D warnings`, embedder check, audit, deny, all seven slices, MSRV,
 dependency guard) locally on the `0.2.0` candidate plus exact-head hosted CI
 run `36012640890` (`plans/closure/reverse-session/012-status.md:21,36-38,43`).
+M013 captured the publication event (tag `v0.2.0`, hosted release run
+`36058175606`, crates.io `eggtunnel-proto 0.2.0` then `eggtunnel 0.2.0`,
+clean registry consumer) at `plans/closure/reverse-session/013-status.md`.
 These sustained runs do not add latency to every-push CI and their
 host-specific timings are informational rather than release correctness
 thresholds.
@@ -115,19 +120,19 @@ thresholds.
 
 `release.yml:13-24`:
 
-| Target | Runner | Qualification state (per `docs/DISTRIBUTION.md:11-21`, `docs/SUPPORT.md:38-47`, `plans/closure/reverse-session/006-status.md:31-41` for the published `0.1.0` line, `plans/closure/reverse-session/012-status.md:45-54` for the published `0.2.0` line) |
+| Target | Runner | Qualification state (per `docs/DISTRIBUTION.md:11-21`, `docs/SUPPORT.md:38-47`, `plans/closure/reverse-session/006-status.md:31-41` for the published `0.1.0` line, `plans/closure/reverse-session/012-status.md:45-54` + `plans/closure/reverse-session/013-status.md` for the published `0.2.0` line) |
 |---|---|---|
-| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Supported (build + install/version smoke). Published-line release runs: `35804871876` for `0.1.0`; `0.2.0` run recorded in `012-status.md` and the post-publication closure |
-| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | Supported (build + install/version smoke). `0.2.0` evidence in `012-status.md` and the post-publication closure |
-| `x86_64-apple-darwin` | `macos-15-intel` | Supported (build + install/version smoke). `0.2.0` evidence in `012-status.md` and the post-publication closure |
-| `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42` plus post-publication closure). Only target with off-runner consumer evidence |
+| `x86_64-unknown-linux-gnu` | `ubuntu-latest` | Supported (build + install/version smoke). Published-line release runs: `35804871876` for `0.1.0`; `36058175606` for `0.2.0` (recorded in `013-status.md`) |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | Supported (build + install/version smoke). `0.2.0` evidence in `013-status.md` |
+| `x86_64-apple-darwin` | `macos-15-intel` | Supported (build + install/version smoke). `0.2.0` evidence in `013-status.md` |
+| `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42` + `013-status.md`). Only target with off-runner consumer evidence |
 
 Hosted CI evidence for the published `0.2.0` line: exact-head hosted CI run
 `36012640890` passed all standard jobs, all seven feature slices, MSRV, and
 the minimal-dependency guard on the `0.2.0` candidate SHA
-(`012-status.md:21,43`). The `v0.2.0` tag, four-target release workflow,
-GitHub release assets, and crates.io publication are recorded in
-`012-status.md` and any post-publication closure record.
+(`012-status.md:21,43`). The `v0.2.0` tag, four-target release workflow
+(`36058175606`), GitHub release assets, crates.io publication, and clean
+registry consumer are recorded in `013-status.md`.
 
 Unqualified / unsupported (explicitly called out so reviewers do not infer
 support from toolchain availability):
@@ -183,9 +188,10 @@ crate failed with `no matching package named eggtunnel-proto found`
 (`plans/closure/reverse-session/006-status.md:50`); M012 re-confirmed the
 same ordering constraint for the candidate via a command-scoped local proto
 patch, which is qualification-only and absent from package metadata
-(`012-status.md:34`). The publication evidence (tag workflow run IDs,
-crates.io order confirmation, clean registry consumer) is recorded in
-`012-status.md` plus any post-publication closure.
+(`012-status.md:34`). The publication event (tag workflow run
+`36058175606`, crates.io `eggtunnel-proto 0.2.0` then `eggtunnel 0.2.0`,
+clean registry consumer with both checksums recorded) is captured in
+`013-status.md`.
 `eggtunnel-cli` stays `publish = false` and ships only inside the binary
 archive (`crates/eggtunnel-cli/Cargo.toml:10`, `docs/DISTRIBUTION.md:9-11`).
 
@@ -234,7 +240,7 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
   `eggtunnel + LICENSE-MIT + THIRD_PARTY_NOTICES.md + VERSION` into a tarball,
   writes a `SHA256SUMS` with `shasum` (`:11-20`), then installs via
    `file://` base URL and asserts `eggtunnel version` prints the workspace
-   version (`eggtunnel 0.2.0` at the current candidate)
+   version (`eggtunnel 0.2.0` at the current published line)
   (`:22-25`).
 - Negative cases: appends a byte to the archive and asserts the installer
   **rejects** it (`:27-32`); asserts `unsupported-target` is rejected
@@ -252,17 +258,17 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
 - CI and release both build with `--locked` (`ci.yml:16-20`,
   `release.yml:36`), so a lockfile drift fails loudly rather than resolving
   silently.
-- `cargo audit` runs on every push/PR (`ci.yml:24`). Current candidate
+- `cargo audit` runs on every push/PR (`ci.yml:24`). Current published-line
   outcome (per `docs/DISTRIBUTION.md:73-77` and
-  `plans/closure/reverse-session/012-status.md:39`): **0 vulnerabilities, 1
-  informational `unmaintained` warning** — `atomic-polyfill 1.0.3`
-  (RUSTSEC-2023-0089, transitive via `postcard`/`heapless`, only compiled on
-  targets without native atomics). M007 removed the direct `rustls-pemfile`
-  dependency in favor of Rustls pki-types PEM parsing. Historical note only:
-  the M006 closure at that head recorded **0 vulnerabilities and 2
-  `unmaintained` warnings** — the same `atomic-polyfill` finding plus
-  `rustls-pemfile 2.2.0` (RUSTSEC-2025-0134, then a direct `mtls`
-  PEM-parsing dependency)
+  `plans/closure/reverse-session/012-status.md:39` + `013-status.md`):
+  **0 vulnerabilities, 1 informational `unmaintained` warning** —
+  `atomic-polyfill 1.0.3` (RUSTSEC-2023-0089, transitive via
+  `postcard`/`heapless`, only compiled on targets without native atomics).
+  M007 removed the direct `rustls-pemfile` dependency in favor of Rustls
+  pki-types PEM parsing. Historical note only: the M006 closure at that
+  head recorded **0 vulnerabilities and 2 `unmaintained` warnings** — the
+  same `atomic-polyfill` finding plus `rustls-pemfile 2.2.0`
+  (RUSTSEC-2025-0134, then a direct `mtls` PEM-parsing dependency)
   (`plans/closure/reverse-session/006-status.md:66`); plain `cargo audit`
   exits 0 while `--deny warnings` exits 1 on those findings.
 
@@ -287,10 +293,12 @@ GPL/AGPL/LGPL as a sole license**.
 | `walkdir` | `Unlicense OR MIT` | `UNLICENSE 0x7e12e5df`, `LICENSE-MIT 0x0f96a838` |
 
 - CI enforces `cargo deny check licenses` (`ci.yml:25`); M006 records `licenses
-  ok` (`plans/closure/reverse-session/006-status.md:67`) and M012 re-passed
-  the same check on the candidate (`012-status.md:36,39`). Verified against
-  `deny.toml:1-58`: 10-entry `allow` list plus exactly the four
-  `[[licenses.clarify]]` blocks tabulated above, no other exceptions. Note the
+  ok` (`plans/closure/reverse-session/006-status.md:67`); M012 re-passed the
+  same check on the candidate (`012-status.md:36,39`) and the M013
+  documentation gate confirmed it on the publication commit
+  (`013-status.md`). Verified against `deny.toml:1-58`: 10-entry `allow`
+  list plus exactly the four `[[licenses.clarify]]` blocks tabulated above,
+  no other exceptions. Note the
   gap: only the `licenses` check runs — `advisories`, `bans`, and `sources` are not
   invoked (advisory coverage comes from `cargo audit` instead).
 
@@ -389,19 +397,19 @@ contract (`003:16`).
 | Control surface | `plans/registry.md` | Compact status table: subsystem roadmaps, implementation plans, closure records, architecture constraints (`registry.md:69-86`), deferred work (`:87-95`). Reviewers start here |
 | Subsystem roadmaps | `plans/subsystems/reverse-session-roadmap.md` (M001–M012, §§1–19), `plans/subsystems/reverse-session-post-closure-corrective-addendum.md` (C001, archived) | Own invariants (§2: protocol/correlation/listener/runtime/embedding), dependency graph (§5: M001→M002→M003→{M004,M005}→M006→M007→M008→M009→M010→M011→M012), per-milestone objectives/exit criteria (§§6–11+), risks (§17), deferred work (§18), status table (§19) |
 | Implementation plans | `plans/implementation/reverse-session/001..012-*.md` + `plans/implementation/reverse-session-post-closure-corrective/001-*.md` | Bounded executable work vs a named baseline (eg. M006 baseline `448c615`, `006-*.md:9-11`; M012 baseline `0c8830e`, candidate `7aa3064`) |
-| Closure records | `plans/closure/reverse-session/001..012-status.md` + `plans/closure/reverse-session-post-closure-corrective/001-status.md` | Evidence that exit criteria held: requirement tables, platform tables, verification command logs, dependency/license evidence, findings disposition. M006 (`006-status.md:1-82`) is the `0.1.0` release qualification record; M012 (`012-status.md:1-87`) is the `0.2.0` candidate qualification record (conditionally closed). C001 supplements M004/M005 without rewriting their historical closures (`registry.md:59-64`) |
+| Closure records | `plans/closure/reverse-session/001..013-status.md` + `plans/closure/reverse-session-post-closure-corrective/001-status.md` | Evidence that exit criteria held: requirement tables, platform tables, verification command logs, dependency/license evidence, findings disposition. M006 (`006-status.md:1-82`) is the `0.1.0` release qualification record; M012 (`012-status.md:1-87`) is the `0.2.0` candidate qualification record; M013 (`013-status.md`) is the `0.2.0` publication event. C001 supplements M004/M005 without rewriting their historical closures (`registry.md:59-64`) |
 
 Flow: canonical spec → roadmap milestone → implementation plan (baseline-pinned)
 → code+tests → closure record (commands + hashes + tables) → `registry.md`
 status flip. Statuses use the fixed vocabulary at `registry.md:16-26`
 (proposed/ready/active/blocked/closing/closed/conditionally closed/superseded/
-archived). Today: M001–M011 closed, M012 conditionally closed, corrective
+archived). Today: M001–M011 closed, M012/M013 closed, corrective
 addendum archived for traceability (`registry.md:28-55,72-91`); no later
-reverse-session plan is registered behind M012. The flow ends at
-`plans/closure/reverse-session/012-status.md`, whose remaining conditions are
-explicitly operational: owner authorization, four-target tag workflow,
-proto-then-library publication, clean registry consumer, and a documentation
-closure commit with rerun CI.
+reverse-session plan is registered behind M013. The qualification/publish
+flow for `0.2.0` ends at `plans/closure/reverse-session/013-status.md`,
+which captures tag, four-target tag workflow, proto-then-library
+publication, clean registry consumer, and a documentation closure commit
+with rerun CI.
 
 ## 7. Fixtures — `fixtures/embedder`
 
@@ -429,10 +437,12 @@ suffices without the CLI, default features, or a library-owned runtime**
   (published `eggtunnel = "0.1"` from crates.io, lockfile `07edbb9a…`)
   compiled and ran (`006-status.md:23`) and remains the frozen historical
   record for the `0.1.0` line. The clean post-publication registry consumer
-  is `eggtunnel = "0.2"` from crates.io (resolved by the M012 publication
-  sequence). Own `fixtures/embedder/Cargo.lock` proves the downstream
-  resolution independently of the workspace lockfile; the path-based fixture
-  uses the workspace crate directly and does not pin a registry version.
+  for the `0.2.0` line resolved `eggtunnel = "0.2"` from crates.io
+  (`4e3dc4f7…` for `eggtunnel-proto 0.2.0`, `5cb7ea8c…` for
+  `eggtunnel 0.2.0`) and ran (`013-status.md`). Own
+  `fixtures/embedder/Cargo.lock` proves the downstream resolution
+  independently of the workspace lockfile; the path-based fixture uses the
+  workspace crate directly and does not pin a registry version.
 
 ## 8. Review checklist — gaps, drift, and stale-state risks
 
@@ -457,21 +467,21 @@ suffices without the CLI, default features, or a library-owned runtime**
 
 - [ ] GitHub release notes are `--generate-notes` auto-text; no curated
   narrative is attached to the tag release (`release.yml:91`,
-  `006-status.md:73`). The user-facing candidate narrative now lives in
-  `CHANGELOG.md:3-42` (M012 requirement evidence, `012-status.md:31`);
-  confirm a process owner promotes/curates it at publication time rather than
-  treating auto-notes as the changelog.
+  `006-status.md:73`). The user-facing release narrative lives in
+  `CHANGELOG.md:3-43` (M012 requirement evidence, `012-status.md:31`,
+  publication event in `013-status.md`); confirm a process owner
+  promotes/curates it at publication time rather than treating auto-notes
+  as the changelog.
 - [ ] `install.sh` requires `curl` + `shasum`/`sha256sum` + `install(1)` and
   supports exactly 4 triples (`install.sh:32-35`, `006-status.md:75`). No
   self-update, no service-manager integration by design
   (`docs/DISTRIBUTION.md:47-60`). Any "update" request reopens the Eggup
   deferral decision — needs an ADR, not a script patch.
-- [ ] Post-tag tree discipline (M012 gate): after the authorized tag, confirm
-  no production, dependency, workflow, or packaging input changed after the
-  tag the way M006 did (diff tag commit vs closure tree;
-  `006-status.md:12`). The M012 record additionally requires the
-  documentation-to-published-state closure commit plus rerun CI
-  (`012-status.md:61-62`).
+- [ ] Post-tag tree discipline (M012/M013 gate): after the authorized tag,
+  confirm no production, dependency, workflow, or packaging input changed
+  after the tag the way M006 did (diff tag commit vs closure tree;
+  `006-status.md:12`). The M013 record requires the documentation-to-published-state
+  closure commit plus rerun CI (`013-status.md`; `012-status.md:61-62`).
 
 ### C. Script drift
 
@@ -539,7 +549,7 @@ suffices without the CLI, default features, or a library-owned runtime**
   `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.0`),
   `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.2`),
   `CHANGELOG.md:3-43` (released entry), and
-  `plans/closure/reverse-session/012-status.md:5-22` (tag, GitHub release,
+  `plans/closure/reverse-session/013-status.md` (tag, GitHub release,
   crates.io publication, clean registry consumer) must all agree on the
   current published line. Re-flip them together plus rerun CI if any future
   release rewinds state. Never write crate `0.2.0` where wire `1.0` is
