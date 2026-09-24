@@ -1,6 +1,6 @@
 # Reverse Session Post-Closure Corrective Addendum
 
-Status: active — C001 closed (historical closure evidence retained for traceability)
+Status: archived — C001 closed; retained as historical corrective evidence
 
 Parent subsystem:
 

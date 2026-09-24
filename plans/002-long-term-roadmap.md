@@ -366,11 +366,87 @@ Phase 7 closed.
 - observability is bounded and secret-safe;
 - no wire change.
 
+## Phase 9 — Client runtime modularization and state-machine hardening
+
+### Objective
+
+Reduce post-M009 client maintenance concentration without changing public API or wire semantics.
+
+### Deliverables
+
+- decompose client configuration/transport/reconnect/Session/Service/Open/heartbeat responsibilities along private ownership boundaries;
+- create one explicit desired-Service/dynamic-registration state owner;
+- extract client tests from the production runtime module;
+- preserve the existing one-registration-in-flight constraint until protocol error correlation changes through a later ADR/milestone.
+
+### Dependencies
+
+Phase 8 closed.
+
+### Exit criteria
+
+- client runtime is materially easier to review;
+- dynamic Service/reconnect/cancellation semantics remain unchanged;
+- no new production dependency or protocol/public API change;
+- full continuous qualification passes.
+
+## Phase 10 — Sustained robustness and performance qualification
+
+### Objective
+
+Add durable evidence beyond fast unit/integration tests before the next public release.
+
+### Deliverables
+
+- sustained protocol decoder fuzz target plus corpus;
+- deterministic state-sequence stress;
+- reconnect/dynamic-Service/resource-convergence soak;
+- connection-churn and optional-transport sustained runs;
+- host/config-scoped throughput, churn, binary-size, and minimal-dependency baselines.
+
+### Dependencies
+
+Phase 9 closed.
+
+### Exit criteria
+
+- fuzz/soak evidence is bounded, repeatable, and recorded honestly;
+- resource/task state converges after sustained runs;
+- performance data is reproducible and informational rather than a noisy CI threshold;
+- no production dependency leakage.
+
+## Phase 11 — 0.2.0 release qualification
+
+### Objective
+
+Qualify and, after explicit authorization, publish the post-0.1 line as 0.2.0.
+
+### Deliverables
+
+- workspace/package version reconciliation;
+- public API/semver review against 0.1.0;
+- release notes/changelog;
+- package inspection and downstream candidate/registry consumption;
+- exact-head full/feature/MSRV/security/license/sustained qualification;
+- four supported target archives/install smokes/provenance;
+- execution-time Eggpack adoption re-evaluation without release-candidate scope creep.
+
+### Dependencies
+
+Phase 10 closed.
+
+### Exit criteria
+
+- 0.2.0 candidate is coherent and exact-head qualified;
+- protocol remains wire 1.0 unless a separate accepted protocol change precedes release;
+- publication state is truthful;
+- irreversible tag/crates/GitHub publication occurs only after explicit owner authorization.
+
 ## Future gated continuation
 
 Do not register an executable negotiated-protocol milestone until a concrete extension exists and an ADR defines capability/minor-version compatibility semantics.
 
-Do not replace the closed Phase 5 release workflow with Eggpack-generated release/bootstrap/CI machinery until Eggpack exposes stable interfaces that can preserve the current release support/evidence contract.
+Do not replace the closed Phase 5 release workflow with Eggpack-generated release/bootstrap/CI machinery until Eggpack's CI orchestration and ecosystem-adoption interfaces are stable enough to preserve the current release support/evidence contract. Phase 11 re-evaluates that boundary before the 0.2.0 candidate.
 
 ## Deferred roadmap candidates
 
@@ -415,6 +491,15 @@ Phase 3 QUIC     Phase 4 WSS/proxy
                     |
                     v
         Phase 8 dynamic Services/observability
+                    |
+                    v
+        Phase 9 client modularization/state hardening
+                    |
+                    v
+        Phase 10 sustained robustness/performance
+                    |
+                    v
+        Phase 11 0.2.0 release qualification
 
 ## Initial planning decomposition
 

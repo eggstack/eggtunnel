@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M009 and C001 closed; later work remains gated
+Status: active — M001-M009 and C001 closed; M010 ready
 
 Canonical references:
 
@@ -437,6 +437,81 @@ Exit conditions:
 - tracing and heartbeat health are bounded and secret-safe;
 - no wire change.
 
+### Milestone M010 — Client runtime modularization and state-machine hardening
+
+Status: ready
+
+Implementation plan:
+
+- plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md
+
+Primary class: polish / invariant
+
+Objective:
+
+- split the now-concentrated client runtime along stable private responsibility boundaries;
+- give desired-Service and dynamic-registration transitions one explicit state owner;
+- extract client tests from the production runtime file;
+- preserve all M009 public/wire semantics, including the deliberate one-registration-in-flight constraint.
+
+Exit conditions:
+
+- no public API or wire change;
+- reconnect/register/unregister/heartbeat/Open behavior remains qualified;
+- no production dependency growth;
+- client runtime and tests are materially easier to review;
+- hosted continuous qualification passes.
+
+### Milestone M011 — Sustained robustness and performance qualification
+
+Status: blocked on M010 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md
+
+Primary class: invariant / polish
+
+Objective:
+
+- add a sustained protocol fuzz target while retaining the fast deterministic hostile-input guard;
+- add deterministic client state-sequence stress;
+- add bounded reconnect/dynamic-Service/connection-churn soak;
+- record reproducible host-scoped throughput/churn/footprint baselines without turning noisy timings into hard CI correctness gates.
+
+Exit conditions:
+
+- fuzz and soak evidence are recorded with exact duration/configuration;
+- resource/task counts converge after sustained failure/reconnect cycles;
+- performance/footprint evidence is reproducible and informational;
+- no production dependency or protocol/public-API change.
+
+### Milestone M012 — 0.2.0 release qualification and publication gate
+
+Status: blocked on M011 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md
+
+Primary class: capability / polish
+
+Objective:
+
+- freeze and qualify M007-M011 as the next public 0.2.0 line;
+- review public API compatibility against published 0.1.0;
+- version/package/inspect the proto and library crates;
+- preserve the evidence-backed four-target binary release contract;
+- re-evaluate Eggpack at execution time without silently migrating release infrastructure;
+- stop before tag/crates/GitHub publication until explicit owner authorization.
+
+Exit conditions:
+
+- exact candidate passes full, feature, MSRV, security/license, sustained, packaging, and installer evidence;
+- protocol remains truthfully wire 1.0;
+- 0.2.0 public API/release notes are coherent;
+- authorized tag/release/publication and clean registry-consumer evidence complete before published-release closure.
+
 ### Later gated work
 
 Protocol capability negotiation is intentionally not assigned an executable milestone yet. The current protocol exchanges an empty capability set and treats minor versions as informational. The first change to that compatibility meaning must have a concrete extension and an accepted ADR before an implementation plan is registered.
@@ -595,3 +670,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md | Rust 1.89, feature slices, dependency guard, PEM parser, and hosted CI passed |
 | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md | M007 strict closure |
 | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
+| M010 client runtime modularization/state-machine hardening | ready | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | — | M009 strict closure |
+| M011 sustained robustness/performance qualification | blocked | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | — | M010 strict closure |
+| M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | — | M011 strict closure; publication requires explicit authorization |
