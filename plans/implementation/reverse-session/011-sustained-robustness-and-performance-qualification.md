@@ -1,6 +1,6 @@
 # Reverse Session M011 — Sustained Robustness and Performance Qualification
 
-Status: blocked
+Status: ready
 
 Planning baseline: 0c8830e76d92c209485eaf955cbdb51bdc953413
 
@@ -22,9 +22,9 @@ Add repeatable sustained evidence around the mature 0.x runtime: protocol fuzzin
 
 This milestone measures and stresses the existing product. It does not optimize the data plane, change the protocol, or make noisy performance numbers release correctness gates.
 
-## 2. Why this milestone is blocked
+## 2. Planning-time dependency rationale
 
-M010 first stabilizes the client runtime and desired-Service state boundaries. Sustained qualification should target the structure intended for the next release rather than record baselines against a file/state layout that is about to move.
+At planning time, M010 first needed to stabilize the client runtime and desired-Service state boundaries. M010 is now strictly closed at `plans/closure/reverse-session/010-status.md`, so this dependency is satisfied and M011 is ready to execute.
 
 ## 3. Planning-time ecosystem state
 

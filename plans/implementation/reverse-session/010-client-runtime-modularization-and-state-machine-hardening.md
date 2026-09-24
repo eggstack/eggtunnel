@@ -1,6 +1,6 @@
 # Reverse Session M010 — Client Runtime Modularization and State-Machine Hardening
 
-Status: closing
+Status: closed
 
 Planning baseline: 0c8830e76d92c209485eaf955cbdb51bdc953413
 

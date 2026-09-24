@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M009 and C001 closed; M010 closing
+Status: active — M001-M010 and C001 closed; M011 ready
 
 Canonical references:
 
@@ -439,7 +439,7 @@ Exit conditions:
 
 ### Milestone M010 — Client runtime modularization and state-machine hardening
 
-Status: closing
+Status: closed — closure recorded at `plans/closure/reverse-session/010-status.md`
 
 Implementation plan:
 
@@ -464,7 +464,7 @@ Exit conditions:
 
 ### Milestone M011 — Sustained robustness and performance qualification
 
-Status: blocked on M010 strict closure
+Status: ready — M010 strict closure recorded at `plans/closure/reverse-session/010-status.md`
 
 Implementation plan:
 
@@ -670,6 +670,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M007 maintainability/continuous qualification | closed | plans/implementation/reverse-session/007-maintainability-and-continuous-qualification.md | plans/closure/reverse-session/007-status.md | Rust 1.89, feature slices, dependency guard, PEM parser, and hosted CI passed |
 | M008 configurable runtime policy/API composition | closed | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | plans/closure/reverse-session/008-status.md | M007 strict closure |
 | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
-| M010 client runtime modularization/state-machine hardening | ready | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | — | M009 strict closure |
-| M011 sustained robustness/performance qualification | blocked | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | — | M010 strict closure |
+| M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md | M009 strict closure; hosted CI passed |
+| M011 sustained robustness/performance qualification | ready | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | — | M010 strict closure |
 | M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | — | M011 strict closure; publication requires explicit authorization |
