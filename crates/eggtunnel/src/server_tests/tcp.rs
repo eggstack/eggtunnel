@@ -152,8 +152,8 @@
         let client = Client::start(ClientConfig {
             server_addr: server.local_addr().to_string(),
             tls_server_name: "localhost".into(),
-            ca_pem: Some(cert.into_bytes()),
-            token,
+            ca_pem: Some(cert.as_bytes().to_vec()),
+            token: token.clone(),
             services: vec![ClientService::new(
                 ServiceId(1),
                 ServiceName::new("limited").unwrap(),
@@ -186,6 +186,219 @@
         assert_eq!(client.handle().snapshot().registered_services, 1);
         client.shutdown().await;
         server.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "bounded sustained lifecycle and connection-churn qualification"]
+    async fn qualification_tcp_tls_reconnect_and_connection_churn_soak() {
+        use std::time::Instant;
+
+        const CYCLES: usize = 20;
+        const CONNECTIONS_PER_CYCLE: usize = 10;
+        const CONCURRENCY: usize = 4;
+        static SMALL: [u8; 64] = [0x5a; 64];
+        static MEDIUM: [u8; 64 * 1024] = [0xa5; 64 * 1024];
+
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"bounded-tcp-tls-qualification".to_vec()).unwrap();
+        let server_config = |listen_addr| ServerConfig {
+            listen_addr,
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        };
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = stream.into_split();
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+
+        let mut server = Server::bind(server_config("127.0.0.1:0".parse().unwrap()))
+            .await
+            .unwrap();
+        let listen_addr = server.local_addr();
+        let client = Client::start(ClientConfig {
+            server_addr: listen_addr.to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.as_bytes().to_vec()),
+            token: token.clone(),
+            services: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !client_handle.snapshot().connected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let started = Instant::now();
+        let mut completed = 0usize;
+        let mut total_bytes = 0usize;
+        let mut high_water_opens = 0usize;
+        let mut high_water_server_sessions = 0usize;
+        let mut high_water_services = 0usize;
+        let mut high_water_pending = 0usize;
+        let mut high_water_connections = 0usize;
+        let mut high_water_handshakes = 0usize;
+        let mut registration_time = Duration::ZERO;
+        let mut reconnect_time = Duration::ZERO;
+        for cycle in 0..CYCLES {
+            let service_id = ServiceId(100 + cycle as u64);
+            let service = ClientService::new(
+                service_id,
+                ServiceName::new(format!("soak-{cycle}")).unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
+            );
+            let register_started = Instant::now();
+            client_handle.register_service(service).await.unwrap();
+            registration_time += register_started.elapsed();
+            let bind = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some((_, _, bind)) = server
+                        .handle()
+                        .snapshot()
+                        .effective_binds
+                        .into_iter()
+                        .find(|(_, id, _)| *id == service_id)
+                    {
+                        break bind;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let address = SocketAddr::V6(std::net::SocketAddrV6::new(
+                std::net::Ipv6Addr::from(bind.address),
+                bind.port,
+                0,
+                0,
+            ));
+            for first in (0..CONNECTIONS_PER_CYCLE).step_by(CONCURRENCY) {
+                let mut connections = tokio::task::JoinSet::new();
+                for connection in first..(first + CONCURRENCY).min(CONNECTIONS_PER_CYCLE) {
+                    let payload: &'static [u8] = if connection % 2 == 0 { &SMALL } else { &MEDIUM };
+                    connections.spawn(async move {
+                        let received = tokio::time::timeout(
+                            Duration::from_secs(10),
+                            roundtrip(address, payload),
+                        )
+                        .await
+                        .unwrap();
+                        (payload.len(), received == payload)
+                    });
+                }
+                while let Some(result) = connections.join_next().await {
+                    let (bytes, matched) = result.unwrap();
+                    assert!(matched);
+                    completed += 1;
+                    total_bytes += bytes;
+                    high_water_opens = high_water_opens.max(client_handle.snapshot().high_water_client_open_tasks);
+                }
+            }
+            client_handle.unregister_service(service_id).await.unwrap();
+
+            let old_server_handle = server.handle();
+            server.shutdown().await;
+            let drained = old_server_handle.snapshot();
+            assert_eq!(drained.active_sessions, 0);
+            assert_eq!(drained.registered_services, 0);
+            assert_eq!(drained.active_connections, 0);
+            assert_eq!(drained.pending_connections, 0);
+            assert_eq!(drained.active_handshakes, 0);
+            assert_eq!(drained.task_panics, 0);
+            high_water_server_sessions = high_water_server_sessions.max(drained.high_water_sessions);
+            high_water_services = high_water_services.max(drained.high_water_services);
+            high_water_pending = high_water_pending.max(drained.high_water_pending_connections);
+            high_water_connections = high_water_connections.max(drained.high_water_active_connections);
+            high_water_handshakes = high_water_handshakes.max(drained.high_water_handshakes);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while client_handle.snapshot().connected {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let client_disconnected = client_handle.snapshot();
+            assert_eq!(client_disconnected.active_sessions, 0);
+            assert_eq!(client_disconnected.registered_services, 0);
+            assert_eq!(client_disconnected.active_client_open_tasks, 0);
+            assert_eq!(client_disconnected.active_handshakes, 0);
+            assert_eq!(client_disconnected.task_panics, 0);
+
+            let reconnect_started = Instant::now();
+            server = Server::bind(server_config(listen_addr)).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !client_handle.snapshot().connected || server.handle().snapshot().active_sessions == 0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            reconnect_time += reconnect_started.elapsed();
+            let restored = server.handle().snapshot();
+            assert_eq!(restored.registered_services, 0);
+            high_water_server_sessions = high_water_server_sessions.max(restored.high_water_sessions);
+            high_water_services = high_water_services.max(restored.high_water_services);
+            high_water_pending = high_water_pending.max(restored.high_water_pending_connections);
+            high_water_connections = high_water_connections.max(restored.high_water_active_connections);
+            high_water_handshakes = high_water_handshakes.max(restored.high_water_handshakes);
+        }
+        client.shutdown().await;
+        let server_handle = server.handle();
+        server.shutdown().await;
+        echo_task.abort();
+        let client_final = client_handle.snapshot();
+        let server_final = server_handle.snapshot();
+        assert_eq!(client_final.active_sessions, 0);
+        assert_eq!(client_final.registered_services, 0);
+        assert_eq!(client_final.active_client_open_tasks, 0);
+        assert_eq!(client_final.active_handshakes, 0);
+        assert_eq!(client_final.task_panics, 0);
+        assert_eq!(server_final.active_sessions, 0);
+        assert_eq!(server_final.registered_services, 0);
+        assert_eq!(server_final.active_connections, 0);
+        assert_eq!(server_final.pending_connections, 0);
+        assert_eq!(server_final.active_handshakes, 0);
+        assert_eq!(server_final.task_panics, 0);
+        high_water_server_sessions = high_water_server_sessions.max(server_final.high_water_sessions);
+        high_water_services = high_water_services.max(server_final.high_water_services);
+        high_water_pending = high_water_pending.max(server_final.high_water_pending_connections);
+        high_water_connections = high_water_connections.max(server_final.high_water_active_connections);
+        high_water_handshakes = high_water_handshakes.max(server_final.high_water_handshakes);
+        let elapsed = started.elapsed();
+        eprintln!(
+            "tcp/tls soak: os={} arch={} cycles={} connections={} concurrency={} bytes_each_direction={} elapsed_ms={} connections_per_second={:.2} aggregate_mib_per_second={:.2} mean_register_ms={:.2} mean_reconnect_ms={:.2} high_water_sessions={} high_water_services={} high_water_pending={} high_water_connections={} high_water_handshakes={} client_open_high_water={}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            CYCLES,
+            completed,
+            CONCURRENCY,
+            total_bytes,
+            elapsed.as_millis(),
+            completed as f64 / elapsed.as_secs_f64(),
+            total_bytes as f64 * 2.0 / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+            registration_time.as_secs_f64() * 1000.0 / CYCLES as f64,
+            reconnect_time.as_secs_f64() * 1000.0 / CYCLES as f64,
+            high_water_server_sessions,
+            high_water_services,
+            high_water_pending,
+            high_water_connections,
+            high_water_handshakes,
+            high_water_opens,
+        );
     }
 
     #[tokio::test]

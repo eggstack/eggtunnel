@@ -1,5 +1,17 @@
 use super::*;
 
+#[cfg(feature = "websocket")]
+async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Vec<u8> {
+    let mut external = TcpStream::connect(address).await.unwrap();
+    external.write_all(payload).await.unwrap();
+    let mut response = vec![0; payload.len()];
+    tokio::time::timeout(Duration::from_secs(10), external.read_exact(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    response
+}
+
     #[cfg(feature = "websocket")]
     #[tokio::test]
     async fn websocket_tls_session_registers_and_relays_data_paths() {
@@ -57,6 +69,125 @@ use super::*;
         assert_eq!(&response, b"websocket-over-tls");
         client.shutdown().await;
         server.shutdown().await;
+    }
+
+    #[cfg(feature = "websocket")]
+    #[tokio::test]
+    #[ignore = "bounded WSS data-path churn qualification"]
+    async fn qualification_wss_connection_churn_soak() {
+        use std::time::Instant;
+
+        const CONNECTIONS: usize = 200;
+        const CONCURRENCY: usize = 4;
+        static SMALL: [u8; 64] = [0x69; 64];
+        static MEDIUM: [u8; 64 * 1024] = [0x96; 64 * 1024];
+
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"wss-churn-qualification".to_vec()).unwrap();
+        let server = Server::bind_websocket(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        let client = Client::start_websocket(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("wss-churn").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
+            )],
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        let bind = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let address = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+
+        let started = Instant::now();
+        let mut bytes_each_direction = 0usize;
+        let mut completed = 0usize;
+        for first in (0..CONNECTIONS).step_by(CONCURRENCY) {
+            let mut connections = tokio::task::JoinSet::new();
+            for connection in first..(first + CONCURRENCY).min(CONNECTIONS) {
+                let payload: &'static [u8] = if connection % 2 == 0 { &SMALL } else { &MEDIUM };
+                connections.spawn(async move {
+                    let received = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        wss_request_response(address, payload),
+                    )
+                    .await
+                    .unwrap();
+                    (payload.len(), received == payload)
+                });
+            }
+            while let Some(result) = connections.join_next().await {
+                let (bytes, matched) = result.unwrap();
+                assert!(matched);
+                bytes_each_direction += bytes;
+                completed += 1;
+            }
+        }
+        let elapsed = started.elapsed();
+        client.shutdown().await;
+        let server_handle = server.handle();
+        server.shutdown().await;
+        echo_task.abort();
+        let client_final = client_handle.snapshot();
+        let server_final = server_handle.snapshot();
+        assert_eq!(client_final.active_sessions, 0);
+        assert_eq!(client_final.registered_services, 0);
+        assert_eq!(client_final.active_client_open_tasks, 0);
+        assert_eq!(client_final.task_panics, 0);
+        assert_eq!(server_final.active_sessions, 0);
+        assert_eq!(server_final.active_connections, 0);
+        assert_eq!(server_final.pending_connections, 0);
+        assert_eq!(server_final.task_panics, 0);
+        eprintln!(
+            "wss connection churn: os={} arch={} connections={} concurrency={} bytes_each_direction={} elapsed_ms={} connections_per_second={:.2} aggregate_mib_per_second={:.2} client_open_high_water={} server_sessions_high_water={}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            completed,
+            CONCURRENCY,
+            bytes_each_direction,
+            elapsed.as_millis(),
+            completed as f64 / elapsed.as_secs_f64(),
+            bytes_each_direction as f64 * 2.0 / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+            client_final.high_water_client_open_tasks,
+            server_final.high_water_sessions,
+        );
     }
 
     #[cfg(feature = "websocket")]

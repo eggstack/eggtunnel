@@ -90,6 +90,126 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
 
     #[cfg(feature = "quic")]
     #[tokio::test]
+    #[ignore = "bounded QUIC stream-churn qualification"]
+    async fn qualification_quic_stream_churn_soak() {
+        use std::time::Instant;
+
+        const CONNECTIONS: usize = 200;
+        const CONCURRENCY: usize = 4;
+        static SMALL: [u8; 64] = [0x3c; 64];
+        static MEDIUM: [u8; 64 * 1024] = [0xc3; 64 * 1024];
+
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"quic-stream-churn-qualification".to_vec()).unwrap();
+        let server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        let client = Client::start_quic_insecure_for_test(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("quic-churn").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
+            )],
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        let bind = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some((_, _, bind)) = server.handle().snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let address = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+
+        let started = Instant::now();
+        let mut bytes_each_direction = 0usize;
+        let mut completed = 0usize;
+        for first in (0..CONNECTIONS).step_by(CONCURRENCY) {
+            let mut streams = tokio::task::JoinSet::new();
+            for connection in first..(first + CONCURRENCY).min(CONNECTIONS) {
+                let payload: &'static [u8] = if connection % 2 == 0 { &SMALL } else { &MEDIUM };
+                streams.spawn(async move {
+                    let received = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        roundtrip(address, payload),
+                    )
+                    .await
+                    .unwrap();
+                    (payload.len(), received == payload)
+                });
+            }
+            while let Some(result) = streams.join_next().await {
+                let (bytes, matched) = result.unwrap();
+                assert!(matched);
+                bytes_each_direction += bytes;
+                completed += 1;
+            }
+        }
+        let elapsed = started.elapsed();
+        client.shutdown().await;
+        let server_handle = server.handle();
+        server.shutdown().await;
+        echo_task.abort();
+        let client_final = client_handle.snapshot();
+        let server_final = server_handle.snapshot();
+        assert_eq!(client_final.active_sessions, 0);
+        assert_eq!(client_final.registered_services, 0);
+        assert_eq!(client_final.active_client_open_tasks, 0);
+        assert_eq!(client_final.active_handshakes, 0);
+        assert_eq!(client_final.task_panics, 0);
+        assert_eq!(server_final.active_sessions, 0);
+        assert_eq!(server_final.active_connections, 0);
+        assert_eq!(server_final.pending_connections, 0);
+        assert_eq!(server_final.task_panics, 0);
+        eprintln!(
+            "quic stream churn: os={} arch={} connections={} concurrency={} bytes_each_direction={} elapsed_ms={} streams_per_second={:.2} aggregate_mib_per_second={:.2} client_open_high_water={} server_sessions_high_water={}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            completed,
+            CONCURRENCY,
+            bytes_each_direction,
+            elapsed.as_millis(),
+            completed as f64 / elapsed.as_secs_f64(),
+            bytes_each_direction as f64 * 2.0 / elapsed.as_secs_f64() / (1024.0 * 1024.0),
+            client_final.high_water_client_open_tasks,
+            server_final.high_water_sessions,
+        );
+    }
+
+    #[cfg(feature = "quic")]
+    #[tokio::test]
     async fn quic_connection_replacement_creates_new_session_and_reregisters_services() {
         let (cert, key) = certificate();
         let token = SecretToken::new(b"quic-reconnect-secret".to_vec()).unwrap();
@@ -152,8 +272,13 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         .unwrap();
         let second_session = second_server.handle().snapshot().effective_binds[0].0;
         assert_ne!(first_session, second_session);
-        assert!(client.handle().snapshot().reconnects > 0);
+        let client_handle = client.handle();
+        assert!(client_handle.snapshot().reconnects > 0);
         client.shutdown().await;
+        let client_final = client_handle.snapshot();
+        assert!(!client_final.connected);
+        assert_eq!(client_final.active_sessions, 0);
+        assert_eq!(client_final.registered_services, 0);
         second_server.shutdown().await;
     }
 

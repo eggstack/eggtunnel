@@ -916,6 +916,7 @@ async fn quic_reconnect_loop(
             result = session => result,
         };
         quic.close();
+        clear_quic_session_counters(&counters);
         if matches!(
             &result,
             Err(TunnelError::Authentication | TunnelError::Authorization)
@@ -943,17 +944,7 @@ async fn record_quic_reconnect(
     cancel: &CancellationToken,
     delay: &mut Duration,
 ) {
-    counters
-        .connected
-        .store(0, std::sync::atomic::Ordering::Relaxed);
-    counters
-        .services
-        .store(0, std::sync::atomic::Ordering::Relaxed);
-    counters
-        .binds
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clear();
+    clear_quic_session_counters(counters);
     if cancel.is_cancelled() {
         return;
     }
@@ -968,6 +959,21 @@ async fn record_quic_reconnect(
     *delay = delay
         .saturating_mul(2)
         .min(counters.policy.timeouts.reconnect_max);
+}
+
+#[cfg(feature = "quic")]
+fn clear_quic_session_counters(counters: &Counters) {
+    counters
+        .connected
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    counters
+        .services
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    counters
+        .binds
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
 }
 
 #[cfg(any(feature = "quic", feature = "outbound-proxy"))]
@@ -1396,6 +1402,9 @@ impl Drop for CounterGuard {
     }
 }
 
+#[cfg(test)]
+#[path = "client/qualification_tests.rs"]
+mod qualification_tests;
 #[cfg(test)]
 #[path = "client/tests.rs"]
 mod tests;

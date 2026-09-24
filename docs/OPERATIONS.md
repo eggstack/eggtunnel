@@ -66,3 +66,46 @@ URI syntax. Proxy credentials are placed in the environment variable named by
 `outbound_proxy_env`; they are never formatted into diagnostics or the
 public `Snapshot` view, and proxy failures are reported only as typed
 termination categories.
+
+## Developer sustained qualification
+
+Long-running qualification is opt-in and stays out of routine CI latency.
+From the repository root, run the decoder fuzzer with a nightly toolchain and
+the checked-in seed corpus:
+
+```sh
+cargo +nightly fuzz run decode_frame fuzz/corpus/decode_frame -- -max_total_time=60 -max_len=1048590
+```
+
+Run deterministic lifecycle state sequencing and the bounded TCP/TLS
+reconnect/churn soak explicitly:
+
+```sh
+cargo test --locked -p eggtunnel --all-features deterministic_service_state_sequence_preserves_invariants_for_10000_steps -- --nocapture
+cargo test --locked --release -p eggtunnel --all-features qualification_tcp_tls_reconnect_and_connection_churn_soak -- --ignored --nocapture --test-threads=1
+```
+
+The soak performs 20 client/server Session cycles and 200 loopback relays with
+64-byte and 64-KiB payloads at a maximum concurrency of four. Its timing and
+throughput output is host-specific informational evidence. It asserts that
+Session, pending-connection, active-connection, and client Open-task counts
+converge after teardown.
+
+When optional transports are enabled, repeat their bounded sustained paths:
+
+```sh
+for repeat_index in 1 2 3; do cargo test --locked -p eggtunnel --no-default-features --features client,server,tls,quic quic_connection_replacement_creates_new_session_and_reregisters_services -- --test-threads=1 || exit; done
+for repeat_index in 1 2 3; do cargo test --locked -p eggtunnel --no-default-features --features client,server,tls,websocket websocket_tls_session_registers_and_relays_data_paths -- --test-threads=1 || exit; done
+for repeat_index in 1 2 3; do cargo test --locked -p eggtunnel --no-default-features --features client,server,tls,websocket wss_payload_larger_than_message_cap_roundtrips_multiple_frames -- --test-threads=1 || exit; done
+cargo test --locked --release -p eggtunnel --all-features qualification_quic_stream_churn_soak -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p eggtunnel --all-features qualification_wss_connection_churn_soak -- --ignored --nocapture --test-threads=1
+```
+
+Record release footprint and the minimal normal dependency graph on the same
+host:
+
+```sh
+cargo build --locked --release -p eggtunnel-cli --all-features
+wc -c target/release/eggtunnel
+cargo tree --locked -p eggtunnel --no-default-features --features client,tls -e normal
+```

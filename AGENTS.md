@@ -24,6 +24,7 @@ cargo deny check licenses
 ```
 
 - Single test: `cargo test --locked -p eggtunnel --all-features <filter>` (most tests are inline `#[tokio::test]` in `crates/eggtunnel/src/server.rs`). `--all-features` is required to cover `quic`/`websocket`/`mtls`/`outbound-proxy` paths.
+- Sustained qualification is opt-in: see `docs/OPERATIONS.md` for the `cargo +nightly fuzz` decoder target, deterministic Service-state sequence, and ignored TCP/TLS lifecycle/churn soak commands. These long runs are not part of every-push CI.
 - Never run workspace commands inside `fixtures/embedder`; always use `--manifest-path fixtures/embedder/Cargo.toml`.
 
 ## Docs / process

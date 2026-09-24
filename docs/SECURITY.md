@@ -90,3 +90,12 @@ updated only after an acknowledgement from the current Session generation.
 Library tracing uses coarse event fields and does not format tokens, proxy
 chains, TLS identities, or full configuration objects. The embedder controls
 subscriber filters and storage.
+
+The protocol decoder retains its deterministic 10,000-input hostile-byte
+unit guard. A separate, development-only `fuzz/` workspace targets the public
+bounded `eggtunnel_proto::decode_frame` API with arbitrary bytes and a small
+seed corpus of valid and malformed frames. The fuzz dependency graph is not
+part of the production workspace. A bounded local fuzz run adds evidence for
+decoder robustness; it does not establish exhaustive parser safety. The
+checked-in corpus contains protocol bytes only and must never contain
+credentials or captured production traffic.

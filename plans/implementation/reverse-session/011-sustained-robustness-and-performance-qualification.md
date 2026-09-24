@@ -1,6 +1,6 @@
 # Reverse Session M011 — Sustained Robustness and Performance Qualification
 
-Status: ready
+Status: active
 
 Planning baseline: 0c8830e76d92c209485eaf955cbdb51bdc953413
 

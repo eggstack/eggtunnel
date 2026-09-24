@@ -70,6 +70,12 @@ CI runs a main qualification job plus a supported feature-slice matrix, a Rust
 The matrix is library-profile qualification, not an OS support claim. The
 full all-features run remains required alongside the slices.
 
+M011 adds a separate, developer-invoked sustained qualification path documented
+in `docs/OPERATIONS.md`: a standalone `fuzz/` decoder workspace, a fixed-seed
+Service-state sequence, and ignored TCP/TLS, QUIC-stream, and WSS churn runs.
+These do not add latency to every-push CI and their host-specific timings are
+informational rather than release correctness thresholds.
+
 ## 3. Release / distribution
 
 ### 3.1 Trigger and version gate (`release.yml`)

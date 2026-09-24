@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M010 and C001 closed; M011 ready
+Status: active — M001-M010 and C001 closed; M011 active
 
 Canonical references:
 
@@ -464,7 +464,7 @@ Exit conditions:
 
 ### Milestone M011 — Sustained robustness and performance qualification
 
-Status: ready — M010 strict closure recorded at `plans/closure/reverse-session/010-status.md`
+Status: active — M010 strict closure recorded at `plans/closure/reverse-session/010-status.md`
 
 Implementation plan:
 

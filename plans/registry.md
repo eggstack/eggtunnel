@@ -29,13 +29,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M011 ready | M001-M010 and C001 are strictly closed. M011 sustained qualification is dependency-ready. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M011 active | M010 is strictly closed; M011 sustained robustness and performance qualification is in progress. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M011 sustained robustness/performance qualification | ready | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | M010 is strictly closed at plans/closure/reverse-session/010-status.md. |
+| Reverse session | M011 sustained robustness/performance qualification | active | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | M010 is strictly closed at plans/closure/reverse-session/010-status.md. |
 | Reverse session | M012 0.2.0 release qualification/publication gate | blocked | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | Hard dependency: M011 strict closure; irreversible publication also requires explicit owner authorization. |
 
 ## Recently closed implementation plans
