@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M011 and C001 closed; M012 closing
+Status: active — M001-M011 and C001 closed; M012 conditionally closed awaiting publication authorization
 
 Canonical references:
 
@@ -488,7 +488,7 @@ Exit conditions:
 
 ### Milestone M012 — 0.2.0 release qualification and publication gate
 
-Status: closing — candidate qualification is assembled; tag/release/publication remain gated on explicit owner authorization
+Status: conditionally closed — release candidate qualified; tag/release/publication and registry consumer evidence remain gated on explicit owner authorization; see `plans/closure/reverse-session/012-status.md`
 
 Implementation plan:
 
@@ -672,4 +672,4 @@ Explicitly deferred until after M006 or a new ADR:
 | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
 | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md | M009 strict closure; hosted CI passed |
 | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md | Sustained qualification complete; exact-head hosted CI run 36003630154 passed |
-| M012 0.2.0 release qualification/publication gate | closing | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | — | M011 strict closure satisfied; candidate qualification assembled; exact-head hosted CI is pending; publication requires explicit authorization |
+| M012 0.2.0 release qualification/publication gate | conditionally closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md | Candidate qualification and exact-head hosted CI passed; target release workflow and registry publication require explicit authorization |

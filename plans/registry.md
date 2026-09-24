@@ -29,18 +29,18 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 closing | M011 is strictly closed; M012 candidate qualification is assembled and exact-head hosted CI is pending, with publication still requiring explicit owner authorization. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012 conditionally closed | M011 and candidate qualification are complete; target release workflow and registry publication remain gated on explicit owner authorization. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M012 0.2.0 release qualification/publication gate | closing | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | M011 strict closure satisfied; candidate qualification assembled; exact-head hosted CI pending; irreversible publication also requires explicit owner authorization. |
 
-## Recently closed implementation plans
+## Recently closed or conditionally closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
+| Reverse session | M012 0.2.0 release qualification/publication gate | conditionally closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md; exact candidate passed local and hosted gates; tag workflow/publication/registry consumer await explicit authorization. |
 | Reverse session | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md; private runtime ownership, explicit Service lifecycle/heartbeat state, and exact-head hosted qualification. |
 | Reverse session | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md; bounded fuzz/soak/footprint evidence and exact-head hosted CI passed. |
 | Reverse session | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md; dynamic lifecycle, bounded heartbeat and secret-safe tracing qualified on hosted CI. |
@@ -86,8 +86,9 @@ and minimal dependency guard. No high/medium finding remains open.
 M011 closure record at plans/closure/reverse-session/011-status.md records the
 bounded decoder fuzz run, deterministic lifecycle sequence, TCP/TLS and
 optional-transport soaks, host-specific footprint data, full local gates, and
-exact-head hosted CI. M012 is ready; publication authorization remains a
-separate operational gate.
+exact-head hosted CI. M012's 0.2.0 candidate is conditionally closed after
+local and exact-head hosted qualification; its tag/publication sequence awaits
+explicit owner authorization.
 
 ## Current architecture constraints
 
@@ -112,7 +113,7 @@ The following are not optional implementation preferences:
 These are not M010 implementation blockers:
 
 - protocol capability/minor-version negotiation remains unplanned until a concrete extension exists and an ADR defines compatibility semantics;
-- Eggpack release/bootstrap/CI cutover remains a separate future migration. At this planning baseline Eggpack has closed manifest/ReleasePlan/bootstrap foundations, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; M012 must re-check rather than assume readiness;
+- Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel;
 - Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel;
 - Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain future support work requiring explicit evidence;
 - QUIC custom CA/mTLS and QUIC proxy traversal remain unsupported current profiles unless a later plan/ADR changes the transport boundary.
