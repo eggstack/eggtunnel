@@ -4,9 +4,9 @@ use std::{env, fs, net::SocketAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use eggtunnel::{
-    Client, ClientConfig, ClientIdentity, ClientService, SecretToken, Server, ServerConfig,
+    BindPolicy, ClientBuilder, ClientConfig, ClientIdentity, ClientService, ClientTransportProfile,
+    RuntimePolicy, SecretToken, ServerBuilder, ServerConfig, ServerTransportProfile,
     proto::{RequestedBind, ServiceId, ServiceName, TcpTarget},
-    validate_outbound_proxy,
 };
 use serde::Deserialize;
 
@@ -129,6 +129,72 @@ fn checked_endpoint(value: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(value.to_owned())
 }
 
+fn client_builder(config: &FileConfig) -> Result<ClientBuilder, Box<dyn std::error::Error>> {
+    let proxy = config
+        .outbound_proxy_env
+        .as_ref()
+        .map(env::var)
+        .transpose()?;
+    let profile = if config.transport == "quic" {
+        ClientTransportProfile::Quic
+    } else if config.transport == "websocket_tls" {
+        ClientTransportProfile::WebSocket
+    } else {
+        ClientTransportProfile::TcpTls
+    };
+    let mut builder = ClientBuilder::new(ClientConfig {
+        server_addr: checked_endpoint(config.server_addr.as_deref().ok_or("missing server_addr")?)?,
+        tls_server_name: config
+            .tls_server_name
+            .clone()
+            .ok_or("missing tls_server_name")?,
+        ca_pem: config.ca_cert.as_ref().map(fs::read).transpose()?,
+        token: load_token(&config.token_env)?,
+        services: client_services(config)?,
+    })
+    .transport(profile)
+    .runtime_policy(RuntimePolicy::default());
+    if let Some(proxy) = proxy {
+        builder = builder.outbound_proxy(proxy);
+    }
+    if let (Some(cert), Some(key)) = (&config.client_cert, &config.client_key) {
+        builder = builder.with_identity(ClientIdentity::new(fs::read(cert)?, fs::read(key)?));
+    }
+    Ok(builder)
+}
+
+fn server_builder(config: &FileConfig) -> Result<ServerBuilder, Box<dyn std::error::Error>> {
+    let listen_addr = checked_addr(
+        config.listen_addr.as_deref().ok_or("missing listen_addr")?,
+        "listen_addr",
+    )?;
+    let server = ServerConfig {
+        listen_addr,
+        certificate_pem: fs::read(config.tls_cert.as_ref().ok_or("missing tls_cert")?)?,
+        private_key_pem: fs::read(config.tls_key.as_ref().ok_or("missing tls_key")?)?,
+        token: load_token(&config.token_env)?,
+        allow_public_service_binds: config.allow_public_service_binds,
+    };
+    let profile = if config.transport == "quic" {
+        ServerTransportProfile::Quic
+    } else if config.transport == "websocket_tls" {
+        ServerTransportProfile::WebSocket
+    } else {
+        ServerTransportProfile::TcpTls
+    };
+    let mut builder = ServerBuilder::new(server)
+        .transport(profile)
+        .runtime_policy(RuntimePolicy::default())
+        .bind_policy(BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        });
+    if let Some(client_ca) = &config.client_ca {
+        builder = builder.client_ca_pem(fs::read(client_ca)?);
+    }
+    Ok(builder)
+}
+
 fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
     let _token = load_token(&config.token_env)?;
     if !matches!(
@@ -157,16 +223,6 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             if config.client_cert.is_some() != config.client_key.is_some() {
                 return Err("client_cert and client_key must be configured together".into());
             }
-            if config.transport == "quic"
-                && (config.ca_cert.is_some()
-                    || config.client_cert.is_some()
-                    || config.client_key.is_some()
-                    || config.outbound_proxy_env.is_some())
-            {
-                return Err(
-                    "the Eggress QUIC adapter supports platform roots and bearer auth only; proxy traversal is unsupported".into(),
-                );
-            }
             if config
                 .outbound_proxy_env
                 .as_deref()
@@ -180,23 +236,13 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
                 if value.trim().is_empty() {
                     return Err(format!("outbound proxy variable {name} is empty").into());
                 }
-                validate_outbound_proxy(&value)?;
-            }
-            if config.outbound_proxy_env.is_some()
-                && (config.client_cert.is_some() || config.client_key.is_some())
-            {
-                return Err("outbound proxy mode currently does not support mTLS".into());
-            }
-            if config.transport == "websocket_tls"
-                && (config.client_cert.is_some() || config.client_key.is_some())
-            {
-                return Err("WebSocket transport currently does not support mTLS".into());
             }
             if let (Some(cert), Some(key)) = (&config.client_cert, &config.client_key)
                 && (fs::read(cert)?.is_empty() || fs::read(key)?.is_empty())
             {
                 return Err("client certificate and key files must not be empty".into());
             }
+            client_builder(config)?.validate()?;
         }
         "server" => {
             let listen = config
@@ -220,15 +266,10 @@ fn check_config(config: &FileConfig) -> Result<(), Box<dyn std::error::Error>> {
             {
                 return Err("client CA file must not be empty".into());
             }
-            if config.transport == "quic" && config.client_ca.is_some() {
-                return Err("the Eggress QUIC adapter does not support mTLS".into());
-            }
-            if config.transport == "websocket_tls" && config.client_ca.is_some() {
-                return Err("WebSocket transport currently does not support mTLS".into());
-            }
             if config.outbound_proxy_env.is_some() {
                 return Err("outbound_proxy is only valid in client mode".into());
             }
+            server_builder(config)?.validate()?;
         }
         _ => return Err("mode must be 'client' or 'server'".into()),
     }
@@ -246,26 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Server { config: path } => {
             let config = read_config(&path)?;
             check_config(&config)?;
-            let token = load_token(&config.token_env)?;
-            let server_config = ServerConfig {
-                listen_addr: checked_addr(
-                    config.listen_addr.as_deref().ok_or("missing listen_addr")?,
-                    "listen_addr",
-                )?,
-                certificate_pem: fs::read(config.tls_cert.as_ref().ok_or("missing tls_cert")?)?,
-                private_key_pem: fs::read(config.tls_key.as_ref().ok_or("missing tls_key")?)?,
-                token,
-                allow_public_service_binds: config.allow_public_service_binds,
-            };
-            let server = if config.transport == "quic" {
-                Server::bind_quic(server_config).await?
-            } else if config.transport == "websocket_tls" {
-                Server::bind_websocket(server_config).await?
-            } else if let Some(client_ca) = &config.client_ca {
-                Server::bind_mtls(server_config, fs::read(client_ca)?).await?
-            } else {
-                Server::bind(server_config).await?
-            };
+            let server = server_builder(&config)?.bind().await?;
             println!("server listening on {}", server.local_addr());
             let handle = server.handle();
             let mut printed = std::collections::HashSet::new();
@@ -288,42 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Client { config: path } => {
             let config = read_config(&path)?;
             check_config(&config)?;
-            let services = client_services(&config)?;
-            let tls_server_name = config
-                .tls_server_name
-                .clone()
-                .ok_or("missing tls_server_name")?;
-            let client_config = ClientConfig {
-                server_addr: checked_endpoint(
-                    config.server_addr.as_deref().ok_or("missing server_addr")?,
-                )?,
-                tls_server_name,
-                ca_pem: config.ca_cert.as_ref().map(fs::read).transpose()?,
-                token: load_token(&config.token_env)?,
-                services,
-            };
-            let client = if config.transport == "quic" {
-                Client::start_quic(client_config).await?
-            } else if let Some(proxy_env) = &config.outbound_proxy_env {
-                let proxy = env::var(proxy_env)?;
-                if config.transport == "websocket_tls" {
-                    Client::start_websocket_with_outbound_proxy(client_config, &proxy).await?
-                } else {
-                    Client::start_with_outbound_proxy(client_config, &proxy).await?
-                }
-            } else if config.transport == "websocket_tls" {
-                Client::start_websocket(client_config).await?
-            } else if let (Some(client_cert), Some(client_key)) =
-                (&config.client_cert, &config.client_key)
-            {
-                Client::start_with_mtls(
-                    client_config,
-                    ClientIdentity::new(fs::read(client_cert)?, fs::read(client_key)?),
-                )
-                .await?
-            } else {
-                Client::start(client_config).await?
-            };
+            let client = client_builder(&config)?.start().await?;
             println!("client started; waiting for authenticated session");
             tokio::signal::ctrl_c().await?;
             client.shutdown().await;

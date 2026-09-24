@@ -35,14 +35,6 @@ enum ClientDataTransport {
     Quic(eggress_transport_quic::QuicConnection),
 }
 
-const MAX_SERVICES: usize = 64;
-const MAX_OPEN_TASKS: usize = 128;
-const CONTROL_QUEUE: usize = 128;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const RELAY_DRAIN: Duration = Duration::from_secs(15);
-const SERVER_DRAIN_GRACE: Duration = Duration::from_secs(1);
-
 /// Async byte stream implemented by an application-provided target connector.
 pub trait ApplicationStream: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> ApplicationStream for T {}
@@ -108,6 +100,96 @@ impl std::fmt::Debug for ClientConfig {
     }
 }
 
+/// Transport and identity selection for [`ClientBuilder`].
+pub enum ClientTransportProfile {
+    TcpTls,
+    #[cfg(feature = "quic")]
+    Quic,
+    #[cfg(feature = "websocket")]
+    WebSocket,
+}
+
+/// Typed composition surface for client transport, connector, and runtime policy.
+pub struct ClientBuilder {
+    config: ClientConfig,
+    connector: Arc<dyn TargetConnector>,
+    profile: ClientTransportProfile,
+    policy: crate::common::RuntimePolicy,
+    #[cfg(feature = "mtls")]
+    identity: Option<ClientIdentity>,
+    #[cfg(feature = "outbound-proxy")]
+    outbound_proxy: Option<String>,
+}
+
+impl ClientBuilder {
+    pub fn new(config: ClientConfig) -> Self {
+        Self {
+            config,
+            connector: Arc::new(TcpTargetConnector),
+            profile: ClientTransportProfile::TcpTls,
+            policy: crate::common::RuntimePolicy::default(),
+            #[cfg(feature = "mtls")]
+            identity: None,
+            #[cfg(feature = "outbound-proxy")]
+            outbound_proxy: None,
+        }
+    }
+
+    pub fn with_connector(mut self, connector: Arc<dyn TargetConnector>) -> Self {
+        self.connector = connector;
+        self
+    }
+
+    pub fn transport(mut self, profile: ClientTransportProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn runtime_policy(mut self, policy: crate::common::RuntimePolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    #[cfg(feature = "mtls")]
+    pub fn with_identity(mut self, identity: ClientIdentity) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    #[cfg(feature = "outbound-proxy")]
+    pub fn outbound_proxy(mut self, proxy_chain: impl Into<String>) -> Self {
+        self.outbound_proxy = Some(proxy_chain.into());
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        validate_client_profile(
+            &self.config,
+            &self.profile,
+            #[cfg(feature = "mtls")]
+            self.identity.is_some(),
+            #[cfg(feature = "outbound-proxy")]
+            self.outbound_proxy.as_deref(),
+            &self.policy,
+        )
+    }
+
+    pub async fn start(self) -> Result<Client, TunnelError> {
+        self.validate()?;
+        Client::start_profile(
+            self.config,
+            self.connector,
+            self.profile,
+            #[cfg(feature = "mtls")]
+            self.identity,
+            #[cfg(feature = "outbound-proxy")]
+            self.outbound_proxy,
+            self.policy,
+        )
+        .await
+    }
+}
+
 pub struct Client {
     cancel: CancellationToken,
     task: Option<JoinHandle<()>>,
@@ -153,8 +235,84 @@ impl ClientHandle {
 }
 
 impl Client {
+    async fn start_profile(
+        config: ClientConfig,
+        connector: Arc<dyn TargetConnector>,
+        profile: ClientTransportProfile,
+        #[cfg(feature = "mtls")] identity: Option<ClientIdentity>,
+        #[cfg(feature = "outbound-proxy")] outbound_proxy: Option<String>,
+        policy: crate::common::RuntimePolicy,
+    ) -> Result<Self, TunnelError> {
+        validate_client_profile(
+            &config,
+            &profile,
+            #[cfg(feature = "mtls")]
+            identity.is_some(),
+            #[cfg(feature = "outbound-proxy")]
+            outbound_proxy.as_deref(),
+            &policy,
+        )?;
+        #[cfg(feature = "mtls")]
+        if let Some(identity) = identity {
+            let tls = build_mtls_tls_config(&config, identity)?;
+            return Self::start_with_tls_config(
+                config,
+                connector,
+                tls,
+                false,
+                #[cfg(feature = "outbound-proxy")]
+                None,
+                policy,
+            )
+            .await;
+        }
+        match profile {
+            ClientTransportProfile::TcpTls => {
+                let tls = build_tls_config(config.ca_pem.as_deref())?;
+                #[cfg(feature = "outbound-proxy")]
+                let outbound = outbound_proxy
+                    .as_deref()
+                    .map(parse_outbound_proxy)
+                    .transpose()?;
+                Self::start_with_tls_config(
+                    config,
+                    connector,
+                    tls,
+                    false,
+                    #[cfg(feature = "outbound-proxy")]
+                    outbound,
+                    policy,
+                )
+                .await
+            }
+            #[cfg(feature = "quic")]
+            ClientTransportProfile::Quic => {
+                Self::start_quic_profile(config, connector, false, policy).await
+            }
+            #[cfg(feature = "websocket")]
+            ClientTransportProfile::WebSocket => {
+                let tls = build_tls_config(config.ca_pem.as_deref())?;
+                #[cfg(feature = "outbound-proxy")]
+                let outbound = outbound_proxy
+                    .as_deref()
+                    .map(parse_outbound_proxy)
+                    .transpose()?;
+                Self::start_with_tls_config(
+                    config,
+                    connector,
+                    tls,
+                    true,
+                    #[cfg(feature = "outbound-proxy")]
+                    outbound,
+                    policy,
+                )
+                .await
+            }
+        }
+    }
+
     pub async fn start(config: ClientConfig) -> Result<Self, TunnelError> {
-        Self::start_with_connector(config, Arc::new(TcpTargetConnector)).await
+        ClientBuilder::new(config).start().await
     }
 
     /// Start a client using an application-provided target connector.
@@ -162,21 +320,18 @@ impl Client {
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
-        Self::start_with_tls_config(
-            config,
-            connector,
-            tls_config,
-            false,
-            #[cfg(feature = "outbound-proxy")]
-            None,
-        )
-        .await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .start()
+            .await
     }
 
     #[cfg(feature = "websocket")]
     pub async fn start_websocket(config: ClientConfig) -> Result<Self, TunnelError> {
-        Self::start_websocket_with_connector(config, Arc::new(TcpTargetConnector)).await
+        ClientBuilder::new(config)
+            .transport(ClientTransportProfile::WebSocket)
+            .start()
+            .await
     }
 
     #[cfg(feature = "websocket")]
@@ -184,16 +339,11 @@ impl Client {
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
-        Self::start_with_tls_config(
-            config,
-            connector,
-            tls_config,
-            true,
-            #[cfg(feature = "outbound-proxy")]
-            None,
-        )
-        .await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .transport(ClientTransportProfile::WebSocket)
+            .start()
+            .await
     }
 
     #[cfg(feature = "outbound-proxy")]
@@ -201,12 +351,10 @@ impl Client {
         config: ClientConfig,
         proxy_chain: &str,
     ) -> Result<Self, TunnelError> {
-        Self::start_with_outbound_proxy_and_connector(
-            config,
-            proxy_chain,
-            Arc::new(TcpTargetConnector),
-        )
-        .await
+        ClientBuilder::new(config)
+            .outbound_proxy(proxy_chain)
+            .start()
+            .await
     }
 
     #[cfg(feature = "outbound-proxy")]
@@ -215,9 +363,11 @@ impl Client {
         proxy_chain: &str,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
-        let proxy = parse_outbound_proxy(proxy_chain)?;
-        Self::start_with_tls_config(config, connector, tls_config, false, Some(proxy)).await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .outbound_proxy(proxy_chain)
+            .start()
+            .await
     }
 
     #[cfg(all(feature = "outbound-proxy", feature = "websocket"))]
@@ -225,12 +375,11 @@ impl Client {
         config: ClientConfig,
         proxy_chain: &str,
     ) -> Result<Self, TunnelError> {
-        Self::start_websocket_with_outbound_proxy_and_connector(
-            config,
-            proxy_chain,
-            Arc::new(TcpTargetConnector),
-        )
-        .await
+        ClientBuilder::new(config)
+            .transport(ClientTransportProfile::WebSocket)
+            .outbound_proxy(proxy_chain)
+            .start()
+            .await
     }
 
     #[cfg(all(feature = "outbound-proxy", feature = "websocket"))]
@@ -239,14 +388,20 @@ impl Client {
         proxy_chain: &str,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_tls_config(config.ca_pem.as_deref())?;
-        let proxy = parse_outbound_proxy(proxy_chain)?;
-        Self::start_with_tls_config(config, connector, tls_config, true, Some(proxy)).await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .transport(ClientTransportProfile::WebSocket)
+            .outbound_proxy(proxy_chain)
+            .start()
+            .await
     }
 
     #[cfg(feature = "quic")]
     pub async fn start_quic(config: ClientConfig) -> Result<Self, TunnelError> {
-        Self::start_quic_with_connector(config, Arc::new(TcpTargetConnector)).await
+        ClientBuilder::new(config)
+            .transport(ClientTransportProfile::Quic)
+            .start()
+            .await
     }
 
     #[cfg(feature = "quic")]
@@ -254,7 +409,11 @@ impl Client {
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        Self::start_quic_profile(config, connector, false).await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .transport(ClientTransportProfile::Quic)
+            .start()
+            .await
     }
 
     #[cfg(feature = "quic")]
@@ -262,19 +421,20 @@ impl Client {
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
         insecure: bool,
+        policy: crate::common::RuntimePolicy,
     ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Client::start_quic requires a caller-owned Tokio runtime")
         })?;
-        validate_config(&config)?;
+        validate_config(&config, &policy)?;
         if config.ca_pem.is_some() {
             return Err(TunnelError::Configuration(
                 "Eggress QUIC currently uses platform roots; custom CA bundles are unsupported",
             ));
         }
         let cancel = CancellationToken::new();
-        let counters = Counters::default();
-        let (command_tx, command_rx) = mpsc::channel(32);
+        let counters = Counters::with_policy(policy);
+        let (command_tx, command_rx) = mpsc::channel(policy.limits.client_command_queue);
         let handle = ClientHandle {
             cancel: cancel.clone(),
             counters: counters.clone(),
@@ -307,7 +467,13 @@ impl Client {
     pub(crate) async fn start_quic_insecure_for_test(
         config: ClientConfig,
     ) -> Result<Self, TunnelError> {
-        Self::start_quic_profile(config, Arc::new(TcpTargetConnector), true).await
+        Self::start_quic_profile(
+            config,
+            Arc::new(TcpTargetConnector),
+            true,
+            Default::default(),
+        )
+        .await
     }
 
     #[cfg(all(test, feature = "quic"))]
@@ -315,7 +481,7 @@ impl Client {
         config: ClientConfig,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        Self::start_quic_profile(config, connector, true).await
+        Self::start_quic_profile(config, connector, true, Default::default()).await
     }
 
     #[cfg(feature = "mtls")]
@@ -323,16 +489,10 @@ impl Client {
         config: ClientConfig,
         identity: ClientIdentity,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_mtls_tls_config(&config, identity)?;
-        Self::start_with_tls_config(
-            config,
-            Arc::new(TcpTargetConnector),
-            tls_config,
-            false,
-            #[cfg(feature = "outbound-proxy")]
-            None,
-        )
-        .await
+        ClientBuilder::new(config)
+            .with_identity(identity)
+            .start()
+            .await
     }
 
     #[cfg(feature = "mtls")]
@@ -341,16 +501,11 @@ impl Client {
         identity: ClientIdentity,
         connector: Arc<dyn TargetConnector>,
     ) -> Result<Self, TunnelError> {
-        let tls_config = build_mtls_tls_config(&config, identity)?;
-        Self::start_with_tls_config(
-            config,
-            connector,
-            tls_config,
-            false,
-            #[cfg(feature = "outbound-proxy")]
-            None,
-        )
-        .await
+        ClientBuilder::new(config)
+            .with_connector(connector)
+            .with_identity(identity)
+            .start()
+            .await
     }
 
     async fn start_with_tls_config(
@@ -361,14 +516,15 @@ impl Client {
         #[cfg(feature = "outbound-proxy")] outbound: Option<
             Arc<eggress_outbound::OutboundConnector>,
         >,
+        policy: crate::common::RuntimePolicy,
     ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Client::start requires a caller-owned Tokio runtime")
         })?;
-        validate_config(&config)?;
+        validate_config(&config, &policy)?;
         let cancel = CancellationToken::new();
-        let counters = Counters::default();
-        let (command_tx, command_rx) = mpsc::channel(32);
+        let counters = Counters::with_policy(policy);
+        let (command_tx, command_rx) = mpsc::channel(policy.limits.client_command_queue);
         let handle = ClientHandle {
             cancel: cancel.clone(),
             counters: counters.clone(),
@@ -464,7 +620,56 @@ impl Drop for Client {
     }
 }
 
-fn validate_config(config: &ClientConfig) -> Result<(), TunnelError> {
+fn validate_client_profile(
+    config: &ClientConfig,
+    _profile: &ClientTransportProfile,
+    #[cfg(feature = "mtls")] has_identity: bool,
+    #[cfg(feature = "outbound-proxy")] outbound_proxy: Option<&str>,
+    policy: &crate::common::RuntimePolicy,
+) -> Result<(), TunnelError> {
+    policy.validate()?;
+    validate_config(config, policy)?;
+    #[cfg(feature = "mtls")]
+    let _has_identity = has_identity;
+    #[cfg(not(feature = "mtls"))]
+    let _has_identity = false;
+    #[cfg(feature = "outbound-proxy")]
+    let _has_outbound_proxy = outbound_proxy.is_some();
+    #[cfg(not(feature = "outbound-proxy"))]
+    let _has_outbound_proxy = false;
+    #[cfg(feature = "quic")]
+    if matches!(_profile, ClientTransportProfile::Quic)
+        && (config.ca_pem.is_some() || _has_identity || _has_outbound_proxy)
+    {
+        return Err(TunnelError::Configuration(
+            "Eggress QUIC currently supports platform roots and bearer auth only",
+        ));
+    }
+    #[cfg(feature = "websocket")]
+    if matches!(_profile, ClientTransportProfile::WebSocket) && _has_identity {
+        return Err(TunnelError::Configuration(
+            "WebSocket transport currently does not support mTLS",
+        ));
+    }
+    #[cfg(all(feature = "mtls", feature = "outbound-proxy"))]
+    if _has_identity && outbound_proxy.is_some() {
+        return Err(TunnelError::Configuration(
+            "outbound proxy mode currently does not support mTLS",
+        ));
+    }
+    #[cfg(feature = "outbound-proxy")]
+    if let Some(chain) = outbound_proxy {
+        let _ = parse_outbound_proxy(chain)?;
+    }
+    #[cfg(not(any(feature = "quic", feature = "websocket")))]
+    let _ = _profile;
+    Ok(())
+}
+
+fn validate_config(
+    config: &ClientConfig,
+    policy: &crate::common::RuntimePolicy,
+) -> Result<(), TunnelError> {
     if !valid_endpoint(&config.server_addr) {
         return Err(TunnelError::Configuration(
             "server_addr must be a host:port endpoint",
@@ -473,8 +678,10 @@ fn validate_config(config: &ClientConfig) -> Result<(), TunnelError> {
     if config.tls_server_name.is_empty() || config.tls_server_name.len() > 253 {
         return Err(TunnelError::Configuration("TLS server name is invalid"));
     }
-    if config.services.is_empty() || config.services.len() > MAX_SERVICES {
-        return Err(TunnelError::Configuration("service count must be 1..=64"));
+    if config.services.is_empty() || config.services.len() > policy.limits.services_per_session {
+        return Err(TunnelError::Configuration(
+            "service count exceeds the configured per-session limit",
+        ));
     }
     let mut ids = std::collections::HashSet::new();
     let mut names = std::collections::HashSet::new();
@@ -563,7 +770,7 @@ async fn reconnect_loop(
     counters: Counters,
     mut commands: mpsc::Receiver<ClientCommand>,
 ) {
-    let mut delay = Duration::from_millis(500);
+    let mut delay = counters.policy.timeouts.reconnect_initial;
     'reconnect: loop {
         if cancel.is_cancelled() {
             break;
@@ -573,13 +780,13 @@ async fn reconnect_loop(
         }
         let outcome = tokio::select! {
             _ = cancel.cancelled() => break,
-            result = connect_server(&config.server_addr, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result,
+            result = connect_server(&config.server_addr, counters.policy.timeouts.connect, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result,
         };
         let result = match outcome {
             Ok(stream) => {
                 let tls_result = tokio::select! {
                     _ = cancel.cancelled() => break 'reconnect,
-                    result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls.clone(), &config.tls_server_name)) => result,
+                    result = timeout(counters.policy.timeouts.handshake, tls_connect(stream, tls.clone(), &config.tls_server_name)) => result,
                 };
                 match tls_result {
                     Ok(Ok(stream)) => {
@@ -593,7 +800,7 @@ async fn reconnect_loop(
                                     .max_message_size(Some(1024 * 1024))
                                     .max_frame_size(Some(1024 * 1024));
                                 stream = timeout(
-                                    HANDSHAKE_TIMEOUT,
+                                    counters.policy.timeouts.handshake,
                                     eggress_protocol_websocket::WebSocketTunnelClient::new(
                                         1024 * 1024,
                                     )
@@ -632,7 +839,8 @@ async fn reconnect_loop(
                             Err(error) => Err(error),
                         }
                     }
-                    _ => Err(TunnelError::Tls),
+                    Err(_) => Err(TunnelError::Timeout),
+                    Ok(Err(_)) => Err(TunnelError::Tls),
                 }
             }
             Err(error) => Err(error),
@@ -671,12 +879,15 @@ async fn reconnect_loop(
             _ = cancel.cancelled() => break,
             _ = tokio::time::sleep(delay + Duration::from_millis(jitter_ms)) => {}
         }
-        delay = (delay * 2).min(Duration::from_secs(30));
+        delay = delay
+            .saturating_mul(2)
+            .min(counters.policy.timeouts.reconnect_max);
     }
 }
 
 async fn connect_server(
     endpoint: &str,
+    connect_timeout: Duration,
     #[cfg(feature = "outbound-proxy")] outbound: Option<&eggress_outbound::OutboundConnector>,
 ) -> Result<BoxStream, TunnelError> {
     #[cfg(feature = "outbound-proxy")]
@@ -687,7 +898,7 @@ async fn connect_server(
             "server_addr must be a host:port endpoint",
         ))?;
         let (stream, _) = outbound
-            .connect_tcp_timeout_detailed(host, port, CONNECT_TIMEOUT)
+            .connect_tcp_timeout_detailed(host, port, connect_timeout)
             .await
             .map_err(|error| match error.kind() {
                 OutboundConnectErrorKind::Authentication => TunnelError::Authentication,
@@ -697,7 +908,7 @@ async fn connect_server(
             })?;
         return Ok(stream);
     }
-    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect(endpoint))
+    let tcp = timeout(connect_timeout, TcpStream::connect(endpoint))
         .await
         .map_err(|_| TunnelError::Timeout)?
         .map_err(|_| TunnelError::Disconnected)?;
@@ -719,7 +930,7 @@ async fn quic_reconnect_loop(
     let Some((host, port)) = split_endpoint(&config.server_addr) else {
         return;
     };
-    let mut delay = Duration::from_millis(500);
+    let mut delay = counters.policy.timeouts.reconnect_initial;
     'reconnect: loop {
         if cancel.is_cancelled() {
             break;
@@ -730,13 +941,14 @@ async fn quic_reconnect_loop(
         let quic_config = QuicClientConfig {
             server_name: config.tls_server_name.clone(),
             insecure,
-            idle_timeout: Duration::from_secs(90),
-            max_concurrent_streams: 256,
+            idle_timeout: counters.policy.timeouts.control_idle,
+            max_concurrent_streams: counters.policy.limits.client_open_tasks.saturating_add(1)
+                as u32,
             ..QuicClientConfig::default()
         };
         let quic = tokio::select! {
             _ = cancel.cancelled() => break,
-            result = timeout(CONNECT_TIMEOUT, QuicClient::connect(host, port, quic_config)) => {
+            result = timeout(counters.policy.timeouts.connect, QuicClient::connect(host, port, quic_config)) => {
                 match result {
                     Ok(Ok(client)) => client,
                     _ => {
@@ -748,11 +960,11 @@ async fn quic_reconnect_loop(
         };
         *handle.quic_client.lock().unwrap_or_else(|p| p.into_inner()) = Some(quic.clone());
         let session = async {
-            let connection = timeout(CONNECT_TIMEOUT, quic.get_connection())
+            let connection = timeout(counters.policy.timeouts.connect, quic.get_connection())
                 .await
                 .map_err(|_| TunnelError::Timeout)?
                 .map_err(|_| TunnelError::Tls)?;
-            let control = timeout(CONNECT_TIMEOUT, connection.open_stream())
+            let control = timeout(counters.policy.timeouts.connect, connection.open_stream())
                 .await
                 .map_err(|_| TunnelError::Timeout)?
                 .map_err(|_| TunnelError::Disconnected)?;
@@ -824,7 +1036,9 @@ async fn record_quic_reconnect(
         _ = cancel.cancelled() => {},
         _ = tokio::time::sleep(*delay + Duration::from_millis(jitter)) => {}
     }
-    *delay = (*delay * 2).min(Duration::from_secs(30));
+    *delay = delay
+        .saturating_mul(2)
+        .min(counters.policy.timeouts.reconnect_max);
 }
 
 #[cfg(any(feature = "quic", feature = "outbound-proxy"))]
@@ -882,9 +1096,10 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             version: ProtocolVersion::CURRENT,
             capabilities: Capabilities::default(),
         }),
+        counters.policy.timeouts.handshake,
     )
     .await?;
-    match handshake_read(&mut stream).await? {
+    match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
         Message::ServerHello(ServerHello { version, .. })
             if version.major == ProtocolVersion::CURRENT.major => {}
         _ => {
@@ -894,8 +1109,13 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         }
     }
     let auth = Auth::new(token.expose().to_vec())?;
-    handshake_write(&mut stream, &Message::Auth(auth)).await?;
-    let session_id = match handshake_read(&mut stream).await? {
+    handshake_write(
+        &mut stream,
+        &Message::Auth(auth),
+        counters.policy.timeouts.handshake,
+    )
+    .await?;
+    let session_id = match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
         Message::AuthOk(AuthOk { session_id }) => session_id,
         _ => return Err(TunnelError::Authentication),
     };
@@ -907,8 +1127,13 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             requested_bind: service.requested_bind.clone(),
             target: service.target.clone(),
         };
-        handshake_write(&mut stream, &Message::RegisterService(registration)).await?;
-        match handshake_read(&mut stream).await? {
+        handshake_write(
+            &mut stream,
+            &Message::RegisterService(registration),
+            counters.policy.timeouts.handshake,
+        )
+        .await?;
+        match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
             Message::RegisterAck(ack) if ack.service_id == service.id => {
                 counters
                     .binds
@@ -930,25 +1155,25 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     counters
         .sessions
         .store(1, std::sync::atomic::Ordering::Relaxed);
-    *reconnect_delay = Duration::from_millis(500);
+    *reconnect_delay = counters.policy.timeouts.reconnect_initial;
     let _connected_guard = CounterGuard::new(counters.sessions.clone());
     let mut active_services: HashMap<ServiceId, ClientService> =
         services.iter().cloned().map(|s| (s.id, s)).collect();
-    let semaphore = Arc::new(Semaphore::new(MAX_OPEN_TASKS));
-    let (out_tx, mut out_rx) = mpsc::channel(CONTROL_QUEUE);
+    let semaphore = Arc::new(Semaphore::new(counters.policy.limits.client_open_tasks));
+    let (out_tx, mut out_rx) = mpsc::channel(counters.policy.limits.control_queue);
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut opens = JoinSet::new();
     let session_cancel = CancellationToken::new();
     let mut heartbeat = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(20),
-        Duration::from_secs(20),
+        tokio::time::Instant::now() + counters.policy.timeouts.heartbeat_interval,
+        counters.policy.timeouts.heartbeat_interval,
     );
     let mut heartbeat_nonce = 0u64;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 session_cancel.cancel();
-                let drain = Message::Drain(eggtunnel_proto::Drain { deadline_ms: RELAY_DRAIN.as_millis() as u32 });
+                let drain = Message::Drain(eggtunnel_proto::Drain { deadline_ms: counters.policy.timeouts.relay_drain.as_millis() as u32 });
                 let _ = timeout(Duration::from_millis(250), write_message(&mut writer, &drain)).await;
                 break;
             }
@@ -1021,7 +1246,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             }
         }
     }
-    let _ = timeout(SERVER_DRAIN_GRACE, async {
+    let _ = timeout(counters.policy.timeouts.shutdown_grace, async {
         while opens.join_next().await.is_some() {}
     })
     .await;
@@ -1039,17 +1264,24 @@ fn apply_client_command(services: &mut Vec<ClientService>, command: ClientComman
     }
 }
 
-async fn handshake_read(stream: &mut BoxStream) -> Result<Message, TunnelError> {
-    timeout(HANDSHAKE_TIMEOUT, read_boxed(stream))
+async fn handshake_read(
+    stream: &mut BoxStream,
+    deadline: Duration,
+) -> Result<Message, TunnelError> {
+    timeout(deadline, read_boxed(stream))
         .await
-        .map_err(|_| TunnelError::Disconnected)?
+        .map_err(|_| TunnelError::Timeout)?
         .map_err(Into::into)
 }
 
-async fn handshake_write(stream: &mut BoxStream, message: &Message) -> Result<(), TunnelError> {
-    timeout(HANDSHAKE_TIMEOUT, write_boxed(stream, message))
+async fn handshake_write(
+    stream: &mut BoxStream,
+    message: &Message,
+    deadline: Duration,
+) -> Result<(), TunnelError> {
+    timeout(deadline, write_boxed(stream, message))
         .await
-        .map_err(|_| TunnelError::Disconnected)?
+        .map_err(|_| TunnelError::Timeout)?
         .map_err(Into::into)
 }
 
@@ -1079,18 +1311,18 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
         };
         let target = tokio::select! {
             _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(CONNECT_TIMEOUT, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
+            result = timeout(counters.policy.timeouts.connect, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
         };
         let mut data = match transport {
             ClientDataTransport::TcpTls { server_addr, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
                 let stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = connect_server(&server_addr, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
+                    result = connect_server(&server_addr, counters.policy.timeouts.connect, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
                 };
                 #[allow(unused_mut)]
                 let mut stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = timeout(HANDSHAKE_TIMEOUT, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
+                    result = timeout(counters.policy.timeouts.handshake, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
                 };
                 #[cfg(feature = "websocket")]
                 if websocket {
@@ -1101,7 +1333,7 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
                         .max_frame_size(Some(1024 * 1024));
                     stream = tokio::select! {
                         _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                        result = timeout(HANDSHAKE_TIMEOUT, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
+                        result = timeout(counters.policy.timeouts.handshake, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
                     };
                 }
                 #[cfg(not(feature = "websocket"))]
@@ -1112,12 +1344,12 @@ async fn handle_open(open: Open, service: ClientService, context: OpenContext) {
             ClientDataTransport::Quic(connection) => {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = timeout(CONNECT_TIMEOUT, connection.open_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
+                    result = timeout(counters.policy.timeouts.connect, connection.open_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
                 }
             }
         };
         write_boxed(&mut data, &Message::DataHello(DataHello { session_id, service_id: service.id, connection_id: open.connection_id })).await?;
-        match relay_with_options(target, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), RELAY_DRAIN)).await {
+        match relay_with_options(target, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
             Ok(report) => {
                 counters.bytes_upstream.fetch_add(report.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
                 counters.bytes_downstream.fetch_add(report.bytes_downstream, std::sync::atomic::Ordering::Relaxed);
@@ -1193,15 +1425,126 @@ mod tests {
 
     #[test]
     fn client_validation_rejects_invalid_endpoint_without_server_feature() {
-        assert!(validate_config(&config("missing-port")).is_err());
-        assert!(validate_config(&config("localhost:0")).is_err());
-        assert!(validate_config(&config("localhost:443")).is_ok());
+        assert!(validate_config(&config("missing-port"), &Default::default()).is_err());
+        assert!(validate_config(&config("localhost:0"), &Default::default()).is_err());
+        assert!(validate_config(&config("localhost:443"), &Default::default()).is_ok());
     }
 
     #[test]
     fn client_validation_rejects_duplicate_service_identity() {
         let mut config = config("localhost:443");
         config.services.push(config.services[0].clone());
-        assert!(validate_config(&config).is_err());
+        assert!(validate_config(&config, &Default::default()).is_err());
+    }
+
+    #[test]
+    fn client_builder_applies_custom_service_ceiling() {
+        let mut config = config("localhost:443");
+        config.services.push(ClientService::new(
+            ServiceId(2),
+            ServiceName::new("two").unwrap(),
+            RequestedBind::Loopback { port: 0 },
+            TcpTarget::new("127.0.0.1", 81).unwrap(),
+        ));
+        let mut policy = crate::common::RuntimePolicy::default();
+        policy.limits.services_per_session = 1;
+        let builder = ClientBuilder::new(config).runtime_policy(policy);
+        assert!(builder.validate().is_err());
+    }
+
+    #[test]
+    fn client_builder_accepts_tcp_tls_and_default_policy() {
+        assert!(
+            ClientBuilder::new(config("localhost:443"))
+                .validate()
+                .is_ok()
+        );
+        let mut custom_ca = config("localhost:443");
+        custom_ca.ca_pem = Some(b"custom CA".to_vec());
+        assert!(ClientBuilder::new(custom_ca).validate().is_ok());
+    }
+
+    #[cfg(feature = "mtls")]
+    #[test]
+    fn client_builder_accepts_tcp_mtls() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
+        assert!(builder.validate().is_ok());
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
+    fn client_profile_validator_rejects_quic_custom_ca() {
+        let mut config = config("localhost:443");
+        config.ca_pem = Some(b"custom CA".to_vec());
+        let builder = ClientBuilder::new(config).transport(ClientTransportProfile::Quic);
+        assert!(builder.validate().is_err());
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
+    fn client_profile_validator_accepts_quic_defaults() {
+        assert!(
+            ClientBuilder::new(config("localhost:443"))
+                .transport(ClientTransportProfile::Quic)
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[cfg(feature = "websocket")]
+    #[test]
+    fn client_profile_validator_accepts_websocket_defaults() {
+        assert!(
+            ClientBuilder::new(config("localhost:443"))
+                .transport(ClientTransportProfile::WebSocket)
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[cfg(all(feature = "quic", feature = "outbound-proxy"))]
+    #[test]
+    fn client_profile_validator_rejects_quic_proxy() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .transport(ClientTransportProfile::Quic)
+            .outbound_proxy("socks5://localhost:1080");
+        assert!(builder.validate().is_err());
+    }
+
+    #[cfg(all(feature = "quic", feature = "mtls"))]
+    #[test]
+    fn client_profile_validator_rejects_quic_mtls() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .transport(ClientTransportProfile::Quic)
+            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
+        assert!(builder.validate().is_err());
+    }
+
+    #[cfg(all(feature = "websocket", feature = "outbound-proxy"))]
+    #[test]
+    fn client_profile_validator_accepts_websocket_proxy() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .transport(ClientTransportProfile::WebSocket)
+            .outbound_proxy("socks5://localhost:1080");
+        assert!(builder.validate().is_ok());
+    }
+
+    #[cfg(all(feature = "websocket", feature = "mtls"))]
+    #[test]
+    fn client_profile_validator_rejects_websocket_mtls() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .transport(ClientTransportProfile::WebSocket)
+            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()));
+        assert!(builder.validate().is_err());
+    }
+
+    #[cfg(all(feature = "mtls", feature = "outbound-proxy"))]
+    #[test]
+    fn client_profile_validator_rejects_mtls_proxy() {
+        let builder = ClientBuilder::new(config("localhost:443"))
+            .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()))
+            .outbound_proxy("socks5://localhost:1080");
+        assert!(builder.validate().is_err());
     }
 }

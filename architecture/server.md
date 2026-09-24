@@ -656,3 +656,13 @@ Also notable: `refused_target_rejects_external_connection_and_releases_pending_c
 *End of server deep dive. Next: `transports-wire-io.md` for the framing/relay
 primitives this module calls into, or `client.md` for the other half of the
 `Open`/`DataHello` handshake.*
+
+### Runtime policy and composition (M008)
+
+`ServerBuilder` composes TCP/TLS, QUIC, WebSocket, optional trusted client CA,
+`BindPolicy`, and `RuntimePolicy` without exposing adapter-specific types.
+`validate()` rejects mTLS on unsupported transports before binding. The
+legacy `Server::bind_*` helpers delegate through the builder. Session,
+handshake, service, pending, active-connection, queue, and timeout behavior
+comes from the immutable finite policy held by `Counters`; `BindPolicy` can
+further restrict service binds.

@@ -123,6 +123,225 @@ use super::*;
     }
 
     #[tokio::test]
+    async fn custom_runtime_pending_limit_saturates_and_recovers() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"custom-pending-limit".to_vec()).unwrap();
+        let mut policy = crate::RuntimePolicy::default();
+        policy.limits.pending_per_session = 1;
+        policy.limits.active_connections_per_session = 2;
+        let server = crate::ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .runtime_policy(policy)
+        .bind()
+        .await
+        .unwrap();
+        let client = crate::ClientBuilder::new(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("limited-pending").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )],
+        })
+        .with_connector(Arc::new(PendingConnector))
+        .runtime_policy(policy)
+        .start()
+        .await
+        .unwrap();
+        let handle = server.handle();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = handle.snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        let first = TcpStream::connect(addr).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().pending_connections == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let second = TcpStream::connect(addr).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().rejected_connections > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(handle.snapshot().pending_connections, 1);
+        drop((first, second));
+        client.shutdown().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = handle.snapshot();
+                if snapshot.pending_connections == 0 && snapshot.active_connections == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(handle.snapshot().resource_limits.pending_per_session, 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn custom_pending_timeout_expires_pending_connection_and_releases_capacity() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"custom-pending-timeout".to_vec()).unwrap();
+        let mut policy = crate::RuntimePolicy::default();
+        policy.timeouts.pending_connection = Duration::from_millis(250);
+        let server = crate::ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .runtime_policy(policy)
+        .bind()
+        .await
+        .unwrap();
+        let client = crate::ClientBuilder::new(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: vec![ClientService::new(
+                ServiceId(1),
+                ServiceName::new("pending-timeout").unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )],
+        })
+        .with_connector(Arc::new(PendingConnector))
+        .runtime_policy(policy)
+        .start()
+        .await
+        .unwrap();
+        let handle = server.handle();
+        let bind = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some((_, _, bind)) = handle.snapshot().effective_binds.first() {
+                    break bind.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = SocketAddr::V6(std::net::SocketAddrV6::new(
+            std::net::Ipv6Addr::from(bind.address),
+            bind.port,
+            0,
+            0,
+        ));
+        let mut external = TcpStream::connect(addr).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().pending_connections == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let snapshot = handle.snapshot();
+                if snapshot.pending_connections == 0 && snapshot.active_connections == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut drained = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), external.read_to_end(&mut drained))
+            .await
+            .unwrap()
+            .unwrap();
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn custom_handshake_timeout_is_reported_as_timeout() {
+        let (cert, key) = certificate();
+        let mut policy = crate::RuntimePolicy::default();
+        policy.timeouts.handshake = Duration::from_millis(250);
+        let server = crate::ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"custom-handshake-timeout".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .runtime_policy(policy)
+        .bind()
+        .await
+        .unwrap();
+        let handle = server.handle();
+        let peer = TcpStream::connect(server.local_addr()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if handle.snapshot().active_handshakes == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = handle.snapshot();
+                if snapshot.active_handshakes == 0
+                    && snapshot.last_termination == Some(crate::TerminationCategory::Timeout)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(peer);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn tcp_tls_reverse_session_registers_and_relays_data() {
         let (cert, key) = certificate();
         let token = SecretToken::new(b"test-secret".to_vec()).unwrap();

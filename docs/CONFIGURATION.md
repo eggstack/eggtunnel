@@ -82,3 +82,8 @@ through one SOCKS5+HTTP CONNECT integration test.
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup
 also parses and validates its certificate and key.
+
+The CLI uses default runtime limits and timeouts. Rust embedders can select
+finite non-default limits and timeout values with `RuntimePolicy` on
+`ClientBuilder` and `ServerBuilder`; these settings are programmatic and are
+not secret-bearing TOML fields.

@@ -49,3 +49,11 @@ configured CA or system roots. Enable `outbound-proxy` to use
 proxy URI/chain. `Client::start_websocket_with_outbound_proxy` composes both
 adapters. Proxy credentials should be supplied by the embedding application's
 secret store. QUIC cannot currently be combined with outbound proxy traversal.
+
+`ClientBuilder` and `ServerBuilder` provide a single typed composition path
+for transport, identity, proxy, connector, bind authorization, and runtime
+policy. `RuntimePolicy` defaults preserve the current operational ceilings
+and timeout values. Its `ResourceLimits` and `TimeoutPolicy` fields can be
+adjusted for an embedding application's finite capacity and lifecycle needs;
+call `validate()` to reject zero, excessive, or inconsistent values before
+starting the runtime.

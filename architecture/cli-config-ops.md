@@ -364,3 +364,11 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 ---
 
 *Backlink: this dive expands [Architecture Overview](overview.md) §6. For the wire behavior behind these knobs, see the client/server/transport dives; for release and CI handling of this binary, see the ops/tooling dive.*
+
+### Library profile validation (M008)
+
+`client_builder` and `server_builder` translate TOML into the public library
+builders. `check_config` calls each builder's `validate()`, and startup starts
+or binds the same builder after the same config check. Transport/CA/mTLS/
+proxy compatibility is owned by the library validator; file shape,
+environment lookup, and role-only TOML rules remain CLI-owned.

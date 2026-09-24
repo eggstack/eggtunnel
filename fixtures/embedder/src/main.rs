@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use eggtunnel::{
-    Client, ClientConfig, ClientService, SecretToken, TargetConnector, TargetContext, TargetFuture,
-    TargetStream,
+    ClientBuilder, ClientConfig, ClientService, RuntimePolicy, SecretToken, TargetConnector,
+    TargetContext, TargetFuture, TargetStream,
     proto::{RequestedBind, ServiceId, ServiceName, TcpTarget},
 };
 
@@ -40,7 +40,13 @@ fn client_config() -> Result<ClientConfig, Box<dyn std::error::Error>> {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::start_with_connector(client_config()?, Arc::new(InProcessEcho)).await?;
+    let mut policy = RuntimePolicy::default();
+    policy.limits.services_per_session = 8;
+    let client = ClientBuilder::new(client_config()?)
+        .with_connector(Arc::new(InProcessEcho))
+        .runtime_policy(policy)
+        .start()
+        .await?;
     tracing::info!("embedder owns logging and runtime policy");
     client.shutdown().await;
     Ok(())

@@ -29,14 +29,14 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M008 ready | M001-M007 and C001 are closed; M008 is dependency-ready. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M008 active | M001-M007 and C001 are closed; M008 implementation is in progress. |
 | Reverse session post-closure corrective | active | plans/subsystems/reverse-session-post-closure-corrective-addendum.md | C001 closed (historical) | No implementation dependency. C001 closure record at plans/closure/reverse-session-post-closure-corrective/001-status.md supplies supplemental evidence; the corrective addendum itself remains active for traceability. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M008 configurable runtime policy/API composition | ready | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | M007 strict closure recorded at plans/closure/reverse-session/007-status.md. |
+| Reverse session | M008 configurable runtime policy/API composition | active | plans/implementation/reverse-session/008-configurable-runtime-policy-and-api-composition.md | M007 strict closure recorded at plans/closure/reverse-session/007-status.md. |
 | Reverse session | M009 dynamic Service lifecycle/observability | blocked | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | Hard dependency: M008 strict closure. |
 ## Recently closed implementation plans
 

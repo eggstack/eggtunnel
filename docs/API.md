@@ -25,6 +25,14 @@ loopback TCP targets. Use `TargetConnector` and
 Use `ClientHandle::snapshot` for status, `unregister_service` for an active
 session mapping, and `Client::shutdown().await` for joined shutdown.
 
+For composed deployments, `ClientBuilder` accepts a typed
+`ClientTransportProfile`, optional `TargetConnector`, and a validated
+`RuntimePolicy`. Call `validate()` before `start()` when configuration is
+assembled in stages. `ServerBuilder` provides the equivalent server surface
+with `BindPolicy`, transport profile, optional client CA, and runtime policy.
+Both builders use the same profile validation as the legacy convenience
+constructors.
+
 Optional client transport features are `quic`, `websocket`, and
 `outbound-proxy`. Optional `mtls` adds certificate identity to TCP/TLS. Their
 configuration limits are in [the support matrix](SUPPORT.md).

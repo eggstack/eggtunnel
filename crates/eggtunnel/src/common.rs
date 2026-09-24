@@ -97,7 +97,7 @@ impl BindPolicy {
 
     pub fn validate(&self) -> Result<(), TunnelError> {
         if self.max_services_per_session == 0
-            || self.max_services_per_session > ResourceLimits::default().services_per_session
+            || self.max_services_per_session > 65_536
             || self
                 .allowed_port_ranges
                 .iter()
@@ -171,7 +171,7 @@ pub enum TerminationCategory {
     Internal,
 }
 
-/// Immutable hard ceilings used by the current runtime profile.
+/// Immutable finite ceilings used by a runtime profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceLimits {
     pub sessions: usize,
@@ -181,6 +181,32 @@ pub struct ResourceLimits {
     pub accepted_handshakes: usize,
     pub client_open_tasks: usize,
     pub control_queue: usize,
+    pub client_command_queue: usize,
+}
+
+impl ResourceLimits {
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        const MAX_CONFIGURED_LIMIT: usize = 65_536;
+        let values = [
+            self.sessions,
+            self.services_per_session,
+            self.pending_per_session,
+            self.active_connections_per_session,
+            self.accepted_handshakes,
+            self.client_open_tasks,
+            self.control_queue,
+            self.client_command_queue,
+        ];
+        if values
+            .iter()
+            .any(|value| *value == 0 || *value > MAX_CONFIGURED_LIMIT)
+        {
+            return Err(TunnelError::Configuration(
+                "resource limits must be in 1..=65536",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for ResourceLimits {
@@ -193,13 +219,86 @@ impl Default for ResourceLimits {
             accepted_handshakes: 64,
             client_open_tasks: 128,
             control_queue: 128,
+            client_command_queue: 32,
         }
+    }
+}
+
+/// Finite timeout and retry policy. Durations are monotonic runtime bounds;
+/// protocol framing and credential limits are intentionally not configurable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimeoutPolicy {
+    pub connect: std::time::Duration,
+    pub handshake: std::time::Duration,
+    pub control_idle: std::time::Duration,
+    pub pending_connection: std::time::Duration,
+    pub relay_drain: std::time::Duration,
+    pub shutdown_grace: std::time::Duration,
+    pub reconnect_initial: std::time::Duration,
+    pub reconnect_max: std::time::Duration,
+    pub heartbeat_interval: std::time::Duration,
+}
+
+impl TimeoutPolicy {
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        const MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(86_400);
+        let values = [
+            self.connect,
+            self.handshake,
+            self.control_idle,
+            self.pending_connection,
+            self.relay_drain,
+            self.shutdown_grace,
+            self.reconnect_initial,
+            self.reconnect_max,
+            self.heartbeat_interval,
+        ];
+        if values
+            .iter()
+            .any(|value| value.is_zero() || *value > MAX_TIMEOUT)
+            || self.reconnect_initial > self.reconnect_max
+            || self.heartbeat_interval >= self.control_idle
+        {
+            return Err(TunnelError::Configuration("timeout policy is invalid"));
+        }
+        Ok(())
+    }
+}
+
+impl Default for TimeoutPolicy {
+    fn default() -> Self {
+        Self {
+            connect: std::time::Duration::from_secs(10),
+            handshake: std::time::Duration::from_secs(10),
+            control_idle: std::time::Duration::from_secs(90),
+            pending_connection: std::time::Duration::from_secs(30),
+            relay_drain: std::time::Duration::from_secs(15),
+            shutdown_grace: std::time::Duration::from_secs(1),
+            reconnect_initial: std::time::Duration::from_millis(500),
+            reconnect_max: std::time::Duration::from_secs(30),
+            heartbeat_interval: std::time::Duration::from_secs(20),
+        }
+    }
+}
+
+/// Caller-selected bounded runtime policy. Defaults match the pre-M008 runtime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimePolicy {
+    pub limits: ResourceLimits,
+    pub timeouts: TimeoutPolicy,
+}
+
+impl RuntimePolicy {
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        self.limits.validate()?;
+        self.timeouts.validate()
     }
 }
 
 #[cfg(any(feature = "client", feature = "server"))]
 #[derive(Clone, Default)]
 pub(crate) struct Counters {
+    pub policy: Arc<RuntimePolicy>,
     pub connected: Arc<AtomicUsize>,
     pub sessions: Arc<AtomicUsize>,
     pub services: Arc<AtomicUsize>,
@@ -224,6 +323,13 @@ pub(crate) struct Counters {
 
 #[cfg(any(feature = "client", feature = "server"))]
 impl Counters {
+    pub fn with_policy(policy: RuntimePolicy) -> Self {
+        Self {
+            policy: Arc::new(policy),
+            ..Self::default()
+        }
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             connected: self.connected.load(Ordering::Relaxed) > 0,
@@ -246,7 +352,7 @@ impl Counters {
                 .last_termination
                 .lock()
                 .unwrap_or_else(|p| p.into_inner()),
-            resource_limits: ResourceLimits::default(),
+            resource_limits: self.policy.limits,
             reconnects: self.reconnects.load(Ordering::Relaxed),
             rejected_connections: self.rejected.load(Ordering::Relaxed),
             bytes_upstream: self.bytes_upstream.load(Ordering::Relaxed),
@@ -362,5 +468,74 @@ impl BindPolicy {
                 .allowed_port_ranges
                 .iter()
                 .any(|(start, end)| (*start..=*end).contains(&port))
+    }
+}
+
+#[cfg(test)]
+mod runtime_policy_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_pin_the_pre_m008_effective_runtime_policy() {
+        assert_eq!(
+            ResourceLimits::default(),
+            ResourceLimits {
+                sessions: 128,
+                services_per_session: 64,
+                pending_per_session: 128,
+                active_connections_per_session: 128,
+                accepted_handshakes: 64,
+                client_open_tasks: 128,
+                control_queue: 128,
+                client_command_queue: 32,
+            }
+        );
+        assert_eq!(
+            TimeoutPolicy::default(),
+            TimeoutPolicy {
+                connect: std::time::Duration::from_secs(10),
+                handshake: std::time::Duration::from_secs(10),
+                control_idle: std::time::Duration::from_secs(90),
+                pending_connection: std::time::Duration::from_secs(30),
+                relay_drain: std::time::Duration::from_secs(15),
+                shutdown_grace: std::time::Duration::from_secs(1),
+                reconnect_initial: std::time::Duration::from_millis(500),
+                reconnect_max: std::time::Duration::from_secs(30),
+                heartbeat_interval: std::time::Duration::from_secs(20),
+            }
+        );
+        RuntimePolicy::default().validate().unwrap();
+    }
+
+    #[test]
+    fn policy_rejects_zero_overflow_and_impossible_values() {
+        let mut limits = ResourceLimits {
+            pending_per_session: 0,
+            ..ResourceLimits::default()
+        };
+        assert!(limits.validate().is_err());
+        limits.pending_per_session = usize::MAX;
+        assert!(limits.validate().is_err());
+
+        let mut timeouts = TimeoutPolicy {
+            handshake: std::time::Duration::ZERO,
+            ..TimeoutPolicy::default()
+        };
+        assert!(timeouts.validate().is_err());
+        timeouts = TimeoutPolicy {
+            reconnect_max: std::time::Duration::from_millis(100),
+            ..TimeoutPolicy::default()
+        };
+        assert!(timeouts.validate().is_err());
+        timeouts = TimeoutPolicy {
+            heartbeat_interval: TimeoutPolicy::default().control_idle,
+            ..TimeoutPolicy::default()
+        };
+        assert!(timeouts.validate().is_err());
+        timeouts = TimeoutPolicy {
+            connect: std::time::Duration::MAX,
+            ..TimeoutPolicy::default()
+        };
+        assert!(timeouts.validate().is_err());
     }
 }

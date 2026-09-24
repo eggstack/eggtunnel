@@ -24,7 +24,8 @@ explicitly enabled.
 The server bounds accepted unauthenticated handshakes to 64 at once and active
 Sessions to 128. Per Session, it allows up to 64 services, 128 pending
 connections, and 128 active connections. Client Open tasks and control queues
-are also bounded at 128. Authentication failures are tracked per source IP
+are bounded at 128; the ClientHandle command queue is bounded at 32.
+Authentication failures are tracked per source IP
 for 60 seconds; the tenth failure blocks that source until its window expires.
 
 Runtime snapshots expose current counts and high-water values for Sessions,
@@ -33,6 +34,13 @@ unauthenticated handshakes. These counters cover one process lifetime and do
 not persist across restart.
 The snapshot includes the most recent bounded termination category and a
 count of panicked owned tasks; it never retains event history or error text.
+
+Embedders can set finite resource ceilings and timeout values through
+`RuntimePolicy` on `ClientBuilder` and `ServerBuilder`. Defaults preserve the
+values above. Policy validation limits configured values to finite ranges and
+requires reconnect bounds and heartbeat timing to remain consistent. The CLI
+uses these defaults and validates transport compatibility through the same
+library builders used at startup.
 
 For restricted egress networks, set `outbound_proxy_env` on the client to a
 variable containing an HTTP CONNECT or SOCKS5 proxy URI/chain. Eggtunnel TLS

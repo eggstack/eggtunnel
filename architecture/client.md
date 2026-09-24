@@ -494,3 +494,13 @@ client                                            server
 Wire framing for every control/data-hello frame: `wire_io.rs:7-57`
 (header-first read, length pre-check vs 1 MiB, exact-consumption check).
 Relay bytes bypass framing entirely.
+
+### Runtime policy and composition (M008)
+
+`ClientBuilder` is the canonical typed composition path for TCP/TLS, QUIC,
+WebSocket, custom connectors, mTLS identity, outbound proxy, and
+`RuntimePolicy`. The builder validates profile combinations before startup;
+legacy `Client::start_*` functions delegate through it. Runtime ceilings and
+timeouts are read from the policy carried by `Counters`. The 128-slot
+protocol-control and 32-slot handle-command queues remain separate finite
+limits so their defaults match the previous runtime.

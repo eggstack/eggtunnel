@@ -19,7 +19,8 @@ bind permission by itself.
 Each accepted external connection receives a random 128-bit ConnectionId,
 bound to the current Session and Service, with a 30-second lifetime and
 single-use consumption. Pending and active connection counts, services,
-handshakes, and control queues have fixed ceilings. DataHello is the final
+handshakes, and control queues have finite ceilings selected by the validated
+runtime policy, with conservative defaults. DataHello is the final
 Eggtunnel message on a data stream; following bytes are opaque.
 
 Unauthenticated accepted connections are capped at 64 concurrent handshakes.

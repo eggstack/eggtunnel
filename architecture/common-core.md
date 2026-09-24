@@ -428,16 +428,22 @@ Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exe
 
 ### 8.4 Limit coherence (`common.rs` ↔ `server.rs` ↔ `client.rs`)
 
-| `ResourceLimits` field (default) | `server.rs` const | `client.rs` const | Check |
+| `ResourceLimits` field (default) | Server enforcement | Client enforcement | Check |
 |---|---|---|---|
-| `sessions = 128` | `MAX_SESSIONS = 128` | n/a (single session) | `Snapshot.resource_limits.sessions == MAX_SESSIONS` pinned at `crates/eggtunnel/src/server.rs:2917` |
-| `services_per_session = 64` | via `BindPolicy::max_services_per_session ≤ 64` | `MAX_SERVICES = 64` | `validate()` upper bound, registration cap, and client config check must agree; changing one without the others splits the ceiling |
-| `pending_per_session = 128` | `MAX_PENDING_PER_SESSION = 128` | n/a | Accept path (`crates/eggtunnel/src/server.rs:1163`) vs limit field |
-| `active_connections_per_session = 128` | `MAX_ACTIVE_CONNECTIONS_PER_SESSION = 128` | n/a (client uses open-task cap instead) | Semaphore sizes at `crates/eggtunnel/src/server.rs:493`, `crates/eggtunnel/src/server.rs:944` and fallback at `crates/eggtunnel/src/server.rs:605` |
-| `accepted_handshakes = 64` | `MAX_HANDSHAKES = 64` | n/a | Pre-auth semaphore (`crates/eggtunnel/src/server.rs:408`, `crates/eggtunnel/src/server.rs:509`); saturation test `MAX_HANDSHAKES + 1` at `crates/eggtunnel/src/server.rs:3753` |
-| `client_open_tasks = 128` | n/a | `MAX_OPEN_TASKS = 128` | Client semaphore (`crates/eggtunnel/src/client.rs:946`) + `OpenTaskGuard` high-water (`crates/eggtunnel/src/client.rs:1162-1168`); server `Snapshot.active_client_open_tasks` reflects the client's counter only in client snapshots |
-| `control_queue = 128` | `CONTROL_QUEUE = 128` | `CONTROL_QUEUE = 128` | Both `mpsc::channel(CONTROL_QUEUE)` sites (`crates/eggtunnel/src/server.rs:970`, `crates/eggtunnel/src/client.rs:947`); a full queue applies backpressure — verify senders use `try_send`/timeout rather than unbounded block |
+| `sessions = 128` | server session admission | n/a (single session) | Server session admission reads `RuntimePolicy.limits.sessions`; snapshots retain the selected policy |
+| `services_per_session = 64` | intersected with `BindPolicy.max_services_per_session` | config validation | Both roles enforce the runtime ceiling; server authorization may impose a smaller ceiling |
+| `pending_per_session = 128` | pending ConnectionId admission | n/a | Pending map insertion and its semaphore use the selected policy |
+| `active_connections_per_session = 128` | active data admission | n/a | TCP and QUIC stream admission use the selected policy |
+| `accepted_handshakes = 64` | pre-auth admission | n/a | TCP and QUIC handshake semaphores use the selected policy |
+| `client_open_tasks = 128` | n/a | Open task semaphore | Client task admission and high-water accounting use the selected policy |
+| `control_queue = 128` | Open control queue | outbound protocol control queue | Bounded Tokio channels use the selected policy; queue-full behavior remains explicit |
+| `client_command_queue = 32` | n/a | API command queue | Client handle command channel preserves its pre-M008 capacity and is configurable |
 
-- [ ] Changing any default in `ResourceLimits::default()` (`crates/eggtunnel/src/common.rs:186-198`) without changing the corresponding `MAX_*`/`CONTROL_QUEUE` const (or vice versa) makes `Snapshot.resource_limits` lie about the enforced ceiling. The two are deliberately duplicated, not derived — grep both when editing.
-- [ ] `BindPolicy.max_services_per_session` default (64) must stay `<= ResourceLimits.services_per_session`; `validate()` enforces `<=`, so raising the resource limit without raising the policy default is safe, but lowering it below 64 breaks `BindPolicy::default()` (default policy would fail validation).
-- [ ] Non-`common.rs` ceilings not represented in `ResourceLimits` (30 s pending lifetime, 90 s idle timeout, 10 s handshake/connect timeouts, 1024-source / 10-fail / 60 s auth throttle per `docs/SECURITY.md:25-30`) are intentionally out of scope for `Snapshot.resource_limits` — do not add them without also deciding their snapshot/test story.
+- `BindPolicy.max_services_per_session` default (64) is intersected with `ResourceLimits.services_per_session`; the caller may choose a smaller bind policy ceiling.
+- Authentication throttling remains a separate fixed security policy (10 failures per 60 seconds, 1,024 source entries, 100 ms failure delay); it is intentionally not caller-tunable through `RuntimePolicy`.
+
+The associated `TimeoutPolicy` defaults are connect 10 s, handshake 10 s,
+control idle 90 s, pending ConnectionId 30 s, relay drain 15 s, shutdown grace
+1 s, reconnect 500 ms to 30 s, and heartbeat 20 s. Validation requires
+positive durations no longer than 24 hours, an initial reconnect delay no
+greater than its maximum, and heartbeat shorter than control idle.

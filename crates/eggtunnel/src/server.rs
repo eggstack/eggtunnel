@@ -36,20 +36,14 @@ enum ServerTls {
     Mutual(Arc<rustls::ServerConfig>),
 }
 
-const MAX_SESSIONS: usize = 128;
-const MAX_PENDING_PER_SESSION: usize = 128;
-const MAX_ACTIVE_CONNECTIONS_PER_SESSION: usize = 128;
-const CONTROL_QUEUE: usize = 128;
-const MAX_HANDSHAKES: usize = 64;
 const AUTH_FAILURES_PER_SOURCE: usize = 10;
 const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const MAX_AUTH_SOURCES: usize = 1024;
 const AUTH_FAILURE_DELAY: Duration = Duration::from_millis(100);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
-const PENDING_LIFETIME: Duration = Duration::from_secs(30);
-const RELAY_DRAIN: Duration = Duration::from_secs(15);
-const SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const MAX_SESSIONS: usize = 128;
+#[cfg(test)]
+const MAX_HANDSHAKES: usize = 64;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -83,6 +77,87 @@ impl std::fmt::Debug for ServerConfig {
     }
 }
 
+/// Transport and identity selection for [`ServerBuilder`].
+pub enum ServerTransportProfile {
+    TcpTls,
+    #[cfg(feature = "quic")]
+    Quic,
+    #[cfg(feature = "websocket")]
+    WebSocket,
+}
+
+/// Typed composition surface for server transport, bind, and runtime policy.
+pub struct ServerBuilder {
+    config: ServerConfig,
+    bind_policy: BindPolicy,
+    profile: ServerTransportProfile,
+    runtime_policy: crate::common::RuntimePolicy,
+    #[cfg(feature = "mtls")]
+    trusted_client_ca: Option<Vec<u8>>,
+}
+
+impl ServerBuilder {
+    pub fn new(config: ServerConfig) -> Self {
+        let bind_policy = BindPolicy {
+            allow_public_addresses: config.allow_public_service_binds,
+            ..BindPolicy::default()
+        };
+        Self {
+            config,
+            bind_policy,
+            profile: ServerTransportProfile::TcpTls,
+            runtime_policy: crate::common::RuntimePolicy::default(),
+            #[cfg(feature = "mtls")]
+            trusted_client_ca: None,
+        }
+    }
+
+    pub fn bind_policy(mut self, policy: BindPolicy) -> Self {
+        self.bind_policy = policy;
+        self
+    }
+
+    pub fn transport(mut self, profile: ServerTransportProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn runtime_policy(mut self, policy: crate::common::RuntimePolicy) -> Self {
+        self.runtime_policy = policy;
+        self
+    }
+
+    #[cfg(feature = "mtls")]
+    pub fn client_ca_pem(mut self, pem: Vec<u8>) -> Self {
+        self.trusted_client_ca = Some(pem);
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), TunnelError> {
+        validate_server_profile(
+            &self.config,
+            &self.bind_policy,
+            &self.profile,
+            #[cfg(feature = "mtls")]
+            self.trusted_client_ca.as_deref(),
+            &self.runtime_policy,
+        )
+    }
+
+    pub async fn bind(self) -> Result<Server, TunnelError> {
+        self.validate()?;
+        Server::bind_profile(
+            self.config,
+            self.bind_policy,
+            self.profile,
+            #[cfg(feature = "mtls")]
+            self.trusted_client_ca,
+            self.runtime_policy,
+        )
+        .await
+    }
+}
+
 pub struct Server {
     cancel: CancellationToken,
     task: Option<JoinHandle<()>>,
@@ -107,62 +182,33 @@ impl ServerHandle {
 
 impl Server {
     pub async fn bind(config: ServerConfig) -> Result<Self, TunnelError> {
-        let policy = BindPolicy {
-            allow_public_addresses: config.allow_public_service_binds,
-            ..BindPolicy::default()
-        };
-        Self::bind_with_policy(config, policy).await
+        ServerBuilder::new(config).bind().await
     }
 
     pub async fn bind_with_policy(
         config: ServerConfig,
         bind_policy: BindPolicy,
     ) -> Result<Self, TunnelError> {
-        tokio::runtime::Handle::try_current().map_err(|_| {
-            TunnelError::Configuration("Server::bind requires a caller-owned Tokio runtime")
-        })?;
-        validate_config(&config)?;
-        bind_policy.validate()?;
-        let tls = TlsServerConfigBuilder::new()
-            .with_certificate_pem(&config.certificate_pem)
-            .map_err(|_| TunnelError::Tls)?
-            .with_key_pem(&config.private_key_pem)
-            .map_err(|_| TunnelError::Tls)?
-            .build()
-            .map_err(|_| TunnelError::Tls)?;
-        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Eggress(tls), false).await
+        ServerBuilder::new(config)
+            .bind_policy(bind_policy)
+            .bind()
+            .await
     }
 
     #[cfg(feature = "websocket")]
     pub async fn bind_websocket(config: ServerConfig) -> Result<Self, TunnelError> {
-        let bind_policy = BindPolicy {
-            allow_public_addresses: config.allow_public_service_binds,
-            ..BindPolicy::default()
-        };
-        tokio::runtime::Handle::try_current().map_err(|_| {
-            TunnelError::Configuration(
-                "Server::bind_websocket requires a caller-owned Tokio runtime",
-            )
-        })?;
-        validate_config(&config)?;
-        bind_policy.validate()?;
-        let tls = TlsServerConfigBuilder::new()
-            .with_certificate_pem(&config.certificate_pem)
-            .map_err(|_| TunnelError::Tls)?
-            .with_key_pem(&config.private_key_pem)
-            .map_err(|_| TunnelError::Tls)?
-            .build()
-            .map_err(|_| TunnelError::Tls)?;
-        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Eggress(tls), true).await
+        ServerBuilder::new(config)
+            .transport(ServerTransportProfile::WebSocket)
+            .bind()
+            .await
     }
 
     #[cfg(feature = "quic")]
     pub async fn bind_quic(config: ServerConfig) -> Result<Self, TunnelError> {
-        let bind_policy = BindPolicy {
-            allow_public_addresses: config.allow_public_service_binds,
-            ..BindPolicy::default()
-        };
-        Self::bind_quic_with_policy(config, bind_policy).await
+        ServerBuilder::new(config)
+            .transport(ServerTransportProfile::Quic)
+            .bind()
+            .await
     }
 
     #[cfg(feature = "quic")]
@@ -170,45 +216,11 @@ impl Server {
         config: ServerConfig,
         bind_policy: BindPolicy,
     ) -> Result<Self, TunnelError> {
-        use eggress_transport_quic::{QuicListener, QuicServerConfig};
-
-        tokio::runtime::Handle::try_current().map_err(|_| {
-            TunnelError::Configuration("Server::bind_quic requires a caller-owned Tokio runtime")
-        })?;
-        validate_config(&config)?;
-        bind_policy.validate()?;
-        let listener = QuicListener::bind(
-            config.listen_addr,
-            QuicServerConfig {
-                certificate_pem: config.certificate_pem.clone(),
-                private_key_pem: config.private_key_pem.clone(),
-                idle_timeout: Duration::from_secs(90),
-                max_concurrent_streams: 256,
-                alpn_protocols: Vec::new(),
-            },
-        )
-        .await
-        .map_err(|_| TunnelError::Tls)?;
-        let local_addr = listener.local_addr().map_err(|_| TunnelError::Tls)?;
-        let cancel = CancellationToken::new();
-        let counters = Counters::default();
-        let handle = ServerHandle {
-            cancel: cancel.clone(),
-            counters: counters.clone(),
-        };
-        let task = tokio::spawn(quic_server_loop(
-            listener,
-            config.token.clone(),
-            bind_policy,
-            cancel.clone(),
-            counters,
-        ));
-        Ok(Self {
-            cancel,
-            task: Some(task),
-            handle,
-            local_addr,
-        })
+        ServerBuilder::new(config)
+            .bind_policy(bind_policy)
+            .transport(ServerTransportProfile::Quic)
+            .bind()
+            .await
     }
 
     #[cfg(all(test, feature = "quic"))]
@@ -267,7 +279,11 @@ impl Server {
             allow_public_addresses: config.allow_public_service_binds,
             ..BindPolicy::default()
         };
-        Self::bind_mtls_with_policy(config, trusted_client_ca_pem, bind_policy).await
+        ServerBuilder::new(config)
+            .bind_policy(bind_policy)
+            .client_ca_pem(trusted_client_ca_pem)
+            .bind()
+            .await
     }
 
     #[cfg(feature = "mtls")]
@@ -276,8 +292,91 @@ impl Server {
         trusted_client_ca_pem: Vec<u8>,
         bind_policy: BindPolicy,
     ) -> Result<Self, TunnelError> {
-        let tls = build_mtls_server_config(&config, &trusted_client_ca_pem)?;
-        Self::bind_with_tls_profile(config, bind_policy, ServerTls::Mutual(tls), false).await
+        ServerBuilder::new(config)
+            .bind_policy(bind_policy)
+            .client_ca_pem(trusted_client_ca_pem)
+            .bind()
+            .await
+    }
+
+    async fn bind_profile(
+        config: ServerConfig,
+        bind_policy: BindPolicy,
+        profile: ServerTransportProfile,
+        #[cfg(feature = "mtls")] trusted_client_ca: Option<Vec<u8>>,
+        runtime_policy: crate::common::RuntimePolicy,
+    ) -> Result<Self, TunnelError> {
+        match profile {
+            ServerTransportProfile::TcpTls => {
+                let tls = {
+                    #[cfg(feature = "mtls")]
+                    if let Some(client_ca) = trusted_client_ca.as_deref() {
+                        ServerTls::Mutual(build_mtls_server_config(&config, client_ca)?)
+                    } else {
+                        ServerTls::Eggress(build_server_tls(&config)?)
+                    }
+                    #[cfg(not(feature = "mtls"))]
+                    {
+                        ServerTls::Eggress(build_server_tls(&config)?)
+                    }
+                };
+                Self::bind_with_tls_profile(config, bind_policy, tls, false, runtime_policy).await
+            }
+            #[cfg(feature = "websocket")]
+            ServerTransportProfile::WebSocket => {
+                let tls = ServerTls::Eggress(build_server_tls(&config)?);
+                Self::bind_with_tls_profile(config, bind_policy, tls, true, runtime_policy).await
+            }
+            #[cfg(feature = "quic")]
+            ServerTransportProfile::Quic => {
+                Self::bind_quic_profile(config, bind_policy, runtime_policy).await
+            }
+        }
+    }
+
+    #[cfg(feature = "quic")]
+    async fn bind_quic_profile(
+        config: ServerConfig,
+        bind_policy: BindPolicy,
+        runtime_policy: crate::common::RuntimePolicy,
+    ) -> Result<Self, TunnelError> {
+        use eggress_transport_quic::{QuicListener, QuicServerConfig};
+
+        let listener = QuicListener::bind(
+            config.listen_addr,
+            QuicServerConfig {
+                certificate_pem: config.certificate_pem.clone(),
+                private_key_pem: config.private_key_pem.clone(),
+                idle_timeout: runtime_policy.timeouts.control_idle,
+                max_concurrent_streams: runtime_policy
+                    .limits
+                    .active_connections_per_session
+                    .saturating_add(1) as u32,
+                alpn_protocols: Vec::new(),
+            },
+        )
+        .await
+        .map_err(|_| TunnelError::Tls)?;
+        let local_addr = listener.local_addr().map_err(|_| TunnelError::Tls)?;
+        let cancel = CancellationToken::new();
+        let counters = Counters::with_policy(runtime_policy);
+        let handle = ServerHandle {
+            cancel: cancel.clone(),
+            counters: counters.clone(),
+        };
+        let task = tokio::spawn(quic_server_loop(
+            listener,
+            config.token.clone(),
+            bind_policy,
+            cancel.clone(),
+            counters,
+        ));
+        Ok(Self {
+            cancel,
+            task: Some(task),
+            handle,
+            local_addr,
+        })
     }
 
     async fn bind_with_tls_profile(
@@ -285,6 +384,7 @@ impl Server {
         bind_policy: BindPolicy,
         tls: ServerTls,
         websocket: bool,
+        runtime_policy: crate::common::RuntimePolicy,
     ) -> Result<Self, TunnelError> {
         tokio::runtime::Handle::try_current().map_err(|_| {
             TunnelError::Configuration("Server::bind requires a caller-owned Tokio runtime")
@@ -294,7 +394,7 @@ impl Server {
         let listener = TcpListener::bind(config.listen_addr).await?;
         let local_addr = listener.local_addr()?;
         let cancel = CancellationToken::new();
-        let counters = Counters::default();
+        let counters = Counters::with_policy(runtime_policy);
         let handle = ServerHandle {
             cancel: cancel.clone(),
             counters: counters.clone(),
@@ -355,6 +455,43 @@ fn validate_config(config: &ServerConfig) -> Result<(), TunnelError> {
     Ok(())
 }
 
+fn validate_server_profile(
+    config: &ServerConfig,
+    bind_policy: &BindPolicy,
+    profile: &ServerTransportProfile,
+    #[cfg(feature = "mtls")] trusted_client_ca: Option<&[u8]>,
+    runtime_policy: &crate::common::RuntimePolicy,
+) -> Result<(), TunnelError> {
+    runtime_policy.validate()?;
+    bind_policy.validate()?;
+    validate_config(config)?;
+    #[cfg(feature = "mtls")]
+    if let Some(ca) = trusted_client_ca {
+        if ca.is_empty() {
+            return Err(TunnelError::Configuration(
+                "trusted client CA bundle must not be empty",
+            ));
+        }
+        if !matches!(profile, ServerTransportProfile::TcpTls) {
+            return Err(TunnelError::Configuration(
+                "mTLS is supported only with TCP/TLS",
+            ));
+        }
+    }
+    let _ = profile;
+    Ok(())
+}
+
+fn build_server_tls(config: &ServerConfig) -> Result<Arc<rustls::ServerConfig>, TunnelError> {
+    TlsServerConfigBuilder::new()
+        .with_certificate_pem(&config.certificate_pem)
+        .map_err(|_| TunnelError::Tls)?
+        .with_key_pem(&config.private_key_pem)
+        .map_err(|_| TunnelError::Tls)?
+        .build()
+        .map_err(|_| TunnelError::Tls)
+}
+
 #[cfg(feature = "mtls")]
 fn build_mtls_server_config(
     config: &ServerConfig,
@@ -397,7 +534,7 @@ async fn server_loop(
 ) {
     let sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let admission = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+    let admission = Arc::new(Semaphore::new(counters.policy.limits.accepted_handshakes));
     let auth_failures = Arc::new(AuthFailureLimiter::new(
         AUTH_FAILURES_PER_SOURCE,
         AUTH_FAILURE_WINDOW,
@@ -456,11 +593,11 @@ async fn server_loop(
     for session in &active {
         if let Some(sender) = session.control_tx.lock().await.as_ref() {
             let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain {
-                deadline_ms: SERVER_SHUTDOWN_GRACE.as_millis() as u32,
+                deadline_ms: counters.policy.timeouts.shutdown_grace.as_millis() as u32,
             }));
         }
     }
-    tokio::time::sleep(SERVER_SHUTDOWN_GRACE).await;
+    tokio::time::sleep(counters.policy.timeouts.shutdown_grace).await;
     for session in active {
         session.cancel.cancel();
     }
@@ -476,15 +613,9 @@ async fn quic_server_loop(
     cancel: CancellationToken,
     counters: Counters,
 ) {
-    quic_server_loop_with_admission(
-        listener,
-        token,
-        bind_policy,
-        cancel,
-        counters,
-        MAX_ACTIVE_CONNECTIONS_PER_SESSION,
-    )
-    .await
+    let max_streams = counters.policy.limits.active_connections_per_session;
+    quic_server_loop_with_admission(listener, token, bind_policy, cancel, counters, max_streams)
+        .await
 }
 
 #[cfg(feature = "quic")]
@@ -498,7 +629,7 @@ async fn quic_server_loop_with_admission(
 ) {
     let sessions: Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let admission = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+    let admission = Arc::new(Semaphore::new(counters.policy.limits.accepted_handshakes));
     let auth_failures = Arc::new(AuthFailureLimiter::new(
         AUTH_FAILURES_PER_SOURCE,
         AUTH_FAILURE_WINDOW,
@@ -559,11 +690,11 @@ async fn quic_server_loop_with_admission(
     for session in &active {
         if let Some(sender) = session.control_tx.lock().await.as_ref() {
             let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain {
-                deadline_ms: SERVER_SHUTDOWN_GRACE.as_millis() as u32,
+                deadline_ms: counters.policy.timeouts.shutdown_grace.as_millis() as u32,
             }));
         }
     }
-    tokio::time::sleep(SERVER_SHUTDOWN_GRACE).await;
+    tokio::time::sleep(counters.policy.timeouts.shutdown_grace).await;
     for session in active {
         session.cancel.cancel();
     }
@@ -578,11 +709,12 @@ async fn handle_quic_connection(
     token: SecretToken,
     context: ConnectionContext,
 ) -> Result<(), TunnelError> {
+    let handshake_timeout = context.counters.policy.timeouts.handshake;
     let mut control_stream = tokio::select! {
         _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
-        result = timeout(HANDSHAKE_TIMEOUT, connection.accept_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
+        result = timeout(handshake_timeout, connection.accept_stream()) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Disconnected)?,
     };
-    let first = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut control_stream))
+    let first = timeout(handshake_timeout, read_boxed(&mut control_stream))
         .await
         .map_err(|_| TunnelError::Timeout)??;
     let Message::ClientHello(hello) = first else {
@@ -592,9 +724,13 @@ async fn handle_quic_connection(
     };
     let connection_cancel = context.cancel.clone();
     let stream_admission = Arc::new(Semaphore::new(
-        context
-            .max_active_data_streams
-            .unwrap_or(MAX_ACTIVE_CONNECTIONS_PER_SESSION),
+        context.max_active_data_streams.unwrap_or(
+            context
+                .counters
+                .policy
+                .limits
+                .active_connections_per_session,
+        ),
     ));
     let sessions = context.sessions.clone();
     let counters = context.counters.clone();
@@ -662,9 +798,10 @@ async fn handle_quic_data_stream(
     mut stream: BoxStream,
     mut context: ConnectionContext,
 ) -> Result<(), TunnelError> {
+    let handshake_timeout = context.counters.policy.timeouts.handshake;
     let first = tokio::select! {
         _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
-        result = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream)) => result.map_err(|_| TunnelError::Timeout)??,
+        result = timeout(handshake_timeout, read_boxed(&mut stream)) => result.map_err(|_| TunnelError::Timeout)??,
     };
     let Message::DataHello(hello) = first else {
         return Err(TunnelError::Protocol(
@@ -744,12 +881,13 @@ async fn handle_connection(
     mut context: ConnectionContext,
     websocket: bool,
 ) -> Result<(), TunnelError> {
+    let handshake_timeout = context.counters.policy.timeouts.handshake;
     let (stream, principal) = match tls {
         ServerTls::Eggress(tls) => {
             let stream: BoxStream = Box::new(tcp);
             let stream = tokio::select! {
                 _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
-                result = timeout(HANDSHAKE_TIMEOUT, tls_accept(stream, tls)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+                result = timeout(handshake_timeout, tls_accept(stream, tls)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
             };
             (stream, None)
         }
@@ -758,7 +896,7 @@ async fn handle_connection(
             let acceptor = tokio_rustls::TlsAcceptor::from(tls);
             let stream = tokio::select! {
                 _ = context.cancel.cancelled() => return Err(TunnelError::Cancelled),
-                result = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)) => result.map_err(|_| TunnelError::Tls)?.map_err(|_| TunnelError::Tls)?,
+                result = timeout(handshake_timeout, acceptor.accept(tcp)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
             };
             let principal = stream
                 .get_ref()
@@ -775,7 +913,7 @@ async fn handle_connection(
             .max_message_size(Some(1024 * 1024))
             .max_frame_size(Some(1024 * 1024));
         timeout(
-            HANDSHAKE_TIMEOUT,
+            handshake_timeout,
             eggress_protocol_websocket::WebSocketTunnelServer::new(1024 * 1024)
                 .accept_upgrade_with_config_over_stream(stream, ws_config),
         )
@@ -791,9 +929,9 @@ async fn handle_connection(
         stream
     };
     context.principal = principal;
-    let first = timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream))
+    let first = timeout(handshake_timeout, read_boxed(&mut stream))
         .await
-        .map_err(|_| TunnelError::Disconnected)??;
+        .map_err(|_| TunnelError::Timeout)??;
     match first {
         Message::DataHello(hello) => {
             drop(context.handshake_guard.take());
@@ -899,9 +1037,9 @@ async fn serve_control(
         }),
     )
     .await?;
-    let auth = match timeout(HANDSHAKE_TIMEOUT, read_boxed(&mut stream))
+    let auth = match timeout(counters.policy.timeouts.handshake, read_boxed(&mut stream))
         .await
-        .map_err(|_| TunnelError::Disconnected)??
+        .map_err(|_| TunnelError::Timeout)??
     {
         Message::Auth(auth) => auth,
         _ => return Err(TunnelError::Authentication),
@@ -933,14 +1071,16 @@ async fn serve_control(
         principal,
         cancel: CancellationToken::new(),
         pending: Mutex::new(HashMap::new()),
-        connection_admission: Arc::new(Semaphore::new(MAX_ACTIVE_CONNECTIONS_PER_SESSION)),
+        connection_admission: Arc::new(Semaphore::new(
+            counters.policy.limits.active_connections_per_session,
+        )),
         control_tx: Mutex::new(None),
         counters: counters.clone(),
     });
     {
         let mut active = sessions.lock().await;
         active.retain(|_, weak| weak.strong_count() > 0);
-        if active.len() >= MAX_SESSIONS {
+        if active.len() >= counters.policy.limits.sessions {
             counters.record_termination(TerminationCategory::ResourceExhausted);
             return Err(TunnelError::Authorization);
         }
@@ -959,12 +1099,13 @@ async fn serve_control(
     };
     write_boxed(&mut stream, &Message::AuthOk(AuthOk { session_id })).await?;
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let (open_tx, mut open_rx) = mpsc::channel(CONTROL_QUEUE);
+    let (open_tx, mut open_rx) = mpsc::channel(counters.policy.limits.control_queue);
     *context.control_tx.lock().await = Some(open_tx.clone());
     let mut services = HashMap::<ServiceId, ServiceEntry>::new();
     let mut names = std::collections::HashSet::new();
     let mut children = JoinSet::new();
-    let idle = tokio::time::sleep(IDLE_TIMEOUT);
+    let idle_timeout = counters.policy.timeouts.control_idle;
+    let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);
     loop {
         tokio::select! {
@@ -973,8 +1114,8 @@ async fn serve_control(
             incoming = read_message(&mut reader) => {
                 match incoming {
                     Ok(Message::RegisterService(register)) => {
-                        idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
-                        if services.len() >= bind_policy.max_services_per_session {
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                        if services.len() >= bind_policy.max_services_per_session.min(counters.policy.limits.services_per_session) {
                             counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             counters.record_termination(TerminationCategory::ResourceExhausted);
                             write_registration_error(&mut writer, 5).await?;
@@ -1007,7 +1148,7 @@ async fn serve_control(
                         write_message(&mut writer, &Message::RegisterAck(RegisterAck { service_id: sid, effective_bind: effective })).await?;
                     }
                     Ok(Message::UnregisterService(UnregisterService { service_id })) => {
-                        idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         if let Some(entry) = services.remove(&service_id) {
                             entry.cancel.cancel();
                             names.remove(entry.name.as_str());
@@ -1017,14 +1158,14 @@ async fn serve_control(
                         }
                     }
                     Ok(Message::OpenReject(reject)) => {
-                        idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
+                        idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         if let Some(entry) = context.pending.lock().await.remove(&reject.connection_id) {
                             counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             drop(entry);
                         }
                     }
                     Ok(Message::Ping(Ping { nonce })) => {
-                        idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
+                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         write_message(&mut writer, &Message::Pong(Pong { nonce })).await?;
                     }
                     Ok(Message::Drain(_)) => break,
@@ -1152,12 +1293,13 @@ async fn run_service(
                 };
                 let (data_tx, data_rx) = oneshot::channel();
                 let mut pending = session.pending.lock().await;
-                if pending.len() >= MAX_PENDING_PER_SESSION {
+                let pending_lifetime = counters.policy.timeouts.pending_connection;
+                if pending.len() >= counters.policy.limits.pending_per_session {
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     counters.record_termination(TerminationCategory::ResourceExhausted);
                     continue;
                 }
-                pending.insert(connection_id, PendingEntry { service_id, expires: Instant::now() + PENDING_LIFETIME, data_tx });
+                pending.insert(connection_id, PendingEntry { service_id, expires: Instant::now() + pending_lifetime, data_tx });
                 drop(pending);
                 let pending_connections = counters.pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 counters.high_water_pending.fetch_max(pending_connections, std::sync::atomic::Ordering::Relaxed);
@@ -1173,13 +1315,13 @@ async fn run_service(
                     let _active_guard = active_guard;
                     let outcome = tokio::select! {
                         _ = relay_cancel.cancelled() => None,
-                        result = timeout(PENDING_LIFETIME, data_rx) => result.ok().and_then(Result::ok),
+                        result = timeout(pending_lifetime, data_rx) => result.ok().and_then(Result::ok),
                     };
                     if session.pending.lock().await.remove(&connection_id).is_some() {
                         counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Some(data) = outcome {
-                        match relay_with_options(external, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), RELAY_DRAIN)).await {
+                        match relay_with_options(external, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
                             Ok(report) => {
                                 counters.bytes_upstream.fetch_add(report.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
                                 counters.bytes_downstream.fetch_add(report.bytes_downstream, std::sync::atomic::Ordering::Relaxed);

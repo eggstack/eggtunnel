@@ -1,6 +1,7 @@
 #[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
+    use crate::{BindPolicy, RuntimePolicy, ServerBuilder, ServerConfig, ServerTransportProfile};
     #[cfg(feature = "mtls")]
     use crate::ClientIdentity;
     use crate::{
@@ -41,6 +42,67 @@ mod tests {
     fn test_data_stream() -> BoxStream {
         let (stream, _peer) = tokio::io::duplex(32);
         Box::new(stream)
+    }
+
+    fn builder() -> ServerBuilder {
+        ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: b"cert".to_vec(),
+            private_key_pem: b"key".to_vec(),
+            token: SecretToken::new(b"test-token".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .bind_policy(BindPolicy::default())
+        .runtime_policy(RuntimePolicy::default())
+    }
+
+    #[test]
+    fn server_builder_accepts_tcp_tls_default_profile() {
+        assert!(builder().validate().is_ok());
+    }
+
+    #[cfg(feature = "quic")]
+    #[test]
+    fn server_builder_accepts_quic() {
+        assert!(builder()
+            .transport(ServerTransportProfile::Quic)
+            .validate()
+            .is_ok());
+    }
+
+    #[cfg(feature = "websocket")]
+    #[test]
+    fn server_builder_accepts_websocket() {
+        assert!(builder()
+            .transport(ServerTransportProfile::WebSocket)
+            .validate()
+            .is_ok());
+    }
+
+    #[cfg(feature = "mtls")]
+    #[test]
+    fn server_builder_accepts_tcp_mtls() {
+        assert!(builder().client_ca_pem(b"client CA".to_vec()).validate().is_ok());
+    }
+
+    #[cfg(all(feature = "mtls", feature = "quic"))]
+    #[test]
+    fn server_builder_rejects_quic_mtls() {
+        assert!(builder()
+            .transport(ServerTransportProfile::Quic)
+            .client_ca_pem(b"client CA".to_vec())
+            .validate()
+            .is_err());
+    }
+
+    #[cfg(all(feature = "mtls", feature = "websocket"))]
+    #[test]
+    fn server_builder_rejects_websocket_mtls() {
+        assert!(builder()
+            .transport(ServerTransportProfile::WebSocket)
+            .client_ca_pem(b"client CA".to_vec())
+            .validate()
+            .is_err());
     }
 
     fn certificate() -> (String, String) {

@@ -21,13 +21,13 @@ pub use client::ClientIdentity;
 pub use client::validate_outbound_proxy;
 #[cfg(feature = "client")]
 pub use client::{
-    ApplicationStream, Client, ClientConfig, ClientHandle, TargetConnector, TargetContext,
-    TargetError, TargetFuture, TargetStream,
+    ApplicationStream, Client, ClientBuilder, ClientConfig, ClientHandle, ClientTransportProfile,
+    TargetConnector, TargetContext, TargetError, TargetFuture, TargetStream,
 };
 pub use common::{
-    BindPolicy, ClientService, ResourceLimits, SecretToken, ServiceSpec, Snapshot,
-    TerminationCategory, TunnelError,
+    BindPolicy, ClientService, ResourceLimits, RuntimePolicy, SecretToken, ServiceSpec, Snapshot,
+    TerminationCategory, TimeoutPolicy, TunnelError,
 };
 pub use eggtunnel_proto as proto;
 #[cfg(feature = "server")]
-pub use server::{Server, ServerConfig, ServerHandle};
+pub use server::{Server, ServerBuilder, ServerConfig, ServerHandle, ServerTransportProfile};
