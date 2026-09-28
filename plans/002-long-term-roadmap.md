@@ -442,11 +442,90 @@ Phase 10 closed.
 - publication state is truthful;
 - irreversible tag/crates/GitHub publication occurs only after explicit owner authorization.
 
+## Phase 12 — Post-0.2 runtime topology and maintenance consolidation
+
+### Objective
+
+Reduce the remaining implementation concentration and duplicated transport/lifecycle ownership before additional protocol or trust-model evolution.
+
+### Deliverables
+
+- decompose the concentrated server runtime along existing Session/transport/auth/service/data ownership boundaries;
+- unify duplicated TCP/WSS/QUIC client reconnect-supervisor behavior while retaining transport-specific establishment;
+- consolidate internal endpoint parsing/validation;
+- add client-only/server-only optional QUIC/WSS feature slices while preserving published umbrella feature compatibility;
+- reconcile post-0.2 planning/documentation drift;
+- improve checked-in dependency/Actions maintenance without weakening existing audit/license/release gates.
+
+### Dependencies
+
+Phase 11 qualified and the M013 0.2.0 publication event closed.
+
+### Exit criteria
+
+- no wire or existing public method semantic change;
+- runtime ownership is materially clearer and less duplicated;
+- minimal/client-only optional transport dependency graphs remain narrow and continuously qualified;
+- no duplicated generic proxy/data plane is introduced;
+- exact-head full/MSRV/feature/security/license/hosted gates pass.
+
+## Phase 13 — Standalone configuration and operational surface
+
+### Objective
+
+Make the standalone CLI deterministic and automation-friendly while remaining a thin adapter over the process-neutral library.
+
+### Deliverables
+
+- one parse/override/resolve/validate/launch configuration pipeline;
+- single-read secret/certificate/proxy resolution;
+- additive non-secret CLI overrides;
+- redacted machine-readable check/startup/runtime output derived from existing bounded snapshots/events.
+
+### Dependencies
+
+Phase 12 closed.
+
+### Exit criteria
+
+- TOML and existing commands remain compatible;
+- canonical library validation owns profile semantics;
+- JSON/override behavior is redacted and tested;
+- no remote admin API, config hot reload, service manager, or updater is added.
+
+## Phase 14 — Capability-negotiated protocol evolution
+
+### Objective
+
+Implement the first backward-compatible protocol-minor extension under ADR-0002.
+
+### Deliverables
+
+- protocol minor 1 advertisement with capability intersection;
+- capability 1 correlated RegisterReject message ID 15 and bounded concurrent dynamic registration;
+- capability 2 bounded Drain deadline semantics;
+- explicit 1.0 fallback and mixed-version compatibility evidence.
+
+### Dependencies
+
+Phase 12 closed. Phase 13 may proceed independently after Phase 12.
+
+### Exit criteria
+
+- 1.0/1.1 mixed peers retain baseline interoperability;
+- extension behavior is used only after bilateral negotiation;
+- existing message IDs/payloads 1-14 remain stable;
+- registration transactions remain bounded and generation-scoped;
+- peer Drain can shorten but never extend local shutdown ceilings;
+- hostile-input, state-stress, transport-equivalence, and exact-head hosted gates pass.
+
 ## Future gated continuation
 
-Do not register an executable negotiated-protocol milestone until a concrete extension exists and an ADR defines capability/minor-version compatibility semantics.
+ADR-0002 now supplies concrete capability/minor-version compatibility semantics for Phase 14. Further protocol capabilities require concrete extensions; a new ADR is required only when compatibility meaning or another ADR-governed boundary changes.
 
-Do not replace the closed Phase 5 release workflow with Eggpack-generated release/bootstrap/CI machinery until Eggpack's CI orchestration and ecosystem-adoption interfaces are stable enough to preserve the current release support/evidence contract. Phase 11 re-evaluates that boundary before the 0.2.0 candidate.
+Do not register a multi-tenant Principal/auth-provider milestone until a concrete shared-server requirement exists and a new authentication/authorization ADR defines the trust and policy boundary.
+
+Do not replace the closed Phase 5 release workflow with Eggpack-generated release/bootstrap/CI machinery until Eggpack's CI orchestration and ecosystem-adoption interfaces are stable enough to preserve the current release support/evidence contract.
 
 ## Deferred roadmap candidates
 
@@ -500,6 +579,17 @@ Phase 3 QUIC     Phase 4 WSS/proxy
                     |
                     v
         Phase 11 0.2.0 release qualification
+                    |
+                    v
+        M013 0.2.0 publication event
+                    |
+                    v
+        Phase 12 runtime topology/maintenance
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+ Phase 13 CLI/ops      Phase 14 protocol 1.1
 
 ## Initial planning decomposition
 
