@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M011 and C001 closed; M012 conditionally closed awaiting publication authorization
+Status: active — M001-M013 and C001 closed; M014 ready; M015/M016 blocked on M014
 
 Canonical references:
 
@@ -12,6 +12,7 @@ Canonical references:
 Applicable ADR:
 
 - plans/adrs/ADR-0001-session-transport-and-egress-boundary.md
+- plans/adrs/ADR-0002-capability-negotiated-minor-protocol-evolution.md
 
 ## 1. Purpose and ownership boundary
 
@@ -171,7 +172,7 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is strictly closed and M009 is now closed under ADR-0001 with existing RegisterService/UnregisterService and Ping/Pong semantics preserved.
 
-A future negotiated-protocol milestone requires a concrete extension plus an accepted ADR. A future Eggpack distribution cutover requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces. Neither is dependency-ready today.
+ADR-0002 now defines the first concrete negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 is registered but remains blocked on M014 structural closure. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
@@ -488,7 +489,7 @@ Exit conditions:
 
 ### Milestone M012 — 0.2.0 release qualification and publication gate
 
-Status: conditionally closed — release candidate qualified; tag/release/publication and registry consumer evidence remain gated on explicit owner authorization; see `plans/closure/reverse-session/012-status.md`
+Status: closed — release-candidate qualification recorded at `plans/closure/reverse-session/012-status.md`; publication event recorded separately as M013.
 
 Implementation plan:
 
@@ -512,11 +513,103 @@ Exit conditions:
 - 0.2.0 public API/release notes are coherent;
 - authorized tag/release/publication and clean registry-consumer evidence complete before published-release closure.
 
+### Milestone M013 — 0.2.0 publication event
+
+Status: closed — closure recorded at `plans/closure/reverse-session/013-status.md`.
+
+Primary class: capability / polish
+
+Objective:
+
+- execute the irreversible tag/GitHub release/crates.io publication steps authorized after M012;
+- verify clean registry consumption and preserve the release evidence contract.
+
+Exit conditions:
+
+- tag `v0.2.0`, hosted release assets/provenance, crates.io publication order, and clean registry consumer evidence are recorded;
+- current documentation truthfully identifies 0.2.0 as published.
+
+### Milestone M014 — Post-0.2 runtime topology and maintenance consolidation
+
+Status: ready
+
+Implementation plan:
+
+- plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md
+
+Primary class: polish / invariant
+
+Objective:
+
+- reduce remaining server/client runtime concentration and duplicated reconnect/admission ownership;
+- consolidate internal endpoint semantics;
+- add role-specific optional-transport feature slices without breaking existing umbrella features;
+- reconcile post-publication planning/documentation drift and improve repository maintenance automation.
+
+Hard dependency: M013 closed.
+
+Exit conditions:
+
+- behavior/wire/public method semantics remain compatible;
+- client/server runtime ownership is materially clearer and less duplicated;
+- client-only QUIC/WSS feature slices are continuously qualified;
+- no new general proxy/data-plane abstraction duplicates Eggress;
+- planning/docs and supply-chain maintenance state are coherent.
+
+### Milestone M015 — CLI configuration resolution and operational surface
+
+Status: blocked on M014 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md
+
+Primary class: capability / polish
+
+Objective:
+
+- resolve TOML/environment/file/override inputs once into a redacted launch snapshot;
+- add machine-readable check/runtime output and non-secret overrides while preserving existing CLI/TOML workflows.
+
+Exit conditions:
+
+- canonical library validation owns profile semantics;
+- JSON/override surfaces are redacted, stable, and tested;
+- no remote admin/control plane is introduced.
+
+### Milestone M016 — Capability-negotiated protocol evolution
+
+Status: blocked on M014 strict closure
+
+Implementation plan:
+
+- plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md
+
+Applicable ADR:
+
+- plans/adrs/ADR-0002-capability-negotiated-minor-protocol-evolution.md
+
+Primary class: capability / invariant
+
+Objective:
+
+- implement protocol minor 1 capability intersection;
+- add message 15 RegisterReject for bounded concurrent dynamic registration when negotiated;
+- give existing Drain.deadline_ms bounded interoperable semantics when negotiated;
+- preserve exact protocol-1.0 fallback behavior with old peers.
+
+Exit conditions:
+
+- mixed 1.0/1.1 peers retain baseline interoperability;
+- extension-only behavior occurs only after bilateral negotiation;
+- new registration transaction state remains bounded/generation-scoped;
+- peer Drain cannot extend local shutdown policy.
+
 ### Later gated work
 
-Protocol capability negotiation is intentionally not assigned an executable milestone yet. The current protocol exchanges an empty capability set and treats minor versions as informational. The first change to that compatibility meaning must have a concrete extension and an accepted ADR before an implementation plan is registered.
+Multi-tenant Principal/auth-provider and per-Principal/per-Service authorization are intentionally not assigned an executable milestone yet. A concrete shared-server requirement and a new authentication/authorization ADR are required before that trust-model expansion is registered.
 
-Eggpack release/bootstrap/CI adoption is also intentionally not assigned an executable Eggtunnel milestone yet. Eggtunnel's current release workflow remains authoritative until Eggpack exposes stable build/qualification, bootstrap-installer, and generated-CI contracts capable of preserving the closed M006 release evidence.
+Eggpack release/bootstrap/CI adoption is also intentionally not assigned an executable Eggtunnel milestone yet. Eggtunnel's current release workflow remains authoritative until Eggpack exposes stable build/qualification, bootstrap-installer, and generated-CI contracts capable of preserving the closed release evidence.
 
 ## 12. Security considerations across milestones
 
@@ -653,7 +746,6 @@ Explicitly deferred until after M006 or a new ADR:
 - traffic inspection;
 - remote execution semantics;
 - bandwidth billing;
-- negotiated capability/version semantics until a concrete extension and ADR exist;
 - Eggpack release-workflow cutover until stable producer interfaces are available.
 
 ## 19. Status table
@@ -672,4 +764,8 @@ Explicitly deferred until after M006 or a new ADR:
 | M009 dynamic Service lifecycle/observability | closed | plans/implementation/reverse-session/009-dynamic-service-lifecycle-and-operational-observability.md | plans/closure/reverse-session/009-status.md | M008 strict closure; hosted CI passed |
 | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md | M009 strict closure; hosted CI passed |
 | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md | Sustained qualification complete; exact-head hosted CI run 36003630154 passed |
-| M012 0.2.0 release qualification/publication gate | conditionally closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md | Candidate qualification and exact-head hosted CI passed; target release workflow and registry publication require explicit authorization |
+| M012 0.2.0 release qualification/publication gate | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md | Candidate qualification and exact-head hosted CI passed; publication captured separately by M013. |
+| M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md | Tag/release/crates publication and clean registry consumer complete. |
+| M014 post-0.2 runtime topology/maintenance | ready | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | — | M013 closed. |
+| M015 CLI config/operations | blocked | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | — | M014 strict closure. |
+| M016 capability-negotiated protocol evolution | blocked | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | — | M014 strict closure; ADR-0002 accepted. |
