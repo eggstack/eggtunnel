@@ -225,6 +225,8 @@ Serde plus postcard is the preferred initial encoding unless M001 demonstrates a
 
 Wire numeric values MUST be explicit rather than derived from Rust enum ordering.
 
+After the first published major-1 baseline, same-major minor extensions MUST follow ADR-0002 capability negotiation semantics: the Client advertises supported capabilities, the Server returns the negotiated intersection, minor version alone MUST NOT authorize extension behavior, unknown capability IDs are ignored, and an extension-only message or semantic change MUST NOT be used unless its capability was negotiated. Existing message IDs/payloads MUST NOT be repurposed incompatibly.
+
 ## 10. Identity and correlation
 
 The following identifiers MUST remain distinct:
