@@ -12,6 +12,7 @@ Canonical direction:
 Accepted architectural decisions:
 
 - plans/adrs/ADR-0001-session-transport-and-egress-boundary.md
+- plans/adrs/ADR-0002-capability-negotiated-minor-protocol-evolution.md
 
 ## Status vocabulary
 
@@ -29,12 +30,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M012/M013 closed | M011 sustained qualification closed; M012 release-candidate qualification and M013 publication event are both closed; the current published line is `0.2.0`. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014 ready | M012 release qualification and M013 publication are closed; M014 is the current post-0.2 structural/maintenance milestone. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | ready | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | M013 publication event closed; behavior-preserving structural/feature/maintenance pass. |
 
 ## Recently closed or conditionally closed implementation plans
 
@@ -70,10 +72,9 @@ M006 closure record at plans/closure/reverse-session/006-status.md records
 the hosted 4-target release, crates.io publication (proto then library),
 downstream registry-consumption, advisory/license review, and the supported
 platform claims. No high/medium correctness or security findings remain open.
-Post-0.1 M007-M010 are now strictly closed. The next line is M011 sustained
-fuzz/soak/performance qualification, then M012 0.2.0 release qualification.
-The historical C001
-corrective roadmap is archived; its closure evidence remains authoritative.
+Post-0.1 M007-M012 are strictly closed and M013 records the completed 0.2.0
+publication event. The current executable line begins at M014. The historical
+C001 corrective roadmap is archived; its closure evidence remains authoritative.
 
 ### M010 client runtime modularization (closed)
 
@@ -111,10 +112,10 @@ The following are not optional implementation preferences:
 
 ## Blocked / future work
 
-These are not M010 implementation blockers:
-
-- protocol capability/minor-version negotiation remains unplanned until a concrete extension exists and an ADR defines compatibility semantics;
-- Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel;
-- Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel;
-- Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain future support work requiring explicit evidence;
+- M015 CLI configuration resolution/operational surface is blocked on M014 strict closure: plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md.
+- M016 capability-negotiated protocol evolution is blocked on M014 strict closure and is governed by accepted ADR-0002: plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md.
+- Multi-tenant Principal/auth-provider and per-Principal/per-Service policy remain gated on a concrete shared-server requirement plus an authentication/authorization ADR; no executable milestone is registered yet.
+- Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel.
+- Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel.
+- Windows, musl, armv7, Raspberry Pi, and Le Potato release qualification remain future support work requiring explicit evidence.
 - QUIC custom CA/mTLS and QUIC proxy traversal remain unsupported current profiles unless a later plan/ADR changes the transport boundary.
