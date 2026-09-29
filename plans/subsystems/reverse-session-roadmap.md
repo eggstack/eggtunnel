@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M013 and C001 closed; M014 active; M015/M016 blocked on M014
+Status: active — M001-M014 and C001 closed; M015/M016 ready
 
 Canonical references:
 
@@ -531,7 +531,7 @@ Exit conditions:
 
 ### Milestone M014 — Post-0.2 runtime topology and maintenance consolidation
 
-Status: active
+Status: closed — closure recorded at `plans/closure/reverse-session/014-status.md`
 
 Implementation plan:
 
@@ -558,7 +558,7 @@ Exit conditions:
 
 ### Milestone M015 — CLI configuration resolution and operational surface
 
-Status: blocked on M014 strict closure
+Status: ready — unblocked by M014 strict closure
 
 Implementation plan:
 
@@ -579,7 +579,7 @@ Exit conditions:
 
 ### Milestone M016 — Capability-negotiated protocol evolution
 
-Status: blocked on M014 strict closure
+Status: ready — unblocked by M014 strict closure
 
 Implementation plan:
 
@@ -766,6 +766,6 @@ Explicitly deferred until after M006 or a new ADR:
 | M011 sustained robustness/performance qualification | closed | plans/implementation/reverse-session/011-sustained-robustness-and-performance-qualification.md | plans/closure/reverse-session/011-status.md | Sustained qualification complete; exact-head hosted CI run 36003630154 passed |
 | M012 0.2.0 release qualification/publication gate | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md | Candidate qualification and exact-head hosted CI passed; publication captured separately by M013. |
 | M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md | Tag/release/crates publication and clean registry consumer complete. |
-| M014 post-0.2 runtime topology/maintenance | active | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | — | M013 closed. |
-| M015 CLI config/operations | blocked | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | — | M014 strict closure. |
-| M016 capability-negotiated protocol evolution | blocked | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | — | M014 strict closure; ADR-0002 accepted. |
+| M014 post-0.2 runtime topology/maintenance | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md | M013 closed; M015/M016 unblocked. |
+| M015 CLI config/operations | ready | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | — | M014 closed. |
+| M016 capability-negotiated protocol evolution | ready | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | — | M014 closed; ADR-0002 accepted. |

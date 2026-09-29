@@ -30,13 +30,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014 active | M012 release qualification and M013 publication are closed; M014 is the current post-0.2 structural/maintenance milestone. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014 closed; M015/M016 ready | M012 release qualification, M013 publication, and M014 consolidation are closed; M015/M016 are the current executable milestones. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | active | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | M013 publication event closed; behavior-preserving structural/feature/maintenance pass. |
+| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md; structural/feature/maintenance pass qualified. |
 
 ## Recently closed or conditionally closed implementation plans
 
@@ -73,7 +73,7 @@ the hosted 4-target release, crates.io publication (proto then library),
 downstream registry-consumption, advisory/license review, and the supported
 platform claims. No high/medium correctness or security findings remain open.
 Post-0.1 M007-M012 are strictly closed and M013 records the completed 0.2.0
-publication event. The current executable line begins at M014. The historical
+publication event, and M014 records the post-0.2 consolidation. The current executable line is M015/M016. The historical
 C001 corrective roadmap is archived; its closure evidence remains authoritative.
 
 ### M010 client runtime modularization (closed)
@@ -112,8 +112,8 @@ The following are not optional implementation preferences:
 
 ## Blocked / future work
 
-- M015 CLI configuration resolution/operational surface is blocked on M014 strict closure: plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md.
-- M016 capability-negotiated protocol evolution is blocked on M014 strict closure and is governed by accepted ADR-0002: plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md.
+- M015 CLI configuration resolution/operational surface is ready (unblocked by M014 closure): plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md.
+- M016 capability-negotiated protocol evolution is ready (unblocked by M014 closure) and is governed by accepted ADR-0002: plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md.
 - Multi-tenant Principal/auth-provider and per-Principal/per-Service policy remain gated on a concrete shared-server requirement plus an authentication/authorization ADR; no executable milestone is registered yet.
 - Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel.
 - Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel.
