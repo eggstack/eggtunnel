@@ -30,18 +30,19 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014/M015/M016 closed | M012 release qualification, M013 publication, and M014 consolidation are closed; M015/M016 are the current executable milestones. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | none pending | M001-M016 and C001 are closed; no executable reverse-session milestone is currently registered. |
 
 ## Active and ready implementation plans
 
-| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
-|---|---|---|---|---|
-| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md; structural/feature/maintenance pass qualified. |
+No implementation plan is currently active or dependency-ready.
 
 ## Recently closed or conditionally closed implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Closure record / note |
 |---|---|---|---|---|
+| Reverse session | M016 capability-negotiated protocol evolution | closed | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | plans/closure/reverse-session/016-status.md; protocol 1.1 capability negotiation, correlated bounded registration rejection, Drain deadline semantics, mixed-version compatibility, and hosted CI run 36586150572 passed. |
+| Reverse session | M015 CLI configuration resolution/operational surface | closed | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | plans/closure/reverse-session/015-status.md; single-resolution CLI configuration, redacted JSON/override surfaces, integration qualification, and hosted CI run 36576415963 passed. |
+| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md; runtime decomposition, role-sliced optional transports, endpoint consolidation, maintenance hardening, and hosted CI run 36574166914 passed. |
 | Reverse session | M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md; tag v0.2.0, hosted 4-target release with install/version smoke (run 36058175606), crates.io publication of eggtunnel-proto then eggtunnel, clean registry consumer resolving `eggtunnel = "0.2"` from crates.io, audit (0 vulns) + deny licenses pass. |
 | Reverse session | M012 0.2.0 release qualification/publication gate | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md; exact candidate passed local and hosted gates. Publication event captured by M013. |
 | Reverse session | M010 client runtime modularization/state-machine hardening | closed | plans/implementation/reverse-session/010-client-runtime-modularization-and-state-machine-hardening.md | plans/closure/reverse-session/010-status.md; private runtime ownership, explicit Service lifecycle/heartbeat state, and exact-head hosted qualification. |
@@ -112,8 +113,6 @@ The following are not optional implementation preferences:
 
 ## Blocked / future work
 
-- M015 CLI configuration resolution/operational surface is ready (unblocked by M014 closure): plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md.
-- M016 capability-negotiated protocol evolution is ready (unblocked by M014 closure) and is governed by accepted ADR-0002: plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md.
 - Multi-tenant Principal/auth-provider and per-Principal/per-Service policy remain gated on a concrete shared-server requirement plus an authentication/authorization ADR; no executable milestone is registered yet.
 - Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel.
 - Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel.
