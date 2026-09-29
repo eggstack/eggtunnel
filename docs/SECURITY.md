@@ -20,8 +20,18 @@ Each accepted external connection receives a random 128-bit ConnectionId,
 bound to the current Session and Service, with a 30-second lifetime and
 single-use consumption. Pending and active connection counts, services,
 handshakes, and control queues have finite ceilings selected by the validated
-runtime policy, with conservative defaults. DataHello is the final
+runtime policy, with conservative defaults. Dynamic registration
+transactions are likewise bounded (one in flight without negotiated
+capability 1; up to the command-queue-derived ceiling with it) and
+generation-scoped: disconnect, cancellation, timeout, and Session
+replacement fail every pending reply and clear the transaction state, so
+stale acknowledgements can never enter desired state. DataHello is the final
 Eggtunnel message on a data stream; following bytes are opaque.
+
+A peer `Drain` deadline can only shorten local shutdown: with negotiated
+capability 2 the effective drain wait is `min(peer deadline, local
+shutdown ceiling)` (zero means immediate), and without it receivers keep
+local-only timing. Unknown or unnegotiated extension messages fail closed.
 
 Unauthenticated accepted connections are capped at 64 concurrent handshakes.
 The server retains a sliding 60-second authentication failure window for at

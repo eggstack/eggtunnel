@@ -3,6 +3,10 @@
 Start the server with `eggtunnel server server.toml`; start a private-side
 client with `eggtunnel client client.toml`. Both processes stop on Ctrl-C. The
 server sends a bounded Drain notification before closing active sessions.
+With negotiated protocol capability 2 the `deadline_ms` field carries a
+relative grace duration honored as `min(peer, local shutdown ceiling)`;
+without it both sides keep local-only shutdown timing (see
+`docs/PROTOCOL.md`).
 
 The server's `listen_addr` accepts both control sessions and reverse data
 connections. Every accepted connection begins with TLS. A service's actual

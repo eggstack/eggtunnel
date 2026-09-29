@@ -151,6 +151,155 @@ async fn fake_connected_client_with_policy(
     (handle, counters, task, peer)
 }
 
+/// Session driven by a scripted peer speaking the given (minor,
+/// capabilities) as the server. Completes the initial handshake and
+/// returns the running session plus the peer stream.
+async fn fake_session_with_hello(
+    minor: u16,
+    caps: Capabilities,
+    policy: crate::RuntimePolicy,
+) -> (
+    ClientHandle,
+    Counters,
+    JoinHandle<Result<(), TunnelError>>,
+    BoxStream,
+) {
+    let token = SecretToken::new(b"capability-negotiation-test".to_vec()).unwrap();
+    let counters = Counters::with_policy(policy);
+    let cancel = CancellationToken::new();
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let (commands, command_rx) = mpsc::channel(32);
+    let handle = ClientHandle {
+        cancel: cancel.clone(),
+        counters: counters.clone(),
+        commands,
+        #[cfg(feature = "quic-client")]
+        quic_client: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let task_counters = counters.clone();
+    let task_cancel = cancel.clone();
+    let task_token = token.clone();
+    let task = tokio::spawn(async move {
+        let mut supervisor =
+            ReconnectSupervisor::new(vec![service(1, "initial", 80)], Duration::from_millis(500));
+        let mut command_rx = command_rx;
+        run_session(
+            Box::new(client_io),
+            SessionRun {
+                token: &task_token,
+                transport: ClientDataTransport::TcpTls {
+                    endpoint: crate::Endpoint::parse("localhost:443").unwrap(),
+                    server_name: "localhost".into(),
+                    tls: build_tls_config(None).unwrap(),
+                    websocket: false,
+                    #[cfg(feature = "outbound-proxy")]
+                    outbound: None,
+                },
+                connector: Arc::new(super::config::TcpTargetConnector),
+                cancel: &task_cancel,
+                counters: &task_counters,
+                reconnect_delay: &mut supervisor.reconnect_delay,
+                service_state: &mut supervisor.services,
+                commands: &mut command_rx,
+            },
+        )
+        .await
+    });
+    let mut peer: BoxStream = Box::new(server_io);
+    // The client must always advertise the full supported set at 1.1.
+    let Message::ClientHello(hello) = read_boxed(&mut peer).await.unwrap() else {
+        panic!("expected ClientHello");
+    };
+    assert_eq!(hello.version.major, 1);
+    assert_eq!(hello.version.minor, eggtunnel_proto::PROTOCOL_MINOR);
+    assert_eq!(hello.capabilities, Capabilities::supported());
+    write_boxed(
+        &mut peer,
+        &Message::ServerHello(ServerHello {
+            version: ProtocolVersion { major: 1, minor },
+            capabilities: caps,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        read_boxed(&mut peer).await.unwrap(),
+        Message::Auth(_)
+    ));
+    write_boxed(
+        &mut peer,
+        &Message::AuthOk(AuthOk {
+            session_id: eggtunnel_proto::SessionId::generate().unwrap(),
+        }),
+    )
+    .await
+    .unwrap();
+    let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+        panic!("expected initial registration")
+    };
+    write_boxed(
+        &mut peer,
+        &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+            service_id: initial.service_id,
+            effective_bind: EffectiveBind {
+                address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                port: 31001,
+            },
+        }),
+    )
+    .await
+    .unwrap();
+    (handle, counters, task, peer)
+}
+
+async fn read_register(peer: &mut BoxStream) -> ServiceId {
+    let Message::RegisterService(register) =
+        tokio::time::timeout(Duration::from_secs(2), read_boxed(peer))
+            .await
+            .unwrap()
+            .unwrap()
+    else {
+        panic!("expected RegisterService");
+    };
+    register.service_id
+}
+
+async fn ack_service(peer: &mut BoxStream, id: ServiceId, port: u16) {
+    write_boxed(
+        peer,
+        &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+            service_id: id,
+            effective_bind: EffectiveBind {
+                address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                port,
+            },
+        }),
+    )
+    .await
+    .unwrap();
+}
+
+async fn reject_service(peer: &mut BoxStream, id: ServiceId, code: u16) {
+    write_boxed(
+        peer,
+        &Message::RegisterReject(eggtunnel_proto::RegisterReject {
+            service_id: id,
+            code,
+            diagnostic: eggtunnel_proto::BoundedDiagnostic::new("rejected").unwrap(),
+        }),
+    )
+    .await
+    .unwrap();
+}
+
+fn full_capabilities() -> Capabilities {
+    Capabilities::new(vec![
+        eggtunnel_proto::CAPABILITY_REGISTER_REJECT,
+        eggtunnel_proto::CAPABILITY_DRAIN_DEADLINE,
+    ])
+    .unwrap()
+}
+
 #[tokio::test]
 async fn a_ready_session_resets_the_shared_reconnect_backoff_independent_of_transport() {
     // Backoff ownership lives in the supervisor, not in a transport adapter,
@@ -559,4 +708,249 @@ fn client_profile_validator_rejects_mtls_proxy() {
         .with_identity(ClientIdentity::new(b"cert".to_vec(), b"key".to_vec()))
         .outbound_proxy("socks5://localhost:1080");
     assert!(builder.validate().is_err());
+}
+
+#[test]
+fn negotiate_capabilities_returns_the_intersection_only() {
+    use eggtunnel_proto::{CAPABILITY_DRAIN_DEADLINE, CAPABILITY_REGISTER_REJECT};
+    let offered = Capabilities::supported();
+    // Server-claimed extras outside our advertisement are ignored.
+    let claimed = Capabilities::new(vec![CAPABILITY_REGISTER_REJECT, 99]).unwrap();
+    let negotiated = negotiate_capabilities(&offered, &claimed);
+    assert_eq!(negotiated.as_slice(), &[CAPABILITY_REGISTER_REJECT]);
+    // Empty (1.0) advertisement negotiates nothing.
+    assert!(
+        negotiate_capabilities(&offered, &Capabilities::default())
+            .as_slice()
+            .is_empty()
+    );
+    // Drain-only peer negotiates drain alone.
+    let drain_only = Capabilities::new(vec![CAPABILITY_DRAIN_DEADLINE]).unwrap();
+    assert_eq!(
+        negotiate_capabilities(&offered, &drain_only).as_slice(),
+        &[CAPABILITY_DRAIN_DEADLINE]
+    );
+}
+
+#[tokio::test]
+async fn legacy_peer_keeps_exactly_one_registration_in_flight() {
+    let (handle, _counters, task, mut peer) =
+        fake_session_with_hello(0, Capabilities::default(), crate::RuntimePolicy::default()).await;
+    let register = handle.clone();
+    let first =
+        tokio::spawn(async move { register.register_service(service(2, "dynamic", 81)).await });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    // A second dynamic registration fails immediately: serial fallback.
+    assert!(matches!(
+        handle.register_service(service(3, "other", 82)).await,
+        Err(TunnelError::ResourceExhausted)
+    ));
+    // No second frame was written for the rejected registration.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), read_boxed(&mut peer))
+            .await
+            .is_err()
+    );
+    ack_service(&mut peer, ServiceId(2), 31002).await;
+    assert!(first.await.unwrap().is_ok());
+    handle.shutdown();
+    assert!(task.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn correlated_peers_correlate_out_of_order_ack_and_reject() {
+    let (handle, counters, task, mut peer) =
+        fake_session_with_hello(1, full_capabilities(), crate::RuntimePolicy::default()).await;
+    let first_handle = handle.clone();
+    let first = tokio::spawn(async move {
+        first_handle
+            .register_service(service(2, "dynamic", 81))
+            .await
+    });
+    let second_handle = handle.clone();
+    let second = tokio::spawn(async move {
+        second_handle
+            .register_service(service(3, "other", 82))
+            .await
+    });
+    // Both registrations are in flight concurrently.
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    assert_eq!(read_register(&mut peer).await, ServiceId(3));
+    // Reject arrives first (out of order) with the shared code vocabulary.
+    reject_service(&mut peer, ServiceId(3), 5).await;
+    assert!(matches!(
+        second.await.unwrap(),
+        Err(TunnelError::ResourceExhausted)
+    ));
+    ack_service(&mut peer, ServiceId(2), 31002).await;
+    let bind = first.await.unwrap().unwrap();
+    assert_eq!(bind.port, 31002);
+    assert_eq!(counters.snapshot().registered_services, 2);
+    handle.shutdown();
+    assert!(task.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn duplicate_simultaneous_registrations_fail_before_any_frame() {
+    let (handle, _counters, task, mut peer) =
+        fake_session_with_hello(1, full_capabilities(), crate::RuntimePolicy::default()).await;
+    let first_handle = handle.clone();
+    let first = tokio::spawn(async move {
+        first_handle
+            .register_service(service(2, "dynamic", 81))
+            .await
+    });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    // Same id and same name both fail locally without a second frame.
+    assert!(matches!(
+        handle.register_service(service(2, "clash", 82)).await,
+        Err(TunnelError::ServiceAlreadyExists)
+    ));
+    assert!(matches!(
+        handle.register_service(service(4, "dynamic", 82)).await,
+        Err(TunnelError::ServiceAlreadyExists)
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), read_boxed(&mut peer))
+            .await
+            .is_err()
+    );
+    ack_service(&mut peer, ServiceId(2), 31002).await;
+    assert!(first.await.unwrap().is_ok());
+    handle.shutdown();
+    assert!(task.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn unnegotiated_register_reject_fails_the_session_closed() {
+    let (handle, _counters, task, mut peer) =
+        fake_session_with_hello(0, Capabilities::default(), crate::RuntimePolicy::default()).await;
+    let register = handle.clone();
+    let pending =
+        tokio::spawn(async move { register.register_service(service(2, "dynamic", 81)).await });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    // A 1.0 peer never sends ID 15: treat it as a protocol violation.
+    reject_service(&mut peer, ServiceId(2), 1).await;
+    assert!(task.await.unwrap().is_err());
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(TunnelError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn partial_capability_reject_without_negotiation_is_a_violation() {
+    use eggtunnel_proto::CAPABILITY_DRAIN_DEADLINE;
+    let caps = Capabilities::new(vec![CAPABILITY_DRAIN_DEADLINE]).unwrap();
+    let (handle, _counters, task, mut peer) =
+        fake_session_with_hello(1, caps, crate::RuntimePolicy::default()).await;
+    let register = handle.clone();
+    let pending =
+        tokio::spawn(async move { register.register_service(service(2, "dynamic", 81)).await });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    // Capability 1 was not negotiated: the reject fails the Session.
+    reject_service(&mut peer, ServiceId(2), 1).await;
+    assert!(task.await.unwrap().is_err());
+    assert!(matches!(
+        pending.await.unwrap(),
+        Err(TunnelError::Disconnected)
+    ));
+}
+
+#[tokio::test]
+async fn disconnect_with_pending_correlated_registrations_fails_all() {
+    let (handle, _counters, task, mut peer) =
+        fake_session_with_hello(1, full_capabilities(), crate::RuntimePolicy::default()).await;
+    let first_handle = handle.clone();
+    let first =
+        tokio::spawn(async move { first_handle.register_service(service(2, "two", 81)).await });
+    let second_handle = handle.clone();
+    let second = tokio::spawn(async move {
+        second_handle
+            .register_service(service(3, "three", 82))
+            .await
+    });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    assert_eq!(read_register(&mut peer).await, ServiceId(3));
+    drop(peer);
+    assert!(matches!(
+        first.await.unwrap(),
+        Err(TunnelError::Disconnected)
+    ));
+    assert!(matches!(
+        second.await.unwrap(),
+        Err(TunnelError::Disconnected)
+    ));
+    assert!(task.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn negotiated_peer_drain_deadline_cannot_extend_local_shutdown() {
+    let mut policy = crate::RuntimePolicy::default();
+    policy.timeouts.shutdown_grace = Duration::from_millis(100);
+    let (_handle, _counters, task, mut peer) =
+        fake_session_with_hello(1, full_capabilities(), policy).await;
+    // A 30 s peer deadline must collapse to the 100 ms local ceiling.
+    write_boxed(
+        &mut peer,
+        &Message::Drain(eggtunnel_proto::Drain {
+            deadline_ms: 30_000,
+        }),
+    )
+    .await
+    .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("peer drain must not extend local shutdown");
+    assert!(outcome.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn absent_capability_drain_keeps_local_only_shutdown_timing() {
+    let mut policy = crate::RuntimePolicy::default();
+    policy.timeouts.shutdown_grace = Duration::from_millis(100);
+    let (_handle, _counters, task, mut peer) =
+        fake_session_with_hello(0, Capabilities::default(), policy).await;
+    // Without capability 2 the field is tolerated and local timing rules.
+    write_boxed(
+        &mut peer,
+        &Message::Drain(eggtunnel_proto::Drain {
+            deadline_ms: 30_000,
+        }),
+    )
+    .await
+    .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("1.0 drain must keep local shutdown timing");
+    assert!(outcome.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn correlated_cancelled_registration_is_unregistered_and_never_commits() {
+    let (handle, counters, task, mut peer) =
+        fake_session_with_hello(1, full_capabilities(), crate::RuntimePolicy::default()).await;
+    let register_handle = handle.clone();
+    let register = tokio::spawn(async move {
+        register_handle
+            .register_service(service(2, "cancelled", 81))
+            .await
+    });
+    assert_eq!(read_register(&mut peer).await, ServiceId(2));
+    register.abort();
+    // A late Ack for the abandoned transaction triggers cleanup with
+    // UnregisterService and can never enter desired state.
+    ack_service(&mut peer, ServiceId(2), 31002).await;
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
+            .await
+            .unwrap()
+            .unwrap(),
+        Message::UnregisterService(eggtunnel_proto::UnregisterService {
+            service_id: ServiceId(2)
+        })
+    ));
+    assert_eq!(counters.snapshot().registered_services, 1);
+    drop(peer);
+    assert!(task.await.unwrap().is_err());
 }

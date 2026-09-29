@@ -117,8 +117,9 @@ example, test, or fixture uses a rejected shape. Documented in
 - `cargo audit` — 0 vulnerabilities (1 pre-existing allowed
   informational warning). `cargo deny check licenses` — pass (new
   `serde_json` CLI-only dependency is MIT/Apache-2.0).
-- Hosted CI (`Rust` workflow) on the pushed M015 head — conclusion
-  recorded at push time.
+- Hosted CI (`Rust` workflow: `check`, 14-combo `feature-slices`,
+  `msrv`, `minimal-dependencies`) run `36576415963` on the pushed M015
+  head: **success** (all jobs passed).
 
 ## Compatibility notes and unresolved findings
 

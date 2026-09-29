@@ -1,5 +1,21 @@
 # Transport support
 
+## Protocol compatibility
+
+| Client | Server | Negotiated extensions | Behavior |
+|---|---|---|---|
+| 1.0 (published 0.2.0 line) | 1.0 | none | baseline: serial registration, generic `Error`, local-only drain timing |
+| 1.1 (this implementation) | 1.0 | none | baseline; serial registration fallback |
+| 1.0 | 1.1 | none | baseline |
+| 1.1 | 1.1 | intersection | correlated registration (cap 1) and/or drain deadline (cap 2) as negotiated |
+
+Wire major stays 1; minor 1 is advertised with capability intersection as
+the only extension gate (ADR-0002, `docs/PROTOCOL.md`). No configuration
+migration is required. The crate version remains independent of the wire
+version.
+
+## Transport support
+
 | Profile | Library selection | Network path | Server trust | mTLS | Status |
 |---|---|---|---|---|---|
 | TCP/TLS | Default `client` + `tls`, and optional `server` | TCP control connection plus one TCP/TLS data connection per external TCP connection | System roots or configured custom CA; SNI verified | Supported with the `mtls` feature and explicitly provisioned client CA | Implemented and locally qualified |

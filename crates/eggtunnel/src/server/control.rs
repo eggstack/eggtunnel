@@ -12,8 +12,9 @@ use std::{
 };
 
 use eggtunnel_proto::{
-    AuthOk, BoundedDiagnostic, ClientHello, ErrorMessage, Message, Ping, Pong, ProtocolVersion,
-    RegisterAck, RegisterService, ServerHello, ServiceId, SessionId, UnregisterService,
+    AuthOk, BoundedDiagnostic, CAPABILITY_DRAIN_DEADLINE, CAPABILITY_REGISTER_REJECT, Capabilities,
+    ClientHello, ErrorMessage, Message, Ping, Pong, ProtocolVersion, RegisterAck, RegisterReject,
+    RegisterService, ServerHello, ServiceId, SessionId, UnregisterService,
 };
 use tokio::{
     io::AsyncWrite,
@@ -91,11 +92,15 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
             ),
         ));
     }
+    // Capability intersection (ADR-0002): only capabilities both peers
+    // support are negotiated. A 1.0 peer advertises an empty list and gets
+    // baseline behavior; minor inequality alone never gates anything.
+    let negotiated = Capabilities::supported().intersect(&hello.capabilities);
     write_boxed(
         &mut stream,
         &Message::ServerHello(ServerHello {
             version: ProtocolVersion::CURRENT,
-            capabilities: eggtunnel_proto::Capabilities::default(),
+            capabilities: negotiated.clone(),
         }),
     )
     .await?;
@@ -151,6 +156,8 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
     let idle = tokio::time::sleep(idle_timeout);
     tokio::pin!(idle);
     let mut idle_expired = false;
+    let mut peer_drain_deadline: Option<u32> = None;
+    let negotiated_drain = negotiated.has(CAPABILITY_DRAIN_DEADLINE);
     loop {
         tokio::select! {
             _ = context.cancel.cancelled() => break,
@@ -169,6 +176,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                             &open_tx,
                             &bind_policy,
                             &counters,
+                            &negotiated,
                             &mut writer,
                             &mut services,
                             &mut names,
@@ -197,7 +205,10 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                         idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         write_message(&mut writer, &Message::Pong(Pong { nonce })).await?;
                     }
-                    Ok(Message::Drain(_)) => break,
+                    Ok(Message::Drain(drain)) => {
+                        peer_drain_deadline = Some(drain.deadline_ms);
+                        break;
+                    },
                     Ok(_) => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
                     Err(error) => return Err(error.into()),
                 }
@@ -210,6 +221,22 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
             Some(result) = children.join_next(), if !children.is_empty() => {
                 counters.record_join_result(&result);
             }
+        }
+    }
+    // Negotiated Drain deadline (capability 2, ADR-0002): when the peer
+    // asked us to drain, let owned service/relay tasks run up to
+    // min(peer, local shutdown ceiling) before forced cancellation, so
+    // in-flight relays can finish naturally. The peer value can only
+    // shorten the local maximum, never extend it. Without the capability
+    // (1.0 behavior) teardown stays immediate.
+    if negotiated_drain && let Some(peer_ms) = peer_drain_deadline {
+        let effective = std::time::Duration::from_millis(peer_ms as u64)
+            .min(counters.policy.timeouts.shutdown_grace);
+        if !effective.is_zero() {
+            let _ = tokio::time::timeout(effective, async {
+                while children.join_next().await.is_some() {}
+            })
+            .await;
         }
     }
     for entry in services.values() {
@@ -238,6 +265,7 @@ async fn register_service<W>(
     open_tx: &mpsc::Sender<Message>,
     bind_policy: &BindPolicy,
     counters: &Counters,
+    negotiated: &Capabilities,
     writer: &mut W,
     services: &mut HashMap<ServiceId, ServiceEntry>,
     names: &mut HashSet<String>,
@@ -256,7 +284,13 @@ where
             category = "service_admission",
             "Service registration rejected"
         );
-        return write_registration_error(writer, REGISTRATION_ERROR_ADMISSION).await;
+        return write_registration_response(
+            writer,
+            service_id,
+            REGISTRATION_ERROR_ADMISSION,
+            negotiated,
+        )
+        .await;
     }
     if services.contains_key(&service_id) || names.contains(register.name.as_str()) {
         counters
@@ -267,7 +301,13 @@ where
             service_id = service_id.0,
             "Service registration rejected"
         );
-        return write_registration_error(writer, REGISTRATION_ERROR_DUPLICATE).await;
+        return write_registration_response(
+            writer,
+            service_id,
+            REGISTRATION_ERROR_DUPLICATE,
+            negotiated,
+        )
+        .await;
     }
     // The target descriptor is client-owned. The server uses it only as bounded registration metadata.
     let bind_addr = match bind_to_socket(&register.requested_bind, bind_policy) {
@@ -281,7 +321,13 @@ where
                 service_id = service_id.0,
                 "Service bind rejected"
             );
-            return write_registration_error(writer, REGISTRATION_ERROR_BIND).await;
+            return write_registration_response(
+                writer,
+                service_id,
+                REGISTRATION_ERROR_BIND,
+                negotiated,
+            )
+            .await;
         }
     };
     let listener = match TcpListener::bind(bind_addr).await {
@@ -295,7 +341,13 @@ where
                 service_id = service_id.0,
                 "Service listener bind failed"
             );
-            return write_registration_error(writer, REGISTRATION_ERROR_LISTENER).await;
+            return write_registration_response(
+                writer,
+                service_id,
+                REGISTRATION_ERROR_LISTENER,
+                negotiated,
+            )
+            .await;
         }
     };
     let effective = socket_to_effective(listener.local_addr()?);
@@ -341,11 +393,29 @@ where
     Ok(())
 }
 
-async fn write_registration_error<W: AsyncWrite + Unpin>(
+/// Answer one failed `RegisterService` request. With capability 1
+/// negotiated the server sends the correlated `RegisterReject`
+/// (ADR-0002); otherwise it keeps the legacy generic `Error` with the
+/// same numeric code vocabulary.
+async fn write_registration_response<W: AsyncWrite + Unpin>(
     writer: &mut W,
+    service_id: ServiceId,
     code: u16,
+    negotiated: &Capabilities,
 ) -> Result<(), TunnelError> {
     let diagnostic = BoundedDiagnostic::new("service registration rejected")?;
-    write_message(writer, &Message::Error(ErrorMessage { code, diagnostic })).await?;
+    if negotiated.has(CAPABILITY_REGISTER_REJECT) {
+        write_message(
+            writer,
+            &Message::RegisterReject(RegisterReject {
+                service_id,
+                code,
+                diagnostic,
+            }),
+        )
+        .await?;
+    } else {
+        write_message(writer, &Message::Error(ErrorMessage { code, diagnostic })).await?;
+    }
     Ok(())
 }

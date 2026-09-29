@@ -208,6 +208,80 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         );
     }
 
+    /// Concurrent dynamic registrations over QUIC exercise the
+    /// negotiated correlated path (capability 1) on a non-TCP transport:
+    /// both transactions are in flight at once and correlate out of order.
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
+    #[tokio::test]
+    async fn quic_concurrent_dynamic_registrations_correlate() {
+        let (cert, key) = certificate();
+        let server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"quic-concurrent-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        let target = |host: String, port: u16| TcpTarget::new(host, port).unwrap();
+        let client = Client::start_quic_insecure_for_test(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token: SecretToken::new(b"quic-concurrent-secret".to_vec()).unwrap(),
+            services: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        // Wait for the authenticated Session before registering.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if client_handle.snapshot().connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let dynamic = |id: u64, name: &str| {
+            ClientService::new(
+                ServiceId(id),
+                ServiceName::new(name.to_owned()).unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                target(echo_addr.ip().to_string(), echo_addr.port()),
+            )
+        };
+        let first_handle = client_handle.clone();
+        let second_handle = client_handle.clone();
+        let (first, second) = tokio::join!(
+            first_handle.register_service(dynamic(11, "quic-dyn-one")),
+            second_handle.register_service(dynamic(12, "quic-dyn-two"))
+        );
+        let first_bind = first.unwrap();
+        let second_bind = second.unwrap();
+        assert_ne!(first_bind.port, 0);
+        assert_ne!(second_bind.port, 0);
+        assert_eq!(server.handle().snapshot().registered_services, 2);
+        assert_eq!(client_handle.snapshot().registered_services, 2);
+        client.shutdown().await;
+        server.shutdown().await;
+        echo_task.abort();
+    }
+
     #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_connection_replacement_creates_new_session_and_reregisters_services() {

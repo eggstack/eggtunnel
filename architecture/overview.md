@@ -5,7 +5,7 @@ NAT connects outward to a reachable server; the server exposes approved local
 services through server-owned listeners. Each external connection opens a
 separate TLS data connection back through the client to a client-owned target.
 
-Workspace `0.2.0` (crate line `0.2.0`, wire protocol v1.0 — wire and crate
+Workspace `0.2.0` (crate line `0.2.0`, wire protocol v1.1 with 1.0 fallback — wire and crate
 versions are independent). The current published crates.io line, tag, and
 GitHub release are `0.2.0` (M012 release qualification
 `plans/closure/reverse-session/012-status.md` + M013 publication event
@@ -40,10 +40,10 @@ one postcard payload), and `encode_frame` / `decode_frame` (exactly-one-frame,
 concatenated-frame friendly). I/O adaptation lives one layer up in
 `wire_io.rs:7-58`.
 
-- Wire v1.0 (crate line 0.2.0); major mismatch rejected (`crates/eggtunnel-proto/src/lib.rs:483-485`), minor informational.
-- 14 stable message IDs 1–14: `ClientHello`, `ServerHello`, `Auth`, `AuthOk`,
+- Wire v1.1 (crate line 0.2.0; 1.0 peers interoperate at baseline); major mismatch rejected (`crates/eggtunnel-proto/src/lib.rs:537`), minor informational, extensions by capability intersection only (ADR-0002).
+- 15 stable message IDs 1–15: `ClientHello`, `ServerHello`, `Auth`, `AuthOk`,
   `RegisterService`, `RegisterAck`, `UnregisterService`, `Open`, `OpenReject`,
-  `Ping`, `Pong`, `Drain`, `Error`, `DataHello`.
+  `Ping`, `Pong`, `Drain`, `Error`, `DataHello`, `RegisterReject` (ID 15, capability-1 only).
 - Bounded types: 1 MiB frames, 4096 B tokens, 128 B service names
   (`[A-Za-z0-9-_.]`, byte-checked), 256 B diagnostics, 32 capabilities,
   253 B target hosts. Deserialization revalidates via `serde(try_from)` /

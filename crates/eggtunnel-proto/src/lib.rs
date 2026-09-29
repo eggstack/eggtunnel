@@ -19,7 +19,17 @@ pub const MAX_CAPABILITIES: usize = 32;
 pub const MAX_TARGET_HOST_BYTES: usize = 253;
 pub const MAX_AUTH_TOKEN_BYTES: usize = 4096;
 pub const PROTOCOL_MAJOR: u16 = 1;
-pub const PROTOCOL_MINOR: u16 = 0;
+pub const PROTOCOL_MINOR: u16 = 1;
+
+/// Capability 1 (ADR-0002): correlated registration rejection. When
+/// negotiated, registration failures arrive as `RegisterReject` (message
+/// 15) instead of the generic `Error`, so multiple dynamic registrations
+/// may be safely in flight.
+pub const CAPABILITY_REGISTER_REJECT: u16 = 1;
+/// Capability 2 (ADR-0002): drain deadline semantics. When negotiated,
+/// `Drain.deadline_ms` is a relative grace duration honoured as
+/// `min(peer, local ceiling)`; otherwise receivers use local-only timing.
+pub const CAPABILITY_DRAIN_DEADLINE: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolVersion {
@@ -190,6 +200,31 @@ impl Capabilities {
         Ok(Self(ids))
     }
 
+    /// The full capability set this implementation supports, emitted in
+    /// deterministic (sorted, unique) order.
+    pub fn supported() -> Self {
+        Self(vec![CAPABILITY_REGISTER_REJECT, CAPABILITY_DRAIN_DEADLINE])
+    }
+
+    /// Bilateral intersection: only capabilities present in both lists are
+    /// negotiated. Unknown IDs are ignored; duplicates collapse. Emission
+    /// order is deterministic (sorted).
+    pub fn intersect(&self, other: &Self) -> Self {
+        let mut ids: Vec<u16> = self
+            .0
+            .iter()
+            .filter(|id| other.0.contains(id))
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Self(ids)
+    }
+
+    pub fn has(&self, id: u16) -> bool {
+        self.0.contains(&id)
+    }
+
     pub fn as_slice(&self) -> &[u16] {
         &self.0
     }
@@ -243,6 +278,7 @@ pub enum MessageType {
     Drain = 12,
     Error = 13,
     DataHello = 14,
+    RegisterReject = 15,
 }
 
 impl TryFrom<u16> for MessageType {
@@ -263,6 +299,7 @@ impl TryFrom<u16> for MessageType {
             12 => Self::Drain,
             13 => Self::Error,
             14 => Self::DataHello,
+            15 => Self::RegisterReject,
             _ => return Err(ProtocolError::UnknownMessage(value)),
         })
     }
@@ -361,6 +398,17 @@ pub struct ErrorMessage {
     pub code: u16,
     pub diagnostic: BoundedDiagnostic,
 }
+/// Correlated registration rejection (capability 1, ADR-0002). Unlike the
+/// generic `Error`, this carries the `ServiceId`, so the client can match
+/// the failure to one of several in-flight registration transactions.
+/// The numeric `code` reuses the registration-category vocabulary also
+/// used with generic `Error` responses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RegisterReject {
+    pub service_id: ServiceId,
+    pub code: u16,
+    pub diagnostic: BoundedDiagnostic,
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DataHello {
     pub session_id: SessionId,
@@ -384,6 +432,7 @@ pub enum Message {
     Drain(Drain),
     Error(ErrorMessage),
     DataHello(DataHello),
+    RegisterReject(RegisterReject),
 }
 
 impl Message {
@@ -403,6 +452,7 @@ impl Message {
             Self::Drain(_) => MessageType::Drain,
             Self::Error(_) => MessageType::Error,
             Self::DataHello(_) => MessageType::DataHello,
+            Self::RegisterReject(_) => MessageType::RegisterReject,
         }
     }
     fn encode_payload(&self) -> Result<Vec<u8>, ProtocolError> {
@@ -426,6 +476,7 @@ impl Message {
             Self::Drain(v) => enc!(v),
             Self::Error(v) => enc!(v),
             Self::DataHello(v) => enc!(v),
+            Self::RegisterReject(v) => enc!(v),
         })
     }
 }
@@ -520,6 +571,7 @@ pub fn decode_frame(input: &[u8]) -> Result<(Message, usize), ProtocolError> {
         MessageType::Drain => dec!(Drain, Drain),
         MessageType::Error => dec!(ErrorMessage, Error),
         MessageType::DataHello => dec!(DataHello, DataHello),
+        MessageType::RegisterReject => dec!(RegisterReject, RegisterReject),
     };
     Ok((message, total))
 }
@@ -580,6 +632,11 @@ mod tests {
                 service_id: ServiceId(1),
                 connection_id: id,
             }),
+            Message::RegisterReject(RegisterReject {
+                service_id: ServiceId(2),
+                code: 1,
+                diagnostic: BoundedDiagnostic::new("duplicate").unwrap(),
+            }),
         ]
     }
 
@@ -605,14 +662,15 @@ mod tests {
 
     #[test]
     fn documented_wire_version_and_message_ids_are_pinned() {
-        // Guard matching docs/PROTOCOL.md: wire version 1.0 and the stable
-        // numeric message IDs. Any change here is a compatibility event and
-        // must update the protocol document alongside the constants.
+        // Guard matching docs/PROTOCOL.md: wire version 1.1 (major 1 keeps
+        // the 1.0 incompatibility boundary) and the stable numeric message
+        // IDs. Any change here is a compatibility event and must update the
+        // protocol document alongside the constants.
         assert_eq!(PROTOCOL_MAJOR, 1);
-        assert_eq!(PROTOCOL_MINOR, 0);
+        assert_eq!(PROTOCOL_MINOR, 1);
         assert_eq!(
             ProtocolVersion::CURRENT,
-            ProtocolVersion { major: 1, minor: 0 }
+            ProtocolVersion { major: 1, minor: 1 }
         );
         let ids = [
             (MessageType::ClientHello, 1u16),
@@ -629,13 +687,87 @@ mod tests {
             (MessageType::Drain, 12),
             (MessageType::Error, 13),
             (MessageType::DataHello, 14),
+            (MessageType::RegisterReject, 15),
         ];
         for (message_type, expected) in ids {
             assert_eq!(message_type as u16, expected);
             assert_eq!(MessageType::try_from(expected).unwrap(), message_type);
         }
-        assert!(MessageType::try_from(15).is_err());
+        assert!(MessageType::try_from(16).is_err());
         assert!(MessageType::try_from(0).is_err());
+    }
+
+    #[test]
+    fn capability_registry_is_pinned_and_intersection_is_a_set() {
+        // ADR-0002 capability IDs. Never silently reassign.
+        assert_eq!(CAPABILITY_REGISTER_REJECT, 1);
+        assert_eq!(CAPABILITY_DRAIN_DEADLINE, 2);
+        let supported = Capabilities::supported();
+        assert_eq!(
+            supported.as_slice(),
+            &[CAPABILITY_REGISTER_REJECT, CAPABILITY_DRAIN_DEADLINE]
+        );
+        // Intersection only: extras on either side never negotiate.
+        let client = Capabilities::new(vec![CAPABILITY_REGISTER_REJECT, 9]).unwrap();
+        let server = Capabilities::new(vec![
+            CAPABILITY_DRAIN_DEADLINE,
+            CAPABILITY_REGISTER_REJECT,
+            CAPABILITY_REGISTER_REJECT,
+        ])
+        .unwrap();
+        let negotiated = client.intersect(&server);
+        assert_eq!(negotiated.as_slice(), &[CAPABILITY_REGISTER_REJECT]);
+        assert!(negotiated.has(CAPABILITY_REGISTER_REJECT));
+        assert!(!negotiated.has(CAPABILITY_DRAIN_DEADLINE));
+        assert!(!negotiated.has(9));
+        // Empty capabilities (a 1.0 peer) negotiate nothing.
+        assert!(
+            Capabilities::default()
+                .intersect(&supported)
+                .as_slice()
+                .is_empty()
+        );
+        assert!(
+            supported
+                .intersect(&Capabilities::default())
+                .as_slice()
+                .is_empty()
+        );
+        // Emission is deterministic regardless of input order.
+        let shuffled =
+            Capabilities::new(vec![CAPABILITY_DRAIN_DEADLINE, CAPABILITY_REGISTER_REJECT]).unwrap();
+        assert_eq!(
+            shuffled.intersect(&shuffled).as_slice(),
+            supported.as_slice()
+        );
+    }
+
+    #[test]
+    fn register_reject_round_trips_and_oversized_diagnostics_fail_closed() {
+        let message = Message::RegisterReject(RegisterReject {
+            service_id: ServiceId(7),
+            code: 5,
+            diagnostic: BoundedDiagnostic::new("saturated").unwrap(),
+        });
+        assert_eq!(message.kind(), MessageType::RegisterReject);
+        let encoded = encode_frame(&message).unwrap();
+        let (decoded, used) = decode_frame(&encoded).unwrap();
+        assert_eq!(decoded, message);
+        assert_eq!(used, encoded.len());
+        // A 1.0 frame fixture (minor 0, empty capabilities) still decodes.
+        let legacy = Message::Ping(Ping { nonce: 3 });
+        let mut frame = encode_frame(&legacy).unwrap();
+        frame[6] = 0;
+        frame[7] = 0;
+        assert_eq!(decode_frame(&frame).unwrap().0, legacy);
+        // Oversized diagnostic text cannot be constructed, and a hostile
+        // payload carrying one fails decode through the revalidating
+        // constructor.
+        assert!(BoundedDiagnostic::new("x".repeat(MAX_DIAGNOSTIC_BYTES + 1)).is_err());
+        let hostile =
+            postcard::to_allocvec(&(ServiceId(1), 1u16, "x".repeat(MAX_DIAGNOSTIC_BYTES + 1)))
+                .unwrap();
+        assert!(postcard::from_bytes::<RegisterReject>(&hostile).is_err());
     }
 
     #[test]
@@ -662,7 +794,7 @@ mod tests {
         bad[5] = 2;
         assert_eq!(
             decode_frame(&bad),
-            Err(ProtocolError::UnsupportedVersion(2, 0))
+            Err(ProtocolError::UnsupportedVersion(2, PROTOCOL_MINOR))
         );
         let mut bad = frame.clone();
         bad[8] = 0xff;

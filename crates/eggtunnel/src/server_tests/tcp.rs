@@ -1644,6 +1644,269 @@
         .unwrap();
     }
 
+
+    /// Establish one raw control session speaking the given (minor,
+    /// capabilities) as the client. Returns the control stream after
+    /// `AuthOk`; the caller owns further frames.
+    async fn raw_control_session(
+        addr: SocketAddr,
+        cert: &str,
+        token: &[u8],
+        minor: u16,
+        capabilities: Capabilities,
+    ) -> (BoxStream, SessionId) {
+        use eggress_transport_tls::{TlsClientConfigBuilder, tls_connect};
+        use eggtunnel_proto::{Auth, AuthOk, ServerHello};
+
+        let tls_config = TlsClientConfigBuilder::new()
+            .with_custom_ca_pem(cert.as_bytes())
+            .unwrap()
+            .build()
+            .unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut control = tls_connect(Box::new(tcp), tls_config, "localhost")
+            .await
+            .unwrap();
+        write_boxed(
+            &mut control,
+            &Message::ClientHello(ClientHello {
+                version: ProtocolVersion {
+                    major: 1,
+                    minor,
+                },
+                capabilities: capabilities.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let hello = read_boxed(&mut control).await.unwrap();
+        let Message::ServerHello(ServerHello {
+            version,
+            capabilities: negotiated,
+        }) = hello
+        else {
+            panic!("expected ServerHello, got {hello:?}");
+        };
+        // Same-major peers interoperate regardless of minor; the 1.1
+        // server always advertises its current minor.
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, eggtunnel_proto::PROTOCOL_MINOR);
+        assert_eq!(
+            negotiated,
+            Capabilities::supported().intersect(&capabilities)
+        );
+        write_boxed(
+            &mut control,
+            &Message::Auth(Auth::new(token.to_vec()).unwrap()),
+        )
+        .await
+        .unwrap();
+        let Message::AuthOk(AuthOk { session_id }) = read_boxed(&mut control).await.unwrap()
+        else {
+            panic!("expected AuthOk");
+        };
+        (control, session_id)
+    }
+
+    fn register_request(id: u64, name: &str) -> Message {
+        use eggtunnel_proto::RegisterService;
+        Message::RegisterService(RegisterService {
+            service_id: ServiceId(id),
+            name: ServiceName::new(name.to_owned()).unwrap(),
+            requested_bind: RequestedBind::Loopback { port: 0 },
+            target: TcpTarget::new("127.0.0.1", 80).unwrap(),
+        })
+    }
+
+    async fn test_server() -> (crate::Server, crate::ServerHandle, String, SecretToken) {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"mixed-version-secret".to_vec()).unwrap();
+        let server = Server::bind(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let handle = server.handle();
+        (server, handle, cert, token)
+    }
+
+    #[tokio::test]
+    async fn v10_client_receives_generic_error_and_never_register_reject() {
+        use eggtunnel_proto::RegisterAck;
+        let (server, _handle, cert, token) = test_server().await;
+        let addr = server.local_addr();
+        // 1.0 handshake: minor 0, empty capabilities.
+        let (mut control, _session) =
+            raw_control_session(addr, &cert, token.expose(), 0, Capabilities::default()).await;
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::RegisterAck(RegisterAck { .. })
+        ));
+        // Duplicate registration fails with the legacy generic Error.
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::Error(error) if error.code == 1
+        ));
+        // No correlated RegisterReject follows a 1.0 handshake.
+        let nothing = tokio::time::timeout(Duration::from_millis(200), read_boxed(&mut control)).await;
+        assert!(nothing.is_err(), "unexpected extra frame after Error");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn capability1_client_receives_correlated_register_reject() {
+        use eggtunnel_proto::{CAPABILITY_REGISTER_REJECT, RegisterReject};
+        let (server, _handle, cert, token) = test_server().await;
+        let addr = server.local_addr();
+        let caps = Capabilities::new(vec![CAPABILITY_REGISTER_REJECT]).unwrap();
+        let (mut control, _session) =
+            raw_control_session(addr, &cert, token.expose(), 1, caps).await;
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::RegisterAck(_)
+        ));
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        let Message::RegisterReject(RegisterReject {
+            service_id,
+            code,
+            ..
+        }) = read_boxed(&mut control).await.unwrap()
+        else {
+            panic!("expected RegisterReject");
+        };
+        assert_eq!(service_id, ServiceId(1));
+        assert_eq!(code, 1);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn capability2_only_client_keeps_generic_error() {
+        use eggtunnel_proto::CAPABILITY_DRAIN_DEADLINE;
+        let (server, _handle, cert, token) = test_server().await;
+        let addr = server.local_addr();
+        let caps = Capabilities::new(vec![CAPABILITY_DRAIN_DEADLINE]).unwrap();
+        let (mut control, _session) =
+            raw_control_session(addr, &cert, token.expose(), 1, caps).await;
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::RegisterAck(_)
+        ));
+        // Capability 1 absent: duplicate fails with generic Error.
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::Error(error) if error.code == 1
+        ));
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn negotiated_drain_deadline_waits_before_forced_teardown() {
+        use eggtunnel_proto::{CAPABILITY_DRAIN_DEADLINE, CAPABILITY_REGISTER_REJECT, Drain};
+        use std::net::{Ipv6Addr, SocketAddrV6};
+
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"drain-deadline-secret".to_vec()).unwrap();
+        let mut policy = crate::RuntimePolicy::default();
+        policy.timeouts.shutdown_grace = Duration::from_millis(500);
+        let server = ServerBuilder::new(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .runtime_policy(policy)
+        .bind()
+        .await
+        .unwrap();
+        let addr = server.local_addr();
+        let handle = server.handle();
+        let caps = Capabilities::new(vec![
+            CAPABILITY_REGISTER_REJECT,
+            CAPABILITY_DRAIN_DEADLINE,
+        ])
+        .unwrap();
+        let (mut control, _session) =
+            raw_control_session(addr, &cert, token.expose(), 1, caps).await;
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        let Message::RegisterAck(ack) = read_boxed(&mut control).await.unwrap() else {
+            panic!("expected RegisterAck");
+        };
+        // One external connection with no client data side: the relay task
+        // pends until the pending-connection lifetime (30 s default).
+        let bind = SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::from(ack.effective_bind.address),
+            ack.effective_bind.port,
+            0,
+            0,
+        ));
+        let _external = TcpStream::connect(bind).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().active_connections == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // A 200 ms peer deadline must delay forced teardown: the 1.0
+        // immediate-abort path would converge in ~0 ms.
+        let start = std::time::Instant::now();
+        write_boxed(
+            &mut control,
+            &Message::Drain(Drain { deadline_ms: 200 }),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if handle.snapshot().active_connections == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "negotiated drain wait skipped (elapsed {elapsed:?})"
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_capabilities_are_ignored_by_negotiation() {
+        let (server, _handle, cert, token) = test_server().await;
+        let addr = server.local_addr();
+        let caps = Capabilities::new(vec![99]).unwrap();
+        let (mut control, _session) =
+            raw_control_session(addr, &cert, token.expose(), 1, caps).await;
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::RegisterAck(_)
+        ));
+        write_boxed(&mut control, &register_request(1, "one")).await.unwrap();
+        assert!(matches!(
+            read_boxed(&mut control).await.unwrap(),
+            Message::Error(_)
+        ));
+        server.shutdown().await;
+    }
+
     #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     pub(super) async fn write_quic_data_hello(
         stream: &mut eggress_core::BoxStream,

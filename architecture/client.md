@@ -221,96 +221,122 @@ unknown service names, otherwise returns a `duplex` echo pair.
 
 ### 3.2 Control sequence (annotated)
 
-Normal path through `run_session` (`client/reconnect.rs:271-581`):
+Normal path through `run_session` (`crates/eggtunnel/src/client.rs:700-1112`):
 
-1. `ClientHello{ version: CURRENT, capabilities: default }` —
-   `handshake_write` (`client/reconnect.rs:277-285`). Each handshake
+1. `ClientHello{ version: CURRENT, capabilities: supported }` —
+   `handshake_write` (`crates/eggtunnel/src/client.rs:709-717`). The client
+   always advertises the full supported set (`[1, 2]`). Each handshake
    read/write is wrapped in `policy.timeouts.handshake` via
-   `handshake_read`/`handshake_write` (`client/reconnect.rs:279-298`);
+   `handshake_read`/`handshake_write` (`crates/eggtunnel/src/client.rs:1158-1177`);
    elapsed maps to `TunnelError::Timeout`.
-2. `ServerHello{ version }` — major must equal
-   `ProtocolVersion::CURRENT.major`, else `Protocol(UnexpectedMessage)`
-   (`client/reconnect.rs:283-291`).
+2. `ServerHello{ version, capabilities }` — major must equal
+   `ProtocolVersion::CURRENT.major`, else `Protocol(UnexpectedMessage)`;
+   the negotiated set is the strict intersection
+   (`negotiate_capabilities`, `crates/eggtunnel/src/client.rs:719-740`).
+   Server-claimed extras outside the advertisement are ignored
+   (extension behavior stays off; unnegotiated extension messages fail
+   closed below).
 3. `Auth::new(token.expose().to_vec())?` → `Message::Auth`
-   (`client/reconnect.rs:290-296`). Token bytes copied out of the redacted
+   (`crates/eggtunnel/src/client.rs:741-747`). Token bytes copied out of the redacted
    `SecretToken` only for this frame.
 4. `AuthOk{ session_id }` — anything else is `Authentication`
-   (`client/reconnect.rs:295-298`). Then `counters.begin_session()` allocates the
-   Session generation (`client/reconnect.rs:177`); heartbeat counters reset per
-   generation (`common.rs:404-414`).
+   (`crates/eggtunnel/src/client.rs:749`). Then `counters.begin_session()` allocates the
+   Session generation (`crates/eggtunnel/src/client.rs:750`); heartbeat counters reset per
+   generation (`common.rs:404-414`). The registration wire mode is set from
+   the negotiated set (`set_mode` at `crates/eggtunnel/src/client.rs:755-762`):
+   `CorrelatedBounded` (ceiling = `client_command_queue`) with capability 1,
+   `LegacySerial` otherwise.
 5. Per desired service: `RegisterService{ service_id, name, requested_bind,
    target }` → expect `RegisterAck{ service_id }` with matching id;
    push `(session_id, service_id, effective_bind)` to `counters.binds`
-   (`client/reconnect.rs:302-328`). `Message::Error(_)` or any other message →
-   `Authorization`. Note: the client sends its `target` on the wire but
+   (`crates/eggtunnel/src/client.rs:758-769`). `Message::Error(_)` or
+   `Message::RegisterReject(_)` or any other message → `Authorization`
+   (initial registration stays sequential and fail-closed in both modes).
+   Note: the client sends its `target` on the wire but
    the server must ignore it (target-confusion boundary).
 6. Mark connected: `connected=1`, `services=len`,
    `sessions=1`, reset `reconnect_delay` to `policy.timeouts.reconnect_initial`,
    install `CounterGuard(sessions)` which zeroes `sessions` on exit
-   (`client/reconnect.rs:101-113`, `client/reconnect.rs:174-203`).
-7. Split control stream (`client/reconnect.rs:87`), spawn data tasks into
-   `JoinSet opens` (`client/reconnect.rs:133`), then `select!` loop
-   (`client/reconnect.rs:143-321`) with a one-outstanding-probe heartbeat
-   (`client/heartbeat.rs:5-41`), a dynamic-registration deadline, and:
+   (`crates/eggtunnel/src/client.rs:771-784`).
+7. Split control stream (`crates/eggtunnel/src/client.rs:792`), spawn data tasks into
+   `JoinSet opens` (`crates/eggtunnel/src/client.rs:793`), then `select!` loop
+   (`crates/eggtunnel/src/client.rs:802-981`) with a one-outstanding-probe heartbeat
+   (`client/heartbeat.rs:5-41`), per-transaction ack deadlines, and:
     - `cancel` → send `Drain{ deadline_ms: policy.timeouts.relay_drain }` with 250 ms
-      cap, then break (`client/reconnect.rs:147-152`).
+      cap, then break (`crates/eggtunnel/src/client.rs:803-808`).
     - heartbeat tick (`policy.timeouts.heartbeat_interval`, default 20 s) →
       if `HeartbeatState::has_outstanding()`, record a missed heartbeat and
       send no new probe; else `next_nonce()` + `try_send(Ping{ nonce })`
-      and `mark_sent` on success (`client/reconnect.rs:324-335`,
+      and `mark_sent` on success (`crates/eggtunnel/src/client.rs:810-819`,
       `client/heartbeat.rs:18-29`). Full queue records a missed heartbeat.
     - `read_message` → `Open` / `Ping`→`Pong` / `Pong` (only the matching
       outstanding nonce updates RTT via `counters.record_heartbeat_pong`;
       stale/mismatched nonces are ignored) / dynamic `RegisterAck` /
-      `Error` (dynamic registration only — see below) / `Drain` (cancel
-      session, break) / anything else →
+      `Error` (legacy-correlated per mode — see below) / `RegisterReject`
+      (capability-1 only, else `Protocol(UnexpectedMessage)`) / `Drain`
+      (capture peer deadline, cancel session, break) / anything else →
       `Protocol(UnexpectedMessage)` which tears down the session
-      (`client/reconnect.rs:159-242`).
+      (`crates/eggtunnel/src/client.rs:840-918`).
     - `out_rx.recv` (the `policy.limits.control_queue` queue, default 128) →
-      `write_message` (`client/reconnect.rs:107`). `?` propagates write errors → session teardown.
+      `write_message` (`crates/eggtunnel/src/client.rs:920`). `?` propagates write errors → session teardown.
     - `commands.recv` → `Register` / `Unregister` handling
-      (`client/reconnect.rs:132-184`; see §2.3). `Register` checks generation,
-      `desired.len() + pending` vs `policy.limits.services_per_session`,
-      reply liveness, and `ServiceState::begin` uniqueness/single-flight
-      gates before writing `RegisterService` and arming a
-      `policy.timeouts.handshake` ack deadline (`client/reconnect.rs:87-125`).
+      (`crates/eggtunnel/src/client.rs:988-1074`). `Register` checks generation,
+      `desired.len() + unacknowledged` vs `policy.limits.services_per_session`,
+      reply liveness, and `ServiceState::begin` uniqueness/mode-ceiling
+      gates before writing `RegisterService` and arming a per-transaction
+      `policy.timeouts.handshake` ack deadline (`crates/eggtunnel/src/client.rs:990-1057`).
+      A write timeout fails just that transaction in correlated mode
+      (`abandon`, `crates/eggtunnel/src/client.rs:1038`) but ends the Session
+      in legacy mode, preserving 1.0 behavior.
     - `opens.join_next()` → `record_join_result` (panic accounting)
-      (`client/reconnect.rs:119-121`).
-8. Teardown: `timeout(policy.timeouts.shutdown_grace=1s)` joining open tasks, then
-   `abort_all` + drain (`endpoint.rs:42-47`), `connected=0`
-   (`client/reconnect.rs:167-169`), fail any pending dynamic registration
-   (`Disconnected`, or `Cancelled` on local cancel; `Timeout` on ack-deadline
-   expiry, `endpoint.rs:80-92`), `clear_active`, return `Ok(())`
-   (reconnectable) or `Err` (categorized).
+      (`crates/eggtunnel/src/client.rs:1076-1078`).
+8. Teardown: join open tasks up to the effective drain wait — `min(peer
+   deadline, shutdown_grace)` when capability 2 was negotiated and the
+   server asked us to drain, else exactly `shutdown_grace` (1.0 timing,
+   `crates/eggtunnel/src/client.rs:1083-1095`) — then `abort_all` + drain,
+   `connected=0`, fail pending transactions
+   (`Disconnected`, or `Cancelled` on local cancel; per-transaction
+   `Timeout` on ack-deadline expiry via `expire_overdue`,
+   `crates/eggtunnel/src/client/service_state.rs:125-160`), `clear_active`,
+   return `Ok(())` (reconnectable) or `Err` (categorized).
 
-`Open` dispatch detail (`client/reconnect.rs:357-391`):
+`Open` dispatch detail (`crates/eggtunnel/src/client.rs:840-856`):
 
 - Unknown `service_id` (lookup in `service_state.active()`) → `rejected++`,
   `record_termination(Authorization)`,
   `try_send(OpenReject{ connection_id, code: 1 })`, continue
-  (`client/reconnect.rs:164-170`).
+  (`crates/eggtunnel/src/client.rs:841-847`).
 - `semaphore.try_acquire_owned()` fails (`policy.limits.client_open_tasks`
   tasks busy) →
   `rejected++`, `record_termination(ResourceExhausted)`,
-  `try_send(OpenReject{ code: 2 })`, continue (`client/reconnect.rs:174-181`).
+  `try_send(OpenReject{ code: 2 })`, continue (`crates/eggtunnel/src/client.rs:848-855`).
 - Else spawn `handle_open` (`client/open.rs:12-89`) with child cancel token, cloned `out` sender,
   `OpenTaskGuard` (bumps `open_tasks` + high-water, decrements on drop),
-  and `OpenContext` (`client/reconnect.rs:187-205`).
+  and `OpenContext` (`crates/eggtunnel/src/client.rs:858-875`).
 
-Dynamic ack detail (`client/reconnect.rs:410-439`):
+Dynamic ack detail (`crates/eggtunnel/src/client.rs:883-912`):
 
-- `RegisterAck`: clear the ack deadline, then `service_state.take_ack(id,
-  generation)` 4-way disposition (`service_state.rs:96-115`):
-  `Unexpected` (no/ mismatched pending) → `Protocol(UnexpectedMessage)`
+- `RegisterAck`: `service_state.take_ack(id,
+  generation)` 4-way disposition (`service_state.rs:238-256`):
+  `Unexpected` (no/mismatched pending) → `Protocol(UnexpectedMessage)`
   session teardown; `Stale` (wrong generation) → reply `Disconnected`;
   `Abandoned` (unregistered/cancelled tombstone) → write
   `UnregisterService` and continue without mutating desired state;
   `Commit` → push binds, `commit()` to active+desired, update
   `services`/high-water, reply `Ok(effective_bind)`.
-- `Error`: clear the deadline; if it answers the one pending dynamic
-  registration, map via `registration_error` (`client/reconnect.rs:275-281`) and
-  reply; else → `Authorization` session teardown. Wire `Error` carries no
-  `ServiceId`, hence the single-flight invariant.
+- `Error`: if it answers the legacy pending registration, map via
+  `registration_error` (`crates/eggtunnel/src/client.rs:903-911`,
+  shared code vocabulary at `:1150-1156`) and reply; else →
+  `Authorization` session teardown. Wire `Error` carries no
+  `ServiceId`, hence the legacy single-flight invariant.
+- `RegisterReject`: without negotiated capability 1 → fail closed
+  (`Protocol(UnexpectedMessage)`). With it, `take_reject(id,
+  generation)` (`service_state.rs:257-268`): `Reject` → map the shared
+  code vocabulary and reply; `Stale` → reply `Disconnected`; `Unknown`
+  (no transaction for this Service in this generation) → fail closed.
+  Ack deadlines are per-transaction (`next_deadline` /
+  `expire_overdue`); a correlated timeout fails only its caller while
+  legacy timeout ends the Session.
 
 `OpenReject` codes are client-originated advisory signals (1 = refused /
 unknown / target failure; 2 = overloaded). The client also *receives* no

@@ -30,7 +30,7 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014/M015 closed; M016 ready | M012 release qualification, M013 publication, and M014 consolidation are closed; M015/M016 are the current executable milestones. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014/M015/M016 closed | M012 release qualification, M013 publication, and M014 consolidation are closed; M015/M016 are the current executable milestones. |
 
 ## Active and ready implementation plans
 
@@ -73,7 +73,7 @@ the hosted 4-target release, crates.io publication (proto then library),
 downstream registry-consumption, advisory/license review, and the supported
 platform claims. No high/medium correctness or security findings remain open.
 Post-0.1 M007-M012 are strictly closed and M013 records the completed 0.2.0
-publication event, and M014 records the post-0.2 consolidation and M015 the CLI operational surface. The current executable line is M016. The historical
+publication event, and M014 records the post-0.2 consolidation, M015 the CLI operational surface, and M016 the 1.1 capability evolution. No executable milestone is pending. The historical
 C001 corrective roadmap is archived; its closure evidence remains authoritative.
 
 ### M010 client runtime modularization (closed)

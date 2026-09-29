@@ -184,7 +184,7 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
                              │no
               version.major == CURRENT.major? ─no──► Protocol/UnsupportedVersion
                              │yes
-                  ServerHello(CURRENT, caps)
+                  ServerHello(CURRENT, intersected caps)
                              │
                   read Auth (HANDSHAKE_TIMEOUT)
                              │
@@ -211,7 +211,7 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
 ```
 
 Key code: first-frame dispatch `server/accept.rs:248-265`;
-`serve_control` auth gate + version + `ServerHello` `server/control.rs:83-101`;
+`serve_control` auth gate + version + capability intersection + `ServerHello` `server/control.rs:83-101`;
 `Auth` read + `verify_token` failure path `server/control.rs:103-125`;
 session allocation + `policy.limits.sessions` check `server/control.rs:119-144`;
 `AuthOk` + split + policy-sized control channel `server/control.rs:143-146`;
@@ -228,7 +228,7 @@ count so `pending` never sticks after session teardown.
 ```text
 client                                   server
   │── ClientHello{version,caps} ──────────►│  serve_control: version check
-  │◄─ ServerHello{CURRENT,default caps} ───│  server/control.rs:94-101
+  │◄─ ServerHello{CURRENT,intersected caps} │  server/control.rs:94-101
   │── Auth{token} ──────────────────────►│  verify_token (constant-time)
   │◄─ AuthOk{session_id} ─────────────────│  server/control.rs:143
   │── RegisterService{id,name,bind,target}►│  policy → bind → listener
@@ -238,7 +238,7 @@ client                                   server
   │── Ping{nonce} ──────────────────────►│
   │◄─ Pong{nonce} ────────────────────────│  server/control.rs:196-199
   │◄─ Drain{deadline_ms} ─────────────────│  shutdown only, §5
-  │── Drain ────────────────────────────►│  client-initiated close → break
+  │── Drain{deadline_ms} ───────────────►│  capture deadline → break → bounded drain wait (cap 2)
   │── UnregisterService{id} ────────────►│  cancel + GC, §4
   │── Error{code,diagnostic} ────────────│  server→client only (auth/reg)
 ```
@@ -247,21 +247,27 @@ client                                   server
   (`server/control.rs:86-93`). Minor is informational.
 - Auth failure: `Error{code:4, "authentication failed"}` then `Authentication`
   (`server/control.rs:110-116`). No session is created.
-- Registration errors use `write_registration_error` (`server/control.rs:344-352`,
+- Registration errors use `write_registration_response` (`server/control.rs:378-399`,
   always `"service registration rejected"` + numeric code):
   `1` duplicate id/name, `2` policy denial, `3` bind failure,
-  `5` per-session service ceiling (`server/control.rs:164-200`; ceiling check at
-  `server/control.rs:253-259`). Success is
-  `RegisterAck{service_id, effective_bind}` (`server/control.rs:191`).
+  `5` per-session service ceiling (`server/control.rs:235-343`; ceiling check at
+  `server/control.rs:250-259`). With capability 1 negotiated the response is
+  the correlated `RegisterReject{service_id, code}`; otherwise the legacy
+  generic `Error` with the same codes. Success is
+  `RegisterAck{service_id, effective_bind}` (`server/control.rs:333-339`).
 - `OpenReject` flows **client→server only**. The server never emits it; it
   consumes it to free the pending slot (`server/control.rs:189-195`). Client codes
   (`1` target refused, `2` open-task exhausted) are opaque to the server.
 - `Drain` flows both ways but with different meaning: server→client carries
   `shutdown_grace` (default 1 s, `common.rs:296`) during shutdown
-  (`server/accept.rs:137-142`, `693-698`); client→server `Drain` breaks the control
-  loop immediately (`server/control.rs:200`). Outbound `Open`/`Drain` share the same
+  (`server/accept.rs:77-95`); client→server `Drain` breaks the control
+  loop (`server/control.rs:200-203`, capturing the peer deadline) and then,
+  with capability 2 negotiated, lets owned tasks drain up to
+  `min(peer deadline, shutdown_grace)` before forced cancellation
+  (`server/control.rs:226-248`); without it teardown stays immediate (1.0).
+  Outbound `Open`/`Drain` share the same
   `open_rx` channel; a `Drain` write breaks after flushing
-  (`server/control.rs:205-209`).
+  (`server/control.rs:205-210`).
 
 ### 3.3 Effective-bind selection via `BindPolicy`
 
@@ -271,7 +277,7 @@ client                                   server
 `max_services_per_session` (default 64, validated in
 `common.rs:100-111`).
 
-Selection (`serve_control`, `server/control.rs:176-195`):
+Selection (`register_service`, `server/control.rs:250-307`):
 
 1. `bind_to_socket(&requested_bind, &policy)` (`common.rs:491-512`):
    `Loopback{port}` → `[::1]:port` if `permits_port`; `Ip{address,port}` →
@@ -447,7 +453,7 @@ delta (`server/session.rs:112-126`) — a deliberate single-source-of-truth choi
 
 ### 5.4 Shutdown with `shutdown_grace` (default 1 s)
 
-TCP (`server/accept.rs:78-96`) and QUIC (`server/accept.rs:213-232`) share the sequence:
+TCP (`server/accept.rs:96-145`) and QUIC (`server/accept.rs:147-212`) share `AcceptContext::drain` (`server/accept.rs:77-95`):
 
 1. Break accept loop on `cancel`.
 2. Upgrade weak sessions → `active`; `try_send(Drain{deadline_ms: grace_ms})`
@@ -456,7 +462,7 @@ TCP (`server/accept.rs:78-96`) and QUIC (`server/accept.rs:213-232`) share the s
 4. Cancel every session token (cascades via `child_token` to services/relays).
 5. `handlers.abort_all()` + drain `join_next` (records panics).
 
-`serve_control` teardown (`server/control.rs:215-225`) cancels services,
+`serve_control` teardown (`server/control.rs:226-250`) first honors a negotiated peer drain deadline (capability 2, §3.2), then cancels services,
 `abort_all`s children, drains completions, then `remove_all_pending`.
 `run_service` exit (`server/service.rs:141-143`) aborts relays, drains them, then
 `remove_service_pending`. `server_shutdown_cancels_incomplete_tls_and_authentication_handshakes`

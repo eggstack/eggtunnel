@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M015 and C001 closed; M016 ready
+Status: active — M001-M016 and C001 closed; no executable milestone pending
 
 Canonical references:
 
@@ -579,7 +579,7 @@ Exit conditions:
 
 ### Milestone M016 — Capability-negotiated protocol evolution
 
-Status: ready — unblocked by M014 strict closure
+Status: closed — closure recorded at `plans/closure/reverse-session/016-status.md`
 
 Implementation plan:
 
@@ -768,4 +768,4 @@ Explicitly deferred until after M006 or a new ADR:
 | M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md | Tag/release/crates publication and clean registry consumer complete. |
 | M014 post-0.2 runtime topology/maintenance | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md | M013 closed; M015/M016 unblocked. |
 | M015 CLI config/operations | closed | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | plans/closure/reverse-session/015-status.md | M014 closed. |
-| M016 capability-negotiated protocol evolution | ready | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | — | M014 closed; ADR-0002 accepted. |
+| M016 capability-negotiated protocol evolution | closed | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | plans/closure/reverse-session/016-status.md | M014 closed; ADR-0002 accepted. |

@@ -4,9 +4,9 @@ use eggress_core::BoxStream;
 use eggress_relay::{RelayOptions, relay_with_options};
 use eggress_transport_tls::{TlsClientConfigBuilder, tls_connect};
 use eggtunnel_proto::{
-    Auth, AuthOk, Capabilities, ClientHello, DataHello, EffectiveBind, ErrorMessage,
-    MAX_FRAME_BYTES, Message, Open, OpenReject, ProtocolVersion, RegisterService, ServerHello,
-    ServiceId,
+    Auth, AuthOk, CAPABILITY_DRAIN_DEADLINE, CAPABILITY_REGISTER_REJECT, Capabilities, ClientHello,
+    DataHello, EffectiveBind, ErrorMessage, MAX_FRAME_BYTES, Message, Open, OpenReject,
+    ProtocolVersion, RegisterService, ServerHello, ServiceId,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -29,7 +29,7 @@ pub use config::{
     TargetContext, TargetError, TargetFuture, TargetStream,
 };
 mod service_state;
-use service_state::{AckDisposition, ServiceState};
+use service_state::{AckDisposition, Expiry, RegistrationMode, RejectDisposition, ServiceState};
 mod heartbeat;
 use heartbeat::HeartbeatState;
 mod open;
@@ -706,24 +706,36 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         reconnect_delay,
         commands,
     } = context;
+    // Capability negotiation (ADR-0002): advertise everything supported;
+    // only the server-returned intersection counts as negotiated. Extras
+    // the server claims beyond our advertisement are ignored here — the
+    // corresponding extension behavior stays disabled, and any
+    // extension-only message arriving without negotiation fails closed.
+    let offered = Capabilities::supported();
     handshake_write(
         &mut stream,
         &Message::ClientHello(ClientHello {
             version: ProtocolVersion::CURRENT,
-            capabilities: Capabilities::default(),
+            capabilities: offered.clone(),
         }),
         counters.policy.timeouts.handshake,
     )
     .await?;
-    match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
-        Message::ServerHello(ServerHello { version, .. })
-            if version.major == ProtocolVersion::CURRENT.major => {}
+    let negotiated = match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
+        Message::ServerHello(ServerHello {
+            version,
+            capabilities,
+        }) if version.major == ProtocolVersion::CURRENT.major => {
+            negotiate_capabilities(&offered, &capabilities)
+        }
         _ => {
             return Err(TunnelError::Protocol(
                 eggtunnel_proto::ProtocolError::UnexpectedMessage,
             ));
         }
-    }
+    };
+    let correlated = negotiated.has(CAPABILITY_REGISTER_REJECT);
+    let negotiated_drain = negotiated.has(CAPABILITY_DRAIN_DEADLINE);
     let auth = Auth::new(token.expose().to_vec())?;
     handshake_write(
         &mut stream,
@@ -736,6 +748,17 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         _ => return Err(TunnelError::Authentication),
     };
     let generation = counters.begin_session()?;
+    // The registration wire mode is Session-scoped: legacy serial without
+    // capability 1, bounded correlated transactions with it. The ceiling
+    // derives from the existing client command-queue bound — every
+    // in-flight registration holds one caller reply.
+    service_state.set_mode(if correlated {
+        RegistrationMode::CorrelatedBounded {
+            max_in_flight: counters.policy.limits.client_command_queue,
+        }
+    } else {
+        RegistrationMode::LegacySerial
+    });
     tracing::info!(
         session_generation = generation,
         "authenticated client Session established"
@@ -764,7 +787,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     .push((session_id, service.id, ack.effective_bind.clone()));
                 tracing::info!(service_id = service.id.0, service_name = service.name.as_str(), effective_address = %std::net::Ipv6Addr::from(ack.effective_bind.address), effective_port = ack.effective_bind.port, "initial Service registered");
             }
-            Message::Error(_) => return Err(TunnelError::Authorization),
+            // Initial registration stays sequential in both modes; any
+            // refusal — generic or correlated — fails the Session closed.
+            Message::Error(_) | Message::RegisterReject(_) => {
+                return Err(TunnelError::Authorization);
+            }
             _ => return Err(TunnelError::Authorization),
         }
     }
@@ -797,9 +824,13 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         counters.policy.timeouts.heartbeat_interval,
     );
     let mut heartbeat = HeartbeatState::new();
-    let mut registration_deadline: Option<tokio::time::Instant> = None;
     let mut registration_timed_out = false;
+    let mut peer_drain_deadline: Option<u32> = None;
     loop {
+        // Earliest acknowledgement deadline across legacy and correlated
+        // transactions; recomputed every iteration so completed or newly
+        // started transactions move it.
+        let registration_deadline = service_state.next_deadline();
         tokio::select! {
             _ = cancel.cancelled() => {
                 session_cancel.cancel();
@@ -826,14 +857,17 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                     std::future::pending::<()>().await;
                 }
             }, if registration_deadline.is_some() => {
-                if let Some(pending) = service_state.pending_mut()
-                    && let Some(reply) = pending.reply.take()
-                {
-                    let _ = reply.send(Err(TunnelError::Timeout));
+                match service_state.expire_overdue(tokio::time::Instant::now()) {
+                    Expiry::None => {}
+                    Expiry::Legacy => {
+                        registration_timed_out = true;
+                        tracing::debug!(session_generation = generation, "Service registration acknowledgement timed out");
+                        break;
+                    }
+                    Expiry::Correlated(count) => {
+                        tracing::debug!(session_generation = generation, expired = count, "correlated Service registration timed out");
+                    }
                 }
-                registration_timed_out = true;
-                tracing::debug!(session_generation = generation, "Service registration acknowledgement timed out");
-                break;
             }
             incoming = read_message(&mut reader) => {
                 match incoming {
@@ -881,7 +915,6 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         }
                     }
                     Ok(Message::RegisterAck(ack)) => {
-                        registration_deadline = None;
                         let (service, reply) = match service_state.take_ack(ack.service_id, generation) {
                             AckDisposition::Unexpected => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
                             AckDisposition::Stale(reply) => { if let Some(reply) = reply { let _ = reply.send(Err(TunnelError::Disconnected)); } continue; }
@@ -901,7 +934,6 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         }
                     }
                     Ok(Message::Error(error)) => {
-                        registration_deadline = None;
                         if let Some(reply) = service_state.reject() {
                             let error = registration_error(error);
                             tracing::debug!(registration_error = ?error.termination_category(), session_generation = generation, "Service registration rejected");
@@ -910,8 +942,41 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             return Err(TunnelError::Authorization);
                         }
                     }
-                    Ok(Message::Drain(_)) => {
+                    Ok(Message::RegisterReject(reject)) => {
+                        // Extension-only message: without a negotiated
+                        // capability 1 this is a protocol violation and
+                        // fails the Session closed.
+                        if !correlated {
+                            return Err(TunnelError::Protocol(
+                                eggtunnel_proto::ProtocolError::UnexpectedMessage,
+                            ));
+                        }
+                        match service_state.take_reject(reject.service_id, generation) {
+                            RejectDisposition::Reject(reply) => {
+                                let error = registration_error_code(reject.code);
+                                tracing::debug!(service_id = reject.service_id.0, registration_error = ?error.termination_category(), session_generation = generation, "Service registration rejected");
+                                if let Some(reply) = reply {
+                                    let _ = reply.send(Err(error));
+                                }
+                            }
+                            RejectDisposition::Stale(reply) => {
+                                if let Some(reply) = reply {
+                                    let _ = reply.send(Err(TunnelError::Disconnected));
+                                }
+                            }
+                            RejectDisposition::Unknown => {
+                                // No transaction for this Service in this
+                                // generation: a late, duplicate, or hostile
+                                // reject. Fail closed.
+                                return Err(TunnelError::Protocol(
+                                    eggtunnel_proto::ProtocolError::UnexpectedMessage,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(Message::Drain(drain)) => {
                         tracing::info!(session_generation = generation, "server requested Session drain");
+                        peer_drain_deadline = Some(drain.deadline_ms);
                         session_cancel.cancel();
                         break;
                     }
@@ -927,7 +992,12 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             let _ = reply.send(Err(TunnelError::Disconnected));
                             continue;
                         }
-                        if service_state.desired().len().saturating_add(usize::from(service_state.pending().is_some())) >= counters.policy.limits.services_per_session {
+                        if service_state
+                            .desired()
+                            .len()
+                            .saturating_add(service_state.unacknowledged())
+                            >= counters.policy.limits.services_per_session
+                        {
                             let _ = reply.send(Err(TunnelError::ResourceExhausted));
                             continue;
                         }
@@ -953,14 +1023,38 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => return Err(error.into()),
                             Err(_) => {
-                                if let Some(reply) = service_state.pending_mut().and_then(|pending| pending.reply.take()) { let _ = reply.send(Err(TunnelError::Timeout)); }
-                                registration_timed_out = true;
-                                break;
+                                match service_state.mode() {
+                                    RegistrationMode::LegacySerial => {
+                                        if let Some(reply) = service_state.pending_mut().and_then(|pending| pending.reply.take()) { let _ = reply.send(Err(TunnelError::Timeout)); }
+                                        registration_timed_out = true;
+                                        break;
+                                    }
+                                    RegistrationMode::CorrelatedBounded { .. } => {
+                                        // Only this transaction is
+                                        // ambiguous; the Session and
+                                        // unrelated transactions survive. A
+                                        // late Ack for it fails closed via
+                                        // `take_ack`.
+                                        service_state.abandon(service.id);
+                                        continue;
+                                    }
+                                }
                             }
                         }
-                        registration_deadline = Some(
-                            tokio::time::Instant::now() + counters.policy.timeouts.handshake,
-                        );
+                        let deadline =
+                            tokio::time::Instant::now() + counters.policy.timeouts.handshake;
+                        match service_state.mode() {
+                            RegistrationMode::LegacySerial => {
+                                if let Some(pending) = service_state.pending_mut() {
+                                    pending.deadline = Some(deadline);
+                                }
+                            }
+                            RegistrationMode::CorrelatedBounded { .. } => {
+                                if let Some(txn) = service_state.in_flight_mut(service.id) {
+                                    txn.deadline = Some(deadline);
+                                }
+                            }
+                        }
                     }
                     ClientCommand::Unregister { id, reply } => {
                         let was_present = service_state.unregister(id);
@@ -979,7 +1073,17 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             }
         }
     }
-    let _ = timeout(counters.policy.timeouts.shutdown_grace, async {
+    // Negotiated Drain deadline (capability 2, ADR-0002): when the
+    // server asked us to drain, wait up to min(peer, local shutdown
+    // ceiling) for owned Open tasks to finish before forced
+    // cancellation. Without the capability the 1.0 local-only timing
+    // applies exactly as before.
+    let drain_wait = match (negotiated_drain, peer_drain_deadline) {
+        (true, Some(peer_ms)) => std::time::Duration::from_millis(peer_ms as u64)
+            .min(counters.policy.timeouts.shutdown_grace),
+        _ => counters.policy.timeouts.shutdown_grace,
+    };
+    let _ = timeout(drain_wait, async {
         while opens.join_next().await.is_some() {}
     })
     .await;
@@ -1023,8 +1127,23 @@ fn apply_disconnected_command(services: &mut ServiceState, command: ClientComman
     }
 }
 
+/// Client-side negotiation rule (ADR-0002): only the intersection of
+/// what this peer offered and what the server returned counts as
+/// negotiated. Server-claimed extras outside our advertisement are
+/// ignored — the corresponding extension behavior stays disabled, and
+/// any extension-only message arriving without negotiation fails closed.
+fn negotiate_capabilities(offered: &Capabilities, received: &Capabilities) -> Capabilities {
+    offered.intersect(received)
+}
+
 fn registration_error(error: ErrorMessage) -> TunnelError {
-    match error.code {
+    registration_error_code(error.code)
+}
+
+/// Shared numeric vocabulary for registration refusal: the generic
+/// `Error` and the correlated `RegisterReject` carry the same codes.
+fn registration_error_code(code: u16) -> TunnelError {
+    match code {
         1 => TunnelError::ServiceAlreadyExists,
         5 => TunnelError::ResourceExhausted,
         _ => TunnelError::Authorization,

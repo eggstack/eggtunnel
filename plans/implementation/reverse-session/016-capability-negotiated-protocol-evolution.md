@@ -1,6 +1,6 @@
 # Reverse Session M016 — Capability-Negotiated Protocol Evolution
 
-Status: ready
+Status: closed
 
 Planning baseline: ae35859c00089784254b6a078a5a519420de1994
 

@@ -26,7 +26,7 @@ wire protocol. It owns:
   (`crates/eggtunnel-proto/src/lib.rs:91-103`, `crates/eggtunnel-proto/src/lib.rs:161-179`,
   `crates/eggtunnel-proto/src/lib.rs:185-191`, `crates/eggtunnel-proto/src/lib.rs:209-215`,
   `crates/eggtunnel-proto/src/lib.rs:287-309`, `crates/eggtunnel-proto/src/lib.rs:488-496`).
-- Version gate: wire `1.0`, major mismatch rejected, minor informational
+- Version gate: wire `1.1` (major 1 keeps the 1.0 boundary), major mismatch rejected, minor informational; extensions gated by capability intersection only (ADR-0002)
   (`crates/eggtunnel-proto/src/lib.rs:21-35`, `crates/eggtunnel-proto/src/lib.rs:481-485`,
   `docs/PROTOCOL.md:1-10`).
 - Typed errors for every hostile-input class (`crates/eggtunnel-proto/src/lib.rs:433-455`).
@@ -56,7 +56,7 @@ Defined at `crates/eggtunnel-proto/src/lib.rs:13-22` and documented at `docs/PRO
 |---:|---:|---|---|---|
 | 0 | 4 | magic | ASCII `ETUN` | `MAGIC` (`crates/eggtunnel-proto/src/lib.rs:13`) |
 | 4 | 2 | major version | `u16 BE` (`1`) | `PROTOCOL_MAJOR` (`crates/eggtunnel-proto/src/lib.rs:21`) |
-| 6 | 2 | minor version | `u16 BE` (`0`) | `PROTOCOL_MINOR` (`crates/eggtunnel-proto/src/lib.rs:22`) |
+| 6 | 2 | minor version | `u16 BE` (`1`) | `PROTOCOL_MINOR` (`crates/eggtunnel-proto/src/lib.rs:22`) |
 | 8 | 2 | message ID | `u16 BE`, explicit discriminant 1–14 | `MessageType` `#[repr(u16)]` (`crates/eggtunnel-proto/src/lib.rs:229-246`) |
 | 10 | 4 | payload length | `u32 BE`, bytes of the one postcard payload | written at `crates/eggtunnel-proto/src/lib.rs:467`, read at `crates/eggtunnel-proto/src/lib.rs:487` |
 | 14 | variable | payload | `postcard` encoding of the message DTO | `Message::encode_payload` (`crates/eggtunnel-proto/src/lib.rs:408-431`) |
@@ -73,7 +73,7 @@ Payload cap `MAX_FRAME_BYTES = 1 MiB` (`crates/eggtunnel-proto/src/lib.rs:15`, `
 3. Header-first construction: `MAGIC` + `PROTOCOL_MAJOR BE` + `PROTOCOL_MINOR BE` +
    `message.kind() as u16 BE` + `payload.len() as u32 BE` + payload
    (`crates/eggtunnel-proto/src/lib.rs:462-469`).
-4. Always stamps the current version (`1.0`); there is no API to encode an older/newer
+4. Always stamps the current version (`1.1`); there is no API to encode an older/newer
    version. `kind()` is a total match over the 14 variants (`crates/eggtunnel-proto/src/lib.rs:389-407`).
 
 ### 2.3 `decode_frame` (`crates/eggtunnel-proto/src/lib.rs:474-525`)
@@ -147,6 +147,7 @@ does **not** enforce direction or ordering.
 | 12 | `Drain` (`crates/eggtunnel-proto/src/lib.rs:243`, `crates/eggtunnel-proto/src/lib.rs:355-358`) | `deadline_ms: u32` | either direction (graceful shutdown) | Client sends on cancellation (`crates/eggtunnel/src/client.rs:806-808`); server sends on the shutdown drain (`crates/eggtunnel/src/server/accept.rs:77-95`); receipt breaks the control loop on both sides (`crates/eggtunnel/src/client.rs:913-916`, `crates/eggtunnel/src/server/control.rs:200`, forwarded `Drain` breaks at `crates/eggtunnel/src/server/control.rs:205-210`). |
 | 13 | `Error` / `ErrorMessage` (`crates/eggtunnel-proto/src/lib.rs:244`, `crates/eggtunnel-proto/src/lib.rs:359-363`) | `code: u16`, `diagnostic: BoundedDiagnostic` (≤256 B) | server → client | Terminal/negative ack: auth failure (`crates/eggtunnel/src/server/control.rs:111-117`, code 4) and registration failures via `write_registration_error` (`crates/eggtunnel/src/server/control.rs:344-352`, call sites at `crates/eggtunnel/src/server/control.rs:259` code 5, `:270` code 1, `:284` code 2, `:298` code 3); client maps handshake-time `Error` to `TunnelError::Authorization` (`crates/eggtunnel/src/client.rs:767`), and dynamic `Error` with a pending registration to `registration_error()` (`crates/eggtunnel/src/client.rs:903-911`, mapping at `crates/eggtunnel/src/client.rs:1026-1032`), or to `TunnelError::Authorization` when nothing is pending (`crates/eggtunnel/src/client.rs:909-912`); other unexpected messages hit `UnexpectedMessage` (`crates/eggtunnel/src/client.rs:918`). Note the enum variant is `Message::Error` but the struct is `ErrorMessage` (`crates/eggtunnel-proto/src/lib.rs:385`, `crates/eggtunnel-proto/src/lib.rs:521`). |
 | 14 | `DataHello` (`crates/eggtunnel-proto/src/lib.rs:245`, `crates/eggtunnel-proto/src/lib.rs:364-369`) | `session_id: SessionId`, `service_id: ServiceId`, `connection_id: ConnectionId` | client → server (data plane) | First frame on each **data** connection, then opaque relay bytes (`docs/PROTOCOL.md:36-39`; client sends at `crates/eggtunnel/src/client/open.rs:67`; server requires it first on data streams at `crates/eggtunnel/src/server/accept.rs:470-478` QUIC / `crates/eggtunnel/src/server/accept.rs:249-260` TCP dispatch, correlated jointly at `crates/eggtunnel/src/server/pending.rs:30-97`). Wrong-session / unknown-connection / service-or-expiry mismatches are rejected and counted (`crates/eggtunnel/src/server/pending.rs:52-86`), covered by `crates/eggtunnel/src/server_tests/tcp.rs:1248`, `crates/eggtunnel/src/server_tests/tcp.rs:1309`, `crates/eggtunnel/src/server_tests/quic.rs:287`, `crates/eggtunnel/src/server_tests/quic.rs:406`, `crates/eggtunnel/src/server_tests/quic.rs:530`. |
+| 15 | `RegisterReject` (`crates/eggtunnel-proto/src/lib.rs:284`, `crates/eggtunnel-proto/src/lib.rs:410-419`) | `service_id: ServiceId`, `code: u16` (same registration vocabulary as `Error`: 1 duplicate, 2 bind, 3 listener, 5 admission), `diagnostic: BoundedDiagnostic` | server → client (only with negotiated capability 1) | Correlated registration failure: server sends via `write_registration_response` (`crates/eggtunnel/src/server/control.rs:378-399`); client correlates by ServiceId+generation (`take_reject` at `crates/eggtunnel/src/client/service_state.rs:257-268`), mapping codes through `registration_error_code` (`crates/eggtunnel/src/client.rs:1150-1156`). Unknown/stale rejects and unnegotiated receipt fail closed. Codec round-trip + hostile-diagnostic tests at `crates/eggtunnel-proto/src/lib.rs:742-771`. |
 
 Lifecycle summary (control path per [Architecture Overview](overview.md) §8):
 `ClientHello → ServerHello → Auth → AuthOk → (RegisterService → RegisterAck | Error)* →
@@ -201,11 +202,11 @@ multibyte input fails closed (non-ASCII bytes are rejected). `TcpTarget` control
 
 | Item | Rule | Code / doc |
 |---|---|---|
-| Wire version | `1.0` | `PROTOCOL_MAJOR = 1`, `PROTOCOL_MINOR = 0` (`crates/eggtunnel-proto/src/lib.rs:21-22`); `ProtocolVersion::CURRENT` (`crates/eggtunnel-proto/src/lib.rs:30-35`); `docs/PROTOCOL.md:1` |
-| Crate version | workspace `0.2.0` line (`crates/eggtunnel-proto/Cargo.toml:4` inherits `version.workspace`; root `Cargo.toml:6` sets `version = "0.2.0"`) | `docs/PROTOCOL.md:3-6` states the split: current crate line `0.2.0`, wire `1.0` |
+| Wire version | `1.1` (major-1 boundary preserves 1.0 interop) | `PROTOCOL_MAJOR = 1`, `PROTOCOL_MINOR = 1` (`crates/eggtunnel-proto/src/lib.rs:21-22`); `ProtocolVersion::CURRENT` (`crates/eggtunnel-proto/src/lib.rs:37-44`); `docs/PROTOCOL.md:1` |
+| Crate version | workspace `0.2.0` line (`crates/eggtunnel-proto/Cargo.toml:4` inherits `version.workspace`; root `Cargo.toml:6` sets `version = "0.2.0"`) | `docs/PROTOCOL.md:3-6` states the split: current crate line `0.2.0`, wire `1.1` with 1.0 fallback |
 | Major | reject on mismatch | `decode_frame` returns `UnsupportedVersion(major, minor)` if `major != PROTOCOL_MAJOR` (`crates/eggtunnel-proto/src/lib.rs:483-485`); tested with major 2 at `crates/eggtunnel-proto/src/lib.rs:660-666` |
-| Minor | informational only | minor is decoded (`crates/eggtunnel-proto/src/lib.rs:482`) but never compared; `encode_frame` always stamps `1.0` (`crates/eggtunnel-proto/src/lib.rs:464-465`); `docs/PROTOCOL.md:6-10`: “Minor versions are currently informational; there is no backward-peer support window … Do not infer a long-term 1.x protocol guarantee.” |
-| Capabilities | exchanged but not negotiated | `ClientHello`/`ServerHello` carry `Capabilities` (`crates/eggtunnel-proto/src/lib.rs:271-280`); doc says “no … capability negotiation beyond exchanging the current empty capability set” (`docs/PROTOCOL.md:7-9`); tests use `Capabilities::default()` (`crates/eggtunnel-proto/src/lib.rs:537`, `crates/eggtunnel-proto/src/lib.rs:541`) |
+| Minor | informational only | minor is decoded but never compared; `encode_frame` always stamps the current minor (`crates/eggtunnel-proto/src/lib.rs:518-519`); extensions are never inferred from minor — only from negotiated capabilities (`docs/PROTOCOL.md:44-60`). |
+| Capabilities | negotiated intersection (ADR-0002) | `ClientHello`/`ServerHello` carry `Capabilities`; client advertises `Capabilities::supported()` (`crates/eggtunnel-proto/src/lib.rs:207-213`), server returns `supported().intersect(&hello.capabilities)`, client intersects again (`has` at `:227-229`, `intersect` at `:215-225`); unknown IDs ignored, emission sorted/unique. Registry: 1 = correlated rejection, 2 = drain deadline (`:25-31`); pinned by `capability_registry_is_pinned_and_intersection_is_a_set` (`:706-740`). 1.0 (empty) peers negotiate nothing. |
 | Message IDs | stable, explicit, pinned | IDs 1–14 listed at `docs/PROTOCOL.md:31-34`; discriminants are explicit, “not derived from enum order” (`docs/PROTOCOL.md:33-34`); test `documented_wire_version_and_message_ids_are_pinned` asserts every discriminant and round-trips `TryFrom` (`crates/eggtunnel-proto/src/lib.rs:607-639`), including rejection of `0` and `15` (`crates/eggtunnel-proto/src/lib.rs:637-638`) |
 
 Practical consequence for reviewers: any change to a discriminant, to `HEADER_LEN`/field order,
@@ -263,16 +264,11 @@ Caveats a reviewer should carry into `client.rs` / `server.rs`:
   reusing an ID breaks peers with no runtime fallback. The pinned-ID test
   (`crates/eggtunnel-proto/src/lib.rs:607-639`) catches discriminant changes, **not** DTO-shape
   changes — require golden-vector / cross-version tests before any DTO edit.
-- [ ] **Minor-version blindness.** `decode_frame` ignores minor
-  (`crates/eggtunnel-proto/src/lib.rs:481-485`). A future `1.1` peer’s new optional fields would
-  decode as `InvalidPayload` today, not negotiate. Confirm product decision in
-  `docs/PROTOCOL.md:6-10` still holds before relying on minor for features.
-- [ ] **Wire vs. crate version confusion.** Wire `1.0` ≠ crate `0.2.0`
+- [x] **Minor-version blindness resolved by ADR-0002.** `decode_frame` still ignores minor for framing, but extensions are negotiated capabilities, never minor inference (`docs/PROTOCOL.md:44-60`).
+- [ ] **Wire vs. crate version confusion.** Wire `1.1` ≠ crate `0.2.0`
   (root `Cargo.toml:6`; see `docs/PROTOCOL.md:3-6`). Do not gate wire behavior on
-  `CARGO_PKG_VERSION`; gate only on `PROTOCOL_MAJOR` / `MessageType`.
-- [ ] **`Capabilities` is currently a placeholder.** Default/empty is the only exercised value
-  (`crates/eggtunnel-proto/src/lib.rs:537`, `crates/eggtunnel-proto/src/lib.rs:541`). Any
-  non-empty semantics need a negotiation rule that does not exist yet.
+  `CARGO_PKG_VERSION`; gate only on negotiated capabilities (never minor alone).
+- [x] **`Capabilities` negotiated (ADR-0002).** Non-empty sets intersect bilaterally; unknown IDs ignored; IDs 1–2 pinned with `RegisterReject` (ID 15) as the only extension-only message.
 - [ ] **Untyped codes.** `OpenReject.code: u16` (`crates/eggtunnel-proto/src/lib.rs:345`) and
   `ErrorMessage.code: u16` (`crates/eggtunnel-proto/src/lib.rs:361`) have no enum; client/server
   assign meaning ad hoc (e.g. codes 1/2 at `crates/eggtunnel/src/client/reconnect.rs:170`,
