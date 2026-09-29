@@ -172,7 +172,7 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is strictly closed and M009 is now closed under ADR-0001 with existing RegisterService/UnregisterService and Ping/Pong semantics preserved.
 
-ADR-0002 now defines the first concrete negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 is registered but remains blocked on M014 structural closure. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
+ADR-0002 defined the first negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 implemented and closed that extension after M014 structural closure, with mixed-version and hosted-CI evidence recorded in `plans/closure/reverse-session/016-status.md`. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
