@@ -11,6 +11,17 @@ snapshot. The CLI prints newly assigned service addresses while it is running.
 For QUIC, `listen_addr` is the UDP control endpoint; service listeners still
 bind TCP on the requested interface and port.
 
+Pass `--json` to `client`/`server` for a redacted machine-readable event
+stream on stdout (`eggtunnel.events/v1`): `startup` (version, mode,
+transport, service count), `server_listening` (bound address),
+`service_bind` (service ID, session, address, port), `session_ready`
+(generation, registered services), `session_lost` (termination category,
+reconnect count), and `shutdown` (reason). Add
+`--snapshot-interval-secs N` (minimum 5) for a periodic bounded `snapshot`
+event with the same counters the library `Snapshot` exposes. No event
+carries tokens, keys, proxy values, or file paths; human-readable output
+remains the default and is unchanged.
+
 The client retries transient connection, TLS, and protocol failures with
 bounded exponential backoff and jitter. Invalid authentication or service
 authorization stops retries. Client service registrations are restored after

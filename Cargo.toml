@@ -12,6 +12,7 @@ homepage = "https://github.com/eggstack/eggtunnel"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 postcard = { version = "1", features = ["alloc"] }
 thiserror = "2"
 getrandom = "0.3"

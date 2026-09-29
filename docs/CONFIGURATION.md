@@ -83,6 +83,33 @@ Run `eggtunnel check <file>` to validate the TOML structure, required paths,
 service names, endpoint syntax, and token environment variable. Server startup
 also parses and validates its certificate and key.
 
+`eggtunnel check --json <file>` emits a single versioned JSON object
+(`eggtunnel.check/v1`) with `ok`, `mode`, `transport`, service count,
+`custom_ca`/`mtls`/`outbound_proxy` booleans, and a stable
+`error.category` on failure. Secrets, file contents, and paths never
+appear in the JSON; only booleans and the coarse error category do.
+
+## Command-line overrides
+
+Every non-secret field can be overridden on the command line for service
+managers and automation. Precedence is always
+CLI override > TOML field/default > built-in default:
+
+- client: `--server-addr`, `--tls-server-name`, `--transport`,
+  `--ca-cert`, `--token-env`, `--outbound-proxy-env`, `--client-cert`,
+  `--client-key`, `--bind-port` (single-service files only, so the
+  selector stays deterministic).
+- server: `--listen-addr`, `--transport`, `--tls-cert`, `--tls-key`,
+  `--client-ca`, `--token-env`, `--allow-public-service-binds`
+  (one-way enable).
+
+There is deliberately no `--token` or proxy-password flag: secret
+*values* never appear in arguments (they would leak to process listings
+and shell history). The `*_env` flags only rename which environment
+variable is read. Meaningless combinations for the selected
+mode/profile (for example QUIC with a custom CA) are rejected by the
+same library validator used at startup.
+
 The CLI uses default runtime limits and timeouts. Rust embedders can select
 finite non-default limits and timeout values with `RuntimePolicy` on
 `ClientBuilder` and `ServerBuilder`; these settings are programmatic and are
