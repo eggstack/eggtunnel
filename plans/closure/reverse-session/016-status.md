@@ -151,8 +151,8 @@ every matrix row uses a genuinely mixed peer (scripted minor/caps).
 ## Hosted CI
 
 - `Rust` workflow (`check`, 14-combo `feature-slices`, `msrv`,
-  `minimal-dependencies`) on the pushed M016 head — conclusion
-  recorded at push time.
+  `minimal-dependencies`) run `36586150572` on the pushed M016 head:
+  **success** (all jobs passed).
 
 ## Known limitations
 
