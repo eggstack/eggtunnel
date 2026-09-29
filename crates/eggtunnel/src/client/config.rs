@@ -68,9 +68,9 @@ impl std::fmt::Debug for ClientConfig {
 /// Transport and identity selection for [`ClientBuilder`].
 pub enum ClientTransportProfile {
     TcpTls,
-    #[cfg(feature = "quic")]
+    #[cfg(feature = "quic-client")]
     Quic,
-    #[cfg(feature = "websocket")]
+    #[cfg(feature = "websocket-client")]
     WebSocket,
 }
 

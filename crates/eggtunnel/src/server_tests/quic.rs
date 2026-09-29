@@ -1,7 +1,7 @@
 use super::*;
 use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_data_hello};
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_session_multiplexes_isolated_data_streams_for_two_services() {
         let (cert, key) = certificate();
@@ -88,7 +88,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         echo_task.abort();
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     #[ignore = "bounded QUIC stream-churn qualification"]
     async fn qualification_quic_stream_churn_soak() {
@@ -208,7 +208,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         );
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_connection_replacement_creates_new_session_and_reregisters_services() {
         let (cert, key) = certificate();
@@ -282,7 +282,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         second_server.shutdown().await;
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_wrong_session_data_hello_is_rejected_and_pending_entry_survives() {
         let (cert, key) = certificate();
@@ -401,7 +401,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         server.shutdown().await;
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_replay_data_hello_on_second_stream_is_rejected() {
         let (cert, key) = certificate();
@@ -525,7 +525,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         echo_task.abort();
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_stale_old_generation_data_hello_is_rejected_after_reconnect() {
         let (cert, key) = certificate();
@@ -636,7 +636,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         second_server.shutdown().await;
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_stream_saturation_recovers_capacity_and_keeps_unrelated_streams_alive() {
         let (cert, key) = certificate();
@@ -783,12 +783,12 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         server.shutdown().await;
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     struct HalfCloseTarget {
         reply: Vec<u8>,
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     impl TargetConnector for HalfCloseTarget {
         fn connect(&self, _service: ClientService, _context: TargetContext) -> TargetFuture {
             let reply = self.reply.clone();
@@ -811,7 +811,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         }
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_half_close_preserves_response_after_request_eof() {
         let (cert, key) = certificate();

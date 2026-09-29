@@ -1,3 +1,4 @@
+use super::reconnect::connect_tcp;
 use super::*;
 
 pub(super) struct OpenContext {
@@ -29,19 +30,19 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
             result = timeout(counters.policy.timeouts.connect, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
         };
         let mut data = match transport {
-            ClientDataTransport::TcpTls { server_addr, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
+            ClientDataTransport::TcpTls { endpoint, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
                 let stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-                    result = connect_server(&server_addr, counters.policy.timeouts.connect, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
+                    result = connect_tcp(&endpoint, counters.policy.timeouts.connect, #[cfg(feature = "outbound-proxy")] outbound.as_deref()) => result?,
                 };
                 #[allow(unused_mut)]
                 let mut stream = tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
                     result = timeout(counters.policy.timeouts.handshake, tls_connect(stream, tls, &server_name)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
                 };
-                #[cfg(feature = "websocket")]
+                #[cfg(feature = "websocket-client")]
                 if websocket {
-                    let url = format!("wss://{server_addr}");
+                    let url = format!("wss://{}", endpoint.as_str());
                     let ws_client = eggress_protocol_websocket::WebSocketTunnelClient::new(1024 * 1024);
                     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
                         .max_message_size(Some(1024 * 1024))
@@ -51,11 +52,11 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
                         result = timeout(counters.policy.timeouts.handshake, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
                     };
                 }
-                #[cfg(not(feature = "websocket"))]
+                #[cfg(not(feature = "websocket-client"))]
                 let _ = websocket;
                 stream
             }
-            #[cfg(feature = "quic")]
+            #[cfg(feature = "quic-client")]
             ClientDataTransport::Quic(connection) => {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(TunnelError::Cancelled),

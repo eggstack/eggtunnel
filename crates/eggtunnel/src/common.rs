@@ -73,6 +73,17 @@ impl ClientService {
 }
 
 /// Server-side policy entry for a service name and bind request.
+///
+/// Reserved vocabulary for a future authentication/authorization ADR
+/// (multi-tenant Principal policy): it is the "server view" of a service
+/// (`id` + `name` + `requested_bind`, deliberately no `target`, mirroring
+/// `ClientService` minus the client-owned destination). The 0.2 runtime does
+/// not consume it — control-loop admission is owned by `BindPolicy` and the
+/// wire `RegisterService` frame — so it is kept source-compatible but
+/// load-bearing nowhere. Do not remove it without a migration path; a future
+/// server refactor accepting `ServiceSpec` from embedders must drop `target`
+/// explicitly at the boundary and must not let an embedder-supplied
+/// `requested_bind` bypass `bind_to_socket`.
 #[derive(Clone, Debug)]
 pub struct ServiceSpec {
     pub id: ServiceId,

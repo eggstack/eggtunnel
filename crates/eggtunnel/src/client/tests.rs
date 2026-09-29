@@ -75,22 +75,22 @@ async fn fake_connected_client_with_policy(
         cancel: cancel.clone(),
         counters: counters.clone(),
         commands,
-        #[cfg(feature = "quic")]
+        #[cfg(feature = "quic-client")]
         quic_client: Arc::new(std::sync::Mutex::new(None)),
     };
     let task_counters = counters.clone();
     let task_cancel = cancel.clone();
     let task_token = token.clone();
     let task = tokio::spawn(async move {
-        let mut service_state = ServiceState::new(vec![service(1, "initial", 80)]);
+        let mut supervisor =
+            ReconnectSupervisor::new(vec![service(1, "initial", 80)], Duration::from_millis(500));
         let mut command_rx = command_rx;
-        let mut reconnect_delay = Duration::from_millis(500);
         run_session(
             Box::new(client_io),
             SessionRun {
                 token: &task_token,
                 transport: ClientDataTransport::TcpTls {
-                    server_addr: "localhost:443".into(),
+                    endpoint: crate::Endpoint::parse("localhost:443").unwrap(),
                     server_name: "localhost".into(),
                     tls: build_tls_config(None).unwrap(),
                     websocket: false,
@@ -100,8 +100,8 @@ async fn fake_connected_client_with_policy(
                 connector: Arc::new(super::config::TcpTargetConnector),
                 cancel: &task_cancel,
                 counters: &task_counters,
-                reconnect_delay: &mut reconnect_delay,
-                service_state: &mut service_state,
+                reconnect_delay: &mut supervisor.reconnect_delay,
+                service_state: &mut supervisor.services,
                 commands: &mut command_rx,
             },
         )
@@ -149,6 +149,104 @@ async fn fake_connected_client_with_policy(
     .await
     .unwrap();
     (handle, counters, task, peer)
+}
+
+#[tokio::test]
+async fn a_ready_session_resets_the_shared_reconnect_backoff_independent_of_transport() {
+    // Backoff ownership lives in the supervisor, not in a transport adapter,
+    // so a Session that reaches the ready state resets the same delay for
+    // TCP/TLS, WebSocket, and QUIC.
+    for label in ["tcp_tls", "websocket_tls", "quic"] {
+        let policy = crate::RuntimePolicy::default();
+        let counters = Counters::with_policy(policy);
+        let session_counters = counters.clone();
+        let cancel = CancellationToken::new();
+        let token = SecretToken::new(format!("backoff-reset-{label}").into_bytes()).unwrap();
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (_command_tx, mut command_rx) = mpsc::channel(1);
+        let mut supervisor =
+            ReconnectSupervisor::new(vec![service(1, "initial", 80)], Duration::from_secs(9));
+        let session = tokio::spawn(async move {
+            run_session(
+                Box::new(client_io),
+                SessionRun {
+                    token: &token,
+                    transport: ClientDataTransport::TcpTls {
+                        endpoint: crate::Endpoint::parse("localhost:443").unwrap(),
+                        server_name: "localhost".into(),
+                        tls: build_tls_config(None).unwrap(),
+                        websocket: false,
+                        #[cfg(feature = "outbound-proxy")]
+                        outbound: None,
+                    },
+                    connector: Arc::new(super::config::TcpTargetConnector),
+                    cancel: &cancel,
+                    counters: &session_counters,
+                    reconnect_delay: &mut supervisor.reconnect_delay,
+                    service_state: &mut supervisor.services,
+                    commands: &mut command_rx,
+                },
+            )
+            .await
+        });
+        let mut peer: BoxStream = Box::new(server_io);
+        assert!(matches!(
+            read_boxed(&mut peer).await.unwrap(),
+            Message::ClientHello(_)
+        ));
+        write_boxed(
+            &mut peer,
+            &Message::ServerHello(ServerHello {
+                version: ProtocolVersion::CURRENT,
+                capabilities: Capabilities::default(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_boxed(&mut peer).await.unwrap(),
+            Message::Auth(_)
+        ));
+        write_boxed(
+            &mut peer,
+            &Message::AuthOk(AuthOk {
+                session_id: eggtunnel_proto::SessionId::generate().unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+        let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+            panic!("{label}: expected initial registration")
+        };
+        write_boxed(
+            &mut peer,
+            &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+                service_id: initial.service_id,
+                effective_bind: EffectiveBind {
+                    address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                    port: 31000,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+        // The Session is ready: the supervisor's delay is back to the policy
+        // initial value, not the pre-seeded 9 s value.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = counters.snapshot();
+            if snapshot.connected {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{label}: Session never became ready"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        drop(peer);
+        let _ = session.await;
+    }
 }
 
 #[tokio::test]
@@ -387,7 +485,7 @@ fn client_builder_accepts_tcp_mtls() {
     assert!(builder.validate().is_ok());
 }
 
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-client")]
 #[test]
 fn client_profile_validator_rejects_quic_custom_ca() {
     let mut config = config("localhost:443");
@@ -396,7 +494,7 @@ fn client_profile_validator_rejects_quic_custom_ca() {
     assert!(builder.validate().is_err());
 }
 
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-client")]
 #[test]
 fn client_profile_validator_accepts_quic_defaults() {
     assert!(
@@ -407,7 +505,7 @@ fn client_profile_validator_accepts_quic_defaults() {
     );
 }
 
-#[cfg(feature = "websocket")]
+#[cfg(feature = "websocket-client")]
 #[test]
 fn client_profile_validator_accepts_websocket_defaults() {
     assert!(
@@ -418,7 +516,7 @@ fn client_profile_validator_accepts_websocket_defaults() {
     );
 }
 
-#[cfg(all(feature = "quic", feature = "outbound-proxy"))]
+#[cfg(all(feature = "quic-client", feature = "outbound-proxy"))]
 #[test]
 fn client_profile_validator_rejects_quic_proxy() {
     let builder = ClientBuilder::new(config("localhost:443"))
@@ -427,7 +525,7 @@ fn client_profile_validator_rejects_quic_proxy() {
     assert!(builder.validate().is_err());
 }
 
-#[cfg(all(feature = "quic", feature = "mtls"))]
+#[cfg(all(feature = "quic-client", feature = "mtls"))]
 #[test]
 fn client_profile_validator_rejects_quic_mtls() {
     let builder = ClientBuilder::new(config("localhost:443"))
@@ -436,7 +534,7 @@ fn client_profile_validator_rejects_quic_mtls() {
     assert!(builder.validate().is_err());
 }
 
-#[cfg(all(feature = "websocket", feature = "outbound-proxy"))]
+#[cfg(all(feature = "websocket-client", feature = "outbound-proxy"))]
 #[test]
 fn client_profile_validator_accepts_websocket_proxy() {
     let builder = ClientBuilder::new(config("localhost:443"))
@@ -445,7 +543,7 @@ fn client_profile_validator_accepts_websocket_proxy() {
     assert!(builder.validate().is_ok());
 }
 
-#[cfg(all(feature = "websocket", feature = "mtls"))]
+#[cfg(all(feature = "websocket-client", feature = "mtls"))]
 #[test]
 fn client_profile_validator_rejects_websocket_mtls() {
     let builder = ClientBuilder::new(config("localhost:443"))

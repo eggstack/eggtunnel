@@ -24,16 +24,16 @@ Related overview sections: [wire protocol](proto-wire-protocol.md) (framing),
 
 > Canonical composition is `ClientBuilder` / `ServerBuilder` +
 > `Client/ServerTransportProfile` + `RuntimePolicy`
-> (`client/config.rs:68-156`, `server.rs:80-159`). `Client::start*` /
+> (`client/config.rs:68-156`, `server/config.rs:51-130`). `Client::start*` /
 > `Server::bind*` are conveniences that delegate to the builders.
 > Finite ceilings/timeouts come from `RuntimePolicy`
-> (`common.rs:194-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in `server.rs:44-46`
+> (`common.rs:194-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in `server_tests.rs:35`
 > are `#[cfg(test)]`-only. QUIC `max_concurrent_streams` is policy-derived
 > (server: `active_connections_per_session + 1`, client:
 > `client_open_tasks + 1` = 129 by default), `idle_timeout` is
 > `policy.timeouts.control_idle`, and both relays use
 > `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` at
-> `client/open.rs:67` and `server.rs:1370`. WSS sets 1 MiB caps via
+> `client/open.rs:67` and `server/service.rs:121`. WSS sets 1 MiB caps via
 > `WebSocketTunnel{Client,Server}::new(1024*1024)` plus matching
 > `tokio-tungstenite` `WebSocketConfig` limits.
 
@@ -50,7 +50,7 @@ boxed stream type. All Eggtunnel control-plane messages (`ClientHello` … `Data
 flow through these four functions. Opaque post-`DataHello` relay bytes do **not**
 flow through `wire_io`; they go to `eggress-relay::relay_with_options`
 (`crates/eggtunnel/src/client/open.rs:67`,
-`crates/eggtunnel/src/server.rs:1370`).
+`crates/eggtunnel/src/server/service.rs:121`).
 
 ### 1.1 `read_message` — header-first, length pre-check, exact consumption
 
@@ -103,7 +103,7 @@ flow through `wire_io`; they go to `eggress-relay::relay_with_options`
     declared length and the decoded payload disagree → `InvalidPayload`. There
     is no concatenated-frame fast path here; each `read_message` consumes
     exactly one frame. Control loops that `split()` the stream
-    (`client.rs:1111`, `server.rs:1134`) rely on this 1:1 property.
+    (`client/reconnect.rs:87`, `server/control.rs:144`) rely on this 1:1 property.
 
 ### 1.2 `write_message` — encode-then-`write_all`
 
@@ -147,23 +147,23 @@ write_message, but the type is the point: `BoxStream` (from
 type** across all transports. Every handshake path converges on it:
 
 - Baseline / mTLS: `Box::new(tcp)` → `tls_accept` / `tls_connect` returns a
-  `BoxStream` (`server.rs:888-895`, `client.rs:696-699` + `829-833`).
+  `BoxStream` (`server/accept.rs:235-242`, `client/reconnect.rs:269-272` + `829-833`).
 - WebSocket: TLS `BoxStream` → `WebSocketTunnelServer/Client` adapter returns a
-  `BoxStream` (`server.rs:921-936`, `client.rs:710-734`, `client/open.rs:42-53`).
+  `BoxStream` (`server/accept.rs:222-284`, `client/reconnect.rs:276-300`, `client/open.rs:42-53`).
 - QUIC: `QuicConnection::accept_stream` / `open_stream` returns a `BoxStream`
-  directly (`server.rs:716-719`, `client.rs:890-897`, `client/open.rs:59-64`).
+  directly (`server/accept.rs:380-383`, `client/reconnect.rs:416-423`, `client/open.rs:59-64`).
 - Outbound proxy: `OutboundConnector::connect_tcp_timeout_detailed` returns a
   `BoxStream` that is then fed into `tls_connect`
-  (`client.rs:811-828`).
+  (`client/reconnect.rs:320-353`).
 
 Consequences for review:
 
 - Session logic (`run_session`, `serve_control`, `accept_data_hello`) never
   branches on socket type; transport selection ends before the first
   `read_boxed`. The `websocket: bool` flag and the private
-  `ClientDataTransport` enum (`client.rs:37-49`) are construction-time only.
+  `ClientDataTransport` enum (`client.rs:47-60`) are construction-time only.
 - `tokio::io::split(stream)` on a `BoxStream`
-  (`client.rs:1111`, `server.rs:1134`) requires `BoxStream: AsyncRead +
+  (`client/reconnect.rs:87`, `server/control.rs:144`) requires `BoxStream: AsyncRead +
   AsyncWrite`; the WebSocket and QUIC adapters must therefore preserve
   byte-stream semantics (see §5 on the half-close caveat — byte-stream does
   **not** imply half-close equivalence).
@@ -182,23 +182,23 @@ Crate features: `crates/eggtunnel/Cargo.toml:15-23`. Workspace pins:
 Transport selection is via Builder profiles, not direct constructors:
 `ClientTransportProfile::{TcpTls, Quic, WebSocket}`
 (`client/config.rs:68-75`) consumed by `Client::start_profile`
-(`client.rs:138-212`), and `ServerTransportProfile::{TcpTls, Quic, WebSocket}`
-(`server.rs:80-87`) consumed by `Server::bind_profile` (`server.rs:302-335`)
-→ `bind_with_tls_profile` (`server.rs:382-418`) or `bind_quic_profile`
-(`server.rs:337-380`). `ClientDataTransport` (`client.rs:37-49`) is a private
-enum threaded into `reconnect_loop` / `handle_open`; `start_with_tls_config`
-(`client.rs:411-455`) and `bind_with_tls_profile` are private late-stage
+(`client.rs:347-421`), and `ServerTransportProfile::{TcpTls, Quic, WebSocket}`
+(`server/config.rs:51-58`) consumed by `Server::bind_profile` (`server.rs:180-213`)
+→ `bind_with_tls_profile` (`server.rs:260-294`) or `bind_quic_profile`
+(`server.rs:216-257`). `ClientDataTransport` (`client.rs:43-55`) is a private
+enum threaded into `drive` / `handle_open`; `start_with_tls_config`
+(`client.rs:437-501`) and `bind_with_tls_profile` are private late-stage
 workers reached only after `validate_client_profile` / `validate_server_profile`.
 
 | Feature | Default? | Pulls in (crate deps) | Gates in code |
 |---|---|---|---|
-| `client` | ✅ (`default = ["client","tls"]`, `crates/eggtunnel/Cargo.toml:16`) | `tokio`, `tokio-util`, `eggress-core`, `eggress-transport-tls`, `eggress-relay`, `getrandom`, `rustls`, + `tls` | `mod client` (`lib.rs:13-14`); `Client`, `ClientBuilder`, `ClientTransportProfile` (`client/config.rs:68-156`), `TargetConnector`, all `Client::start*` conveniences (`client.rs:214-317`) |
+| `client` | ✅ (`default = ["client","tls"]`, `crates/eggtunnel/Cargo.toml:16`) | `tokio`, `tokio-util`, `eggress-core`, `eggress-transport-tls`, `eggress-relay`, `getrandom`, `rustls`, + `tls` | `mod client` (`lib.rs:13-14`); `Client`, `ClientBuilder`, `ClientTransportProfile` (`client/config.rs:68-156`), `TargetConnector`, all `Client::start*` conveniences (`client.rs:224-234`) |
 | `tls` | ✅ | `eggress-transport-tls` (`crates/eggtunnel/Cargo.toml:19`) | Baseline path; `TlsClientConfigBuilder` / `TlsServerConfigBuilder`, `tls_connect` / `tls_accept` |
-| `server` | ❌ | `tokio`, `tokio-util`, `eggress-core`, `eggress-transport-tls`, `eggress-relay`, `rustls`, + `tls` | `mod server` (`lib.rs:15-16`); `Server`, `ServerBuilder`, `ServerTransportProfile` (`server.rs:80-159`), private `ServerTls` enum (`server.rs:32-37`), all `Server::bind*` conveniences (`server.rs:184-224`) |
-| `quic` | ❌ | `client` + `server` + `eggress-transport-quic` (`crates/eggtunnel/Cargo.toml:20`) | `ClientTransportProfile::Quic` (`client/config.rs:71-72`); `start_profile` Quic arm → `start_quic_profile` (`client.rs:188-191`, `320-364`), `quic_reconnect_loop` (`client.rs:837-939`); `ServerTransportProfile::Quic` (`server.rs:83-84`); `Server::bind_quic[_with_policy]` (`server.rs:206-224`), `bind_quic_profile` (`server.rs:337-380`), `quic_server_loop*`, `handle_quic_connection`, `handle_quic_data_stream` (`server.rs:611-816`); `max_active_data_streams` field on `ConnectionContext` (`server.rs:833-834`) |
-| `websocket` | ❌ | `client` + `server` + `eggress-protocol-websocket` + `tokio-tungstenite` (`crates/eggtunnel/Cargo.toml:21`) | `ClientTransportProfile::WebSocket` (`client/config.rs:73-74`); `start_profile` WebSocket arm (`client.rs:192-211`) → `start_with_tls_config(..., websocket: true)` (`client.rs:411-455`), `reconnect_loop` upgrade (`client.rs:713-729`), `handle_open` data-path upgrade (`client/open.rs:42-53`); server `ServerTransportProfile::WebSocket` (`server.rs:85-86`) → `bind_profile` WebSocket arm (`server.rs:325-329`), `handle_connection` upgrade (`server.rs:921-936`); `Server::bind_websocket` (`server.rs:198-204`), `Client::start_websocket*` (`client.rs:229-247`) |
-| `outbound-proxy` | ❌ | `client` + `eggress-outbound` with `pproxy-compat` (`crates/eggtunnel/Cargo.toml:22`, `Cargo.toml:27`) | `outbound: Option<Arc<OutboundConnector>>` on private `ClientDataTransport::TcpTls` (`client.rs:44-45`) and `start_with_tls_config` (`client.rs:416-418`); `ClientBuilder::outbound_proxy` (`client/config.rs:124-128`); `parse_outbound_proxy` via `OutboundConnector::from_pproxy_uri` (`client.rs:476-482`); `connect_server` proxy branch (`client.rs:806-834`); `validate_outbound_proxy` re-export (`lib.rs:20-21`); `start_with_outbound_proxy*`, `start_websocket_with_outbound_proxy*` builder conveniences (`client.rs:249-297`) |
-| `mtls` | ❌ | `tls` + `tokio-rustls`, `webpki-roots`, `sha2` (`crates/eggtunnel/Cargo.toml:23`) | `ServerTls::Mutual` (`server.rs:35-36`); `Server::bind_mtls*` (`server.rs:273-300`), `build_mtls_server_config` (`server.rs:496-519`), `certificate_principal` SHA-256 (`server.rs:521-525`); `Client::start_with_mtls*` builder conveniences (`client.rs:387-409`), `ClientIdentity` + redacted `Debug` + `zeroize` drop (`client.rs:484-516`), `build_mtls_tls_config` (`client.rs:639-661`), `ClientBuilder::with_identity` (`client/config.rs:118-122`) |
+| `server` | ❌ | `tokio`, `tokio-util`, `eggress-core`, `eggress-transport-tls`, `eggress-relay`, `rustls`, + `tls` | `mod server` (`lib.rs:15-16`); `Server`, `ServerBuilder`, `ServerTransportProfile` (`server/config.rs:51-130`), private `ServerTls` enum (`server/tls.rs:16-22`), all `Server::bind*` conveniences (`server/config.rs:35-75`) |
+| `quic` (+ role slices `quic-client` / `quic-server`, `crates/eggtunnel/Cargo.toml:20-26`) | ❌ | umbrella `quic` = both roles + `eggress-transport-quic`; role slices isolate client/server builds | `ClientTransportProfile::Quic` (`client/config.rs:71-72`); `start_profile` Quic arm (`client.rs:194-196`) → `start_quic_profile` (`client.rs:325-390`), `drive` + `QuicTransport` (`client/reconnect.rs:158-203,354-437`); `ServerTransportProfile::Quic` (`server/config.rs:52-57`); `Server::bind_quic[_with_policy]` (`server.rs:87-104`), `bind_quic_profile` (`server.rs:216-257`), `quic_server_loop*`, `handle_quic_connection`, `handle_quic_data_stream` (`server/accept.rs:147-180,369-480`); QUIC stream budget via `max_active_data_streams` (`server/accept.rs:160-180`) and client `QuicTransport` (`client/reconnect.rs:354-437`) |
+| `websocket` (+ role slices `websocket-client` / `websocket-server`, `crates/eggtunnel/Cargo.toml:27-30`) | ❌ | umbrella `websocket` = both roles + `eggress-protocol-websocket` + `tokio-tungstenite`; role slices isolate client/server builds | `ClientTransportProfile::WebSocket` (`client/config.rs:73-74`); `start_profile` WebSocket arm (`client.rs:198-200`) → `start_with_tls_config(..., websocket: true)` (`client.rs:437-501`), `StreamTransport` upgrade (`client/reconnect.rs:276-300`), `handle_open` data-path upgrade (`client/open.rs:42-53`); server `ServerTransportProfile::WebSocket` (`server/config.rs:52-57`) → `bind_profile` WebSocket arm (`server.rs:203-206`), `handle_connection` upgrade (`server/accept.rs:336-357`); `Server::bind_websocket` (`server.rs:79-84`), `Client::start_websocket*` (`client.rs:235-252`) |
+| `outbound-proxy` | ❌ | `client` + `eggress-outbound` with `pproxy-compat` (`crates/eggtunnel/Cargo.toml:31`, `Cargo.toml:43`) | `outbound: Option<Arc<OutboundConnector>>` on private `ClientDataTransport::TcpTls` (`client.rs:43-55`) and `start_with_tls_config` (`client.rs:437-501`); `ClientBuilder::outbound_proxy` (`client/config.rs:124-128`); `parse_outbound_proxy` via `OutboundConnector::from_pproxy_uri` (`client.rs:522-528`); `connect_tcp` proxy branch (`client/reconnect.rs:320-353`); `validate_outbound_proxy` re-export (`lib.rs:22`); `start_with_outbound_proxy*`, `start_websocket_with_outbound_proxy*` builder conveniences (`client.rs:255-302`) |
+| `mtls` | ❌ | `tls` + `tokio-rustls`, `webpki-roots`, `sha2` (`crates/eggtunnel/Cargo.toml:32`) | `ServerTls::Mutual` (`server/tls.rs:14-19`); `Server::bind_mtls*` (`server.rs:152-178`), `build_mtls_server_config` (`server/tls.rs:36-62`), `certificate_principal` SHA-256 (`server/tls.rs:64-67`); `Client::start_with_mtls*` builder conveniences (`client.rs:414-435`), `ClientIdentity` + redacted `Debug` + `zeroize` drop (`client.rs:531-562`), `build_mtls_tls_config` (`client.rs:661-683`), `ClientBuilder::with_identity` (`client/config.rs:118-122`) |
 
 Notes:
 
@@ -213,9 +213,9 @@ Notes:
   `eggress-transport-quic/insecure-quic` for tests. That feature must never
   leak into non-test builds; production QUIC goes through
   `QuicClientConfig { insecure: false }` (default `..QuicClientConfig::default()`
-  with `insecure` param `false` from `start_profile`, `client.rs:867-874`). The insecure
+  with `insecure` param `false` from `start_profile`, `client/reconnect.rs:401-408`). The insecure
   path is reachable only via `start_quic_insecure_for_test`
-  (`client.rs:366-385`).
+  (`client.rs:345-413`).
 - Workspace pins every Eggress crate to exactly `=1.0.8`
   (`Cargo.toml:22-27`; `Cargo.lock` confirms `eggress-core/-relay/
   -transport-tls/-transport-quic/-protocol-websocket/-outbound 1.0.8`).
@@ -230,29 +230,29 @@ Notes:
 ### 3.1 Construction
 
 - Server: `Server::bind` → `ServerBuilder::bind` → `Server::bind_profile`
-  (`server.rs:184-186`, `147-158`, `302-335`) builds either
+  (`server.rs:180-213`) builds either
   `ServerTls::Mutual(build_mtls_server_config(...))` or
-  `ServerTls::Eggress(build_server_tls(...))` (`server.rs:310-323`;
+  `ServerTls::Eggress(build_server_tls(...))` (`server.rs:194`; profile dispatch at `server.rs:180-213`;
   `build_server_tls` = `TlsServerConfigBuilder::new().with_certificate_pem(...).with_key_pem(...).build()`,
-  `server.rs:486-494`) and hands it to `bind_with_tls_profile`
-  (`server.rs:382-418`). Every accepted `TcpStream` is boxed then passed to
+  `server/tls.rs:23-35`) and hands it to `bind_with_tls_profile`
+  (`server/config.rs:109-145`). Every accepted `TcpStream` is boxed then passed to
   `eggress_transport_tls::tls_accept(stream, tls)` under
-  `policy.timeouts.handshake` (`server.rs:888-895`).
+  `policy.timeouts.handshake` (`server/accept.rs:235-242`).
 - Client: `Client::start` → `ClientBuilder::start` → `Client::start_profile`
-  (`client.rs:214-216`, `client/config.rs:142-155`, `client.rs:138-212`):
-  `build_tls_config` (`client.rs:628-636`):
+  (`client.rs:224-234`, `client/config.rs:142-155`, `client.rs:347-421`):
+  `build_tls_config` (`client/reconnect.rs:186-194`):
   `TlsClientConfigBuilder::new().with_system_roots()` or
   `.with_custom_ca_pem(pem)`, then `.build()`. `reconnect_loop`
-  (`client.rs:664-804`) dials via `connect_server` (`client.rs:806-834`,
+  (`client/reconnect.rs:158-298`) dials via `connect_server` (`client/reconnect.rs:320-353`,
   `policy.timeouts.connect`), then `tls_connect(stream, tls, &tls_server_name)`
-  under `policy.timeouts.handshake` (`client.rs:696-699`). The data path repeats
+  under `policy.timeouts.handshake` (`client/reconnect.rs:269-272`). The data path repeats
   the same two steps per `Open` (`client/open.rs:31-41`).
 - Validation before any socket: `validate_client_profile` checks the
   `RuntimePolicy`, endpoint shape, non-empty ≤253 B server name, service count
   against `policy.limits.services_per_session` with unique IDs/names, CA size cap,
-  and transport rejections (`client.rs:524-606`); server checks
+  and transport rejections (`endpoint.rs:58-140`); server checks
   `runtime_policy.validate()` + `bind_policy.validate()` + cert/key presence and
-  size cap via `validate_server_profile` (`server.rs:459-484`,
+  size cap via `validate_server_profile` (`server/config.rs:148-173`,
   `443-457`) plus `BindPolicy::validate` (`common.rs:100-112`).
 
 ### 3.2 TLS properties relevant to review
@@ -277,7 +277,7 @@ Notes:
   builder option or workspace feature change, not a `wire_io` change.
 - **SNI + verification.** Client passes `tls_server_name` (validated
   non-empty, ≤253 B) as the SNI/verification name on every control **and**
-  data connection (`client.rs:698`, `client/open.rs:40`). Server-name verification uses
+  data connection (`client/reconnect.rs:271`, `client/open.rs:40`). Server-name verification uses
   system roots by default or the explicit `ca_pem` bundle; `ClientConfig`'s
   `Debug` redacts the token and collapses `ca_pem` to `[configured]`
   (`client/config.rs:56-66`). Auth (`Auth` bearer token) always runs **inside** the
@@ -287,12 +287,12 @@ Notes:
 
 Every public entrypoint asserts a caller-owned runtime before doing I/O:
 
-- `Client::start_with_tls_config` (`client.rs:421-423`),
-  `Client::start_quic_profile` (`client.rs:326-328`);
-- `Server::bind_with_tls_profile` (`server.rs:389-391`),
-  `Server::bind_quic_with_admission_for_test` (`server.rs:233-235`, test-only).
+- `Client::start_with_tls_config` (`client.rs:350-352`),
+  `Client::start_quic_profile` (`client.rs:325-390`);
+- `Server::bind_with_tls_profile` (`server.rs:260-294`),
+  `Server::bind_quic_with_admission_for_test` (`server.rs:107-149`, test-only).
 
-`Server::bind_quic_profile` (`server.rs:337-380`) performs no separate
+`Server::bind_quic_profile` (`server/config.rs:31-66`) performs no separate
 `try_current` gate; it runs inside the caller's `bind().await` future, which
 reaches the runtime-gated `bind_with_tls_profile` only on the TCP/WSS path.
 
@@ -327,9 +327,9 @@ client                                    server
   |<=========== opaque bytes =============>|
 ```
 
-Control uses `read_boxed`/`write_boxed` throughout (`server.rs:1063-1133`;
-`client.rs:1028-1089`). Data connections branch on the first
-message in `handle_connection` (`server.rs:946-965`): `DataHello` → relay,
+Control uses `read_boxed`/`write_boxed` throughout (`server/control.rs:94-164`;
+`client/reconnect.rs:277-338`). Data connections branch on the first
+message in `handle_connection` (`server/accept.rs:248-267`): `DataHello` → relay,
 `ClientHello` → control session, anything else → `UnexpectedMessage`.
 
 ---
@@ -343,13 +343,13 @@ Feature: `quic` (`crates/eggtunnel/Cargo.toml:20`). Docs:
 
 | Aspect | TCP+TLS baseline | QUIC profile |
 |---|---|---|
-| Listener | `TcpListener::bind` (`server.rs:394`) | `QuicListener::bind(addr, QuicServerConfig { cert, key, idle_timeout: policy.timeouts.control_idle, max_concurrent_streams: policy.limits.active_connections_per_session + 1, alpn: [] })` (`server.rs:345-357`) |
-| Control transport | one TLS-over-TCP connection | one UDP QUIC connection per session; first inbound bidi stream is the control stream (`server.rs:716-727`) |
-| Data transport | one TCP+TLS connection per external conn | one bidi stream per external conn on the **same** QUIC connection (`server.rs:760-781`, `client/open.rs:59-64`) |
-| Service listeners | TCP (`TcpListener` accept in `run_service`, `server.rs:1315-1360`; bound at `:1174`) | **retained as TCP** — "Service listeners remain TCP even when the control Session uses QUIC over UDP" (`docs/SUPPORT.md:12-13`) |
+| Listener | `TcpListener::bind` (`server/config.rs:119`) | `QuicListener::bind(addr, QuicServerConfig { cert, key, idle_timeout: policy.timeouts.control_idle, max_concurrent_streams: policy.limits.active_connections_per_session + 1, alpn: [] })` (`server/config.rs:74-86`) |
+| Control transport | one TLS-over-TCP connection | one UDP QUIC connection per session; first inbound bidi stream is the control stream (`server/accept.rs:380-391`) |
+| Data transport | one TCP+TLS connection per external conn | one bidi stream per external conn on the **same** QUIC connection (`server/accept.rs:426-447`, `client/open.rs:59-64`) |
+| Service listeners | TCP (`TcpListener` accept in `run_service`, `server/service.rs:66-111`; bound at `:1174`) | **retained as TCP** — "Service listeners remain TCP even when the control Session uses QUIC over UDP" (`docs/SUPPORT.md:12-13`) |
 | Trust | system roots or custom CA | **platform roots only, bearer only** — custom CA / mTLS rejected, not ignored |
-| Client entry | `ClientBuilder` + `ClientTransportProfile::TcpTls` | `ClientBuilder.transport(ClientTransportProfile::Quic)` → `start_profile` → `start_quic_profile` (`client.rs:188-191`, `320-364`); conveniences `Client::start_quic[_with_connector]` (`client.rs:299-317`) |
-| Server entry | `ServerBuilder` + `ServerTransportProfile::TcpTls` | `ServerBuilder.transport(ServerTransportProfile::Quic)` → `bind_profile` → `bind_quic_profile` (`server.rs:330-333`, `337-380`); conveniences `Server::bind_quic[_with_policy]` (`server.rs:206-224`) |
+| Client entry | `ClientBuilder` + `ClientTransportProfile::TcpTls` | `ClientBuilder.transport(ClientTransportProfile::Quic)` → `start_profile` → `start_quic_profile` (`client.rs:347-422`, `320-364`); conveniences `Client::start_quic[_with_connector]` (`client.rs:305-312`) |
+| Server entry | `ServerBuilder` + `ServerTransportProfile::TcpTls` | `ServerBuilder.transport(ServerTransportProfile::Quic)` → `bind_profile` → `bind_quic_profile` (`server/config.rs:31-66`, `337-380`); conveniences `Server::bind_quic[_with_policy]` (`server/config.rs:49-57`) |
 
 ### 4.2 Handshake sequence (QUIC)
 
@@ -367,7 +367,7 @@ client (QuicClient)                       server (QuicListener, UDP)
   |--------------------------------------->| relay_with_options (opaque bytes over bidi stream)
 ```
 
-Key call sites: client `quic_reconnect_loop` (`client.rs:837-939`):
+Key call sites: client `quic_reconnect_loop` (`client/reconnect.rs:158-260`):
 config build (`867-874`), connect with `policy.timeouts.connect` (`875-887`),
 `get_connection` (`890-893`), control `open_stream` (`894-897`), then the
 shared `run_session` with `ClientDataTransport::Quic(connection)`
@@ -375,9 +375,9 @@ shared `run_session` with `ClientDataTransport::Quic(connection)`
 `policy.timeouts.connect` (`client/open.rs:59-64`) followed by `DataHello` + relay
 (`client/open.rs:66-67`).
 
-Server `quic_server_loop[_with_admission]` (`server.rs:611-706`) mirrors
+Server `quic_server_loop[_with_admission]` (`server/accept.rs:96-146`) mirrors
 `server_loop` admission accounting, then `handle_quic_connection`
-(`server.rs:708-797`): accept first stream with `policy.timeouts.handshake`
+(`server/accept.rs:159-222`): accept first stream with `policy.timeouts.handshake`
 (`716-719`), `read_boxed` expecting `ClientHello` (`720-727`), spawn
 `serve_control` (`742`), then loop `accept_stream` for data streams
 (`760-782`) each handled by `handle_quic_data_stream` (`800-816`), which
@@ -406,13 +406,13 @@ with validation (`common.rs:263-286`: nonzero, ≤24 h,
    not Eggtunnel constants; no Eggtunnel source defines them.
 2. **Eggtunnel pre-session admission (`accepted_handshakes`, default 64).**
    `Semaphore::new(counters.policy.limits.accepted_handshakes)` in both
-   `server_loop` (`server.rs:538`, `550-555`) and
-   `quic_server_loop_with_admission` (`server.rs:635`, `654-659`), plus a
-   `HandshakeGuard` active-handshake counter (`server.rs:837-858`). (`MAX_SESSIONS`
-   / `MAX_HANDSHAKES` at `server.rs:44-46` are `#[cfg(test)]`-only and play no
+   `server_loop` (`server/accept.rs:102`, `550-555`) and
+   `quic_server_loop_with_admission` (`server/accept.rs:167`, `654-659`), plus a
+   `HandshakeGuard` active-handshake counter (`server/session.rs:135-156`). (`MAX_SESSIONS`
+   / `MAX_HANDSHAKES` at `server_tests.rs:35` are `#[cfg(test)]`-only and play no
    role in production.) On exhaustion: TCP path drops the accept + `rejected+1` +
-   `ResourceExhausted` (`server.rs:550-555`); QUIC path additionally
-   `connection.close("handshake limit reached")` (`server.rs:654-659`).
+   `ResourceExhausted` (`server/accept.rs:112-117`); QUIC path additionally
+   `connection.close("handshake limit reached")` (`server/accept.rs:112-117`).
    Per `docs/SECURITY.md:50-57`, "pre-session UDP/TLS handshake work runs
    inside the adapter before Eggtunnel's semaphore is acquired", so the
    residual pre-auth admission risk is documented as observable, not
@@ -420,14 +420,14 @@ with validation (`common.rs:263-286`: nonzero, ≤24 h,
 3. **Per-session stream admission (default 128).**
    `counters.policy.limits.active_connections_per_session` (default 128),
    instantiated per QUIC connection as
-   `Semaphore(max_active_data_streams.unwrap_or(policy...))` (`server.rs:729-737`).
+   `Semaphore(max_active_data_streams.unwrap_or(policy...))` (`server/accept.rs:388-396`).
    Each accepted data stream does `try_acquire_owned`; on failure:
    `rejected+1` + `ResourceExhausted`, stream dropped without a response
-   (`server.rs:762-766`). The semaphore saturates, recovers on stream close
-   (permit is held by the spawned task, `server.rs:778-781`), and rejects
+   (`server/accept.rs:428-432`). The semaphore saturates, recovers on stream close
+   (permit is held by the spawned task, `server/accept.rs:436-439`), and rejects
    beyond the policy limit — qualified by the stream-saturation test
    (`docs/SECURITY.md:57-60`; test-only override
-   `bind_quic_with_admission_for_test`, `server.rs:226-271`, and the
+   `bind_quic_with_admission_for_test`, `server/config.rs:65-77`, and the
    saturation test `quic_stream_saturation_recovers_capacity_and_keeps_unrelated_streams_alive`,
    `server_tests/quic.rs:641`).
 
@@ -436,11 +436,11 @@ fan-out; Eggtunnel `accepted_handshakes` (default 64) caps
 **unauthenticated handshakes process-wide**
 (both TCP and QUIC); `active_connections_per_session` (default 128) caps
 **active data streams/connections per session** (QUIC `stream_admission`,
-TCP `connection_admission` `server.rs:1107-1109`, client open-task semaphore
-`policy.limits.client_open_tasks` at `client.rs:1109`) ≠
-`control_queue` (`policy.limits.control_queue`: `client.rs:1110`,
-`server.rs:1135`) ≠ `client_command_queue`
-(`policy.limits.client_command_queue`: `client.rs:337`, `427`). Any log, metric,
+TCP `connection_admission` `server/control.rs:130-132`, client open-task semaphore
+`policy.limits.client_open_tasks` at `client/reconnect.rs:197`) ≠
+`control_queue` (`policy.limits.control_queue`: `client/reconnect.rs:130`,
+`server/control.rs:145`) ≠ `client_command_queue`
+(`policy.limits.client_command_queue`: `client.rs:385`, `427`). Any log, metric,
 or doc that says "connection limit" must say which one. Do not conflate
 "connection" (QUIC UDP 4-tuple ≈ session transport) with "stream" (one
 external TCP connection) or with "handshake task" (pre-auth work unit).
@@ -449,13 +449,13 @@ Additional QUIC specifics:
 
 - `QuicServerConfig { idle_timeout: policy.timeouts.control_idle,
   max_concurrent_streams: policy.limits.active_connections_per_session + 1 }`
-  (`server.rs:350-354`); client mirrors `idle_timeout:
+  (`server/config.rs:79-83`); client mirrors `idle_timeout:
   policy.timeouts.control_idle, max_concurrent_streams:
-  policy.limits.client_open_tasks + 1` (`client.rs:867-874`) — 129 by default
+  policy.limits.client_open_tasks + 1` (`client/reconnect.rs:401-408`) — 129 by default
   on both sides, i.e. one control stream plus the full data-stream budget, so
   Eggtunnel admission rejects first.
 - Test-only admission override: `bind_quic_with_admission_for_test` scales
-  `max_concurrent_streams = max(1, n) * 2` (`server.rs:244`) — test-only,
+  `max_concurrent_streams = max(1, n) * 2` (`server/config.rs:93`) — test-only,
   `#[cfg(all(test, feature = "quic"))]`.
 - Bearer token still required inside the encrypted control stream
   (`docs/SECURITY.md:48-49`); QUIC provides confidentiality + SNI verification,
@@ -479,21 +479,21 @@ Feature: `websocket` (`crates/eggtunnel/Cargo.toml:21`). Docs:
   &url, stream, ws_config)` under `policy.timeouts.handshake`, where
   `url = format!("wss://{}", server_addr)` and `ws_config` sets
   `max_message_size = Some(1 MiB)` and `max_frame_size = Some(1 MiB)`
-  (`client.rs:713-729`). Failure maps to `Timeout` (outer) or `Tls` (inner).
+  (`client/reconnect.rs:158-203`). Failure maps to `Timeout` (outer) or `Tls` (inner).
   Data connections repeat the identical upgrade per `Open`
   (`client/open.rs:42-53`).
 - Server: after `tls_accept` (or mTLS accept — but WSS+mTLS is rejected in
   `validate_server_profile` before this point, §6), if `websocket == true`,
   `WebSocketTunnelServer::new(1024*1024)
   .accept_upgrade_with_config_over_stream(stream, ws_config)` under
-  `policy.timeouts.handshake` with the same 1 MiB caps (`server.rs:921-936`).
+  `policy.timeouts.handshake` with the same 1 MiB caps (`server/accept.rs:222-284`).
   Upgrade failure maps to `Timeout` (outer) or
   `Protocol(UnexpectedMessage)` (inner) — note asymmetry with the client side
   (§8.1).
 - Entry points: `ClientBuilder.transport(ClientTransportProfile::WebSocket)` with
   conveniences `Client::start_websocket[_with_connector]`
-  (`client.rs:229-247`), `ServerBuilder.transport(ServerTransportProfile::WebSocket)`
-  with convenience `Server::bind_websocket` (`server.rs:198-204`), CLI
+  (`client.rs:229-239`), `ServerBuilder.transport(ServerTransportProfile::WebSocket)`
+  with convenience `Server::bind_websocket` (`server/config.rs:39-49`), CLI
   `transport = "websocket_tls"` mapped to profiles in
   `client_builder` / `server_builder`
   (`crates/eggtunnel-cli/src/main.rs:138-144`, `178-184`).
@@ -520,7 +520,7 @@ Properties to hold in review:
 - **Binary messages, 1 MiB cap.** Both `WebSocketTunnel{Client,Server}::new(
   1024*1024)` and the `tokio-tungstenite` `WebSocketConfig`
   (`max_message_size = Some(1 MiB)`, `max_frame_size = Some(1 MiB)`) agree on
-  1 MiB (`client.rs:716-723`, `client/open.rs:45-48`, `server.rs:923-928`).
+  1 MiB (`client/reconnect.rs:282-289`, `client/open.rs:45-48`, `server/accept.rs:254-259`).
   Multi-frame bounded backpressure round-trips within the caps per C001
   (`docs/SECURITY.md:70-72`).
 - **Non-browser endpoint.** "Intended for non-browser tunnel clients; the
@@ -566,23 +566,23 @@ Feature: `outbound-proxy` (`crates/eggtunnel/Cargo.toml:22`, workspace
   through the canonical `__`-separated pproxy URI syntax
   (`docs/ARCHITECTURE.md:17-20`, `docs/SUPPORT.md:8`). Parsing is a single
   delegation: `OutboundConnector::from_pproxy_uri(chain)`
-  (`client.rs:476-482`); invalid chains →
+  (`client.rs:577-581`); invalid chains →
   `TunnelError::Configuration("invalid outbound proxy chain")`. Public
-  pre-flight: `validate_outbound_proxy` (`client.rs:470-473`,
+  pre-flight: `validate_outbound_proxy` (`client.rs:598-607`,
   re-exported `lib.rs:20-21`); `eggtunnel check` additionally validates the
   full builder via `client_builder(config)?.validate()`
   (`crates/eggtunnel-cli/src/main.rs:245`).
 - **Per-connection use.** `connect_server(endpoint,
-  connect_timeout, outbound.as_deref())` (`client.rs:806-834`): with a proxy,
+  connect_timeout, outbound.as_deref())` (`client/reconnect.rs:320-353`): with a proxy,
   `split_endpoint` → `outbound.connect_tcp_timeout_detailed(host, port,
-  connect_timeout)` (`client.rs:815-827`); without, direct
-  `TcpStream::connect` (`829-833`). Both control (`client.rs:690-693`) and
+  connect_timeout)` (`client/reconnect.rs:330-342`); without, direct
+  `TcpStream::connect` (`829-833`). Both control (`client/reconnect.rs:265-268`) and
   every data dial (`client/open.rs:33-36`) traverse the same proxy path, so a
   session over proxy opens N proxied data connections.
 - **Auth.** HTTP CONNECT Basic and SOCKS5 username/password via URI userinfo
   (`docs/SECURITY.md:81-83`). `OutboundConnectErrorKind::Authentication /
   Policy / Timeout` map to `Authentication / Authorization / Timeout`,
-  everything else to `Disconnected` (`client.rs:821-826`) — hence proxy auth
+  everything else to `Disconnected` (`client/reconnect.rs:332-337`) — hence proxy auth
   failure is typed, never a silent direct fallback.
 
 ### 6.2 Credential handling (env var + redaction)
@@ -617,7 +617,7 @@ Feature: `outbound-proxy` (`crates/eggtunnel/Cargo.toml:22`, workspace
   path, protecting authentication from a proxy that only forwards CONNECT or
   SOCKS traffic" (`docs/SECURITY.md:74-76`). Concretely: proxy yields a raw
   `BoxStream`, then the **same** `tls_connect(stream, tls, &tls_server_name)`
-  + optional WSS upgrade runs on top (`client.rs:696-734` control,
+  + optional WSS upgrade runs on top (`client/reconnect.rs:269-307` control,
   `client/open.rs:31-53` data). End-to-end TLS tests:
   `outbound_http_connect_keeps_eggtunnel_tls_end_to_end`
   (`server_tests/proxy.rs:5`),
@@ -629,22 +629,22 @@ Feature: `outbound-proxy` (`crates/eggtunnel/Cargo.toml:22`, workspace
   `outbound_proxy_handshake_timeout_...` (`server_tests/proxy.rs:253`),
   `outbound_proxy_cancellation_...` (`server_tests/proxy.rs:323`).
 - **Rejected combos (fail-closed, at both library and CLI layers):**
-  enforcement lives in `validate_client_profile` (`client.rs:524-568`) and
-  `validate_server_profile` (`server.rs:459-483`); the CLI delegates through
+  enforcement lives in `validate_client_profile` (`endpoint.rs:58-102`) and
+  `validate_server_profile` (`server/config.rs:148-172`); the CLI delegates through
   `client_builder(config)?.validate()` / `server_builder(config)?.validate()`
   inside `check_config` (`main.rs:245`, `272`), after its own structural checks
   (`main.rs:198-244`, `247-273`):
 
   | Combination | Library behavior | CLI `check` behavior |
   |---|---|---|
-  | proxy + QUIC | `validate_client_profile` rejects proxy/identity/CA with `Quic` (`client.rs:541-548`); `start_profile` Quic arm takes no proxy (`client.rs:188-191`) | structural transport check (`main.rs:200-205`) + builder `validate()` (`main.rs:245`) → error |
-  | proxy + mTLS | `validate_client_profile` rejects identity + proxy (`client.rs:555-560`); mTLS arm passes `None` as outbound (`client.rs:155-168`) | `client_cert`/`client_key` pairing + file checks (`main.rs:223-244`) + builder `validate()` (`main.rs:245`) → error |
-  | QUIC + custom CA / mTLS | `validate_client_profile` rejects `ca_pem.is_some()` / identity with `Quic` (`client.rs:541-548`); `start_quic_profile` also rejects `ca_pem` (`client.rs:330-334`) | builder `validate()` (`main.rs:245`); server `client_ca` + non-TCP profile rejected by `validate_server_profile` (`server.rs:469-481`, via `main.rs:272`) |
-  | WSS + mTLS | `validate_client_profile` rejects identity with `WebSocket` (`client.rs:549-554`); `validate_server_profile` rejects `client_ca` with non-`TcpTls` (`server.rs:469-481`) | builder `validate()` (`main.rs:245`, `272`) → error |
+  | proxy + QUIC | `validate_client_profile` rejects proxy/identity/CA with `Quic` (`endpoint.rs:58-102`); `start_profile` Quic arm takes no proxy (`client.rs:347-422`) | structural transport check (`main.rs:200-205`) + builder `validate()` (`main.rs:245`) → error |
+  | proxy + mTLS | `validate_client_profile` rejects identity + proxy (`endpoint.rs:58-102`); mTLS arm passes `None` as outbound (`client.rs:347-422`) | `client_cert`/`client_key` pairing + file checks (`main.rs:223-244`) + builder `validate()` (`main.rs:245`) → error |
+  | QUIC + custom CA / mTLS | `validate_client_profile` rejects `ca_pem.is_some()` / identity with `Quic` (`endpoint.rs:58-102`); `start_quic_profile` also rejects `ca_pem` (`client.rs:329-397`) | builder `validate()` (`main.rs:245`); server `client_ca` + non-TCP profile rejected by `validate_server_profile` (`server/config.rs:148-174`, via `main.rs:272`) |
+  | WSS + mTLS | `validate_client_profile` rejects identity with `WebSocket` (`endpoint.rs:58-102`); `validate_server_profile` rejects `client_ca` with non-`TcpTls` (`server/config.rs:148-174`) | builder `validate()` (`main.rs:245`, `272`) → error |
   | server + proxy | No server proxy API | `main.rs:269-271`: `outbound_proxy_env` in server mode → error |
 
   WSS **over** proxy (`start_websocket_with_outbound_proxy[+connector]`,
-  `client.rs:273-297`) is the one allowed composition: proxy → TLS → WSS
+  `client.rs:280-293`) is the one allowed composition: proxy → TLS → WSS
   upgrade, selected by `transport = "websocket_tls"` + `outbound_proxy_env`
   in `client_builder` (`main.rs:138-164`).
 
@@ -668,15 +668,15 @@ service/bind/admission ceilings, shutdown/drain, transport **adapter selection**
 | Eggress crate (=1.0.8) | Supplies | Used at |
 |---|---|---|
 | `eggress-core` | `BoxStream` stream representation | `wire_io.rs:1`, all `read/write_boxed` call sites |
-| `eggress-relay` | `relay_with_options` + `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` opaque byte copy | `client/open.rs:67`, `server.rs:1370` |
-| `eggress-transport-tls` | `TlsClient/ServerConfigBuilder`, `tls_connect`, `tls_accept` | `client.rs:5,628-636,696-699`; `client/open.rs:40`; `server.rs:486-494,888-895` |
-| `eggress-transport-quic` | `QuicListener/Client/Connection`, `QuicClient/ServerConfig`, stream open/accept | `client.rs:867-897`; `client/open.rs:59-64`; `server.rs:345-357,625-816` |
-| `eggress-protocol-websocket` | `WebSocketTunnelClient/Server`, `connect_over_stream_with_config`, `accept_upgrade_with_config_over_stream` | `client.rs:719-729`; `client/open.rs:45-52`; `server.rs:928-933` |
-| `eggress-outbound` (+ `pproxy-compat`) | `OutboundConnector::from_pproxy_uri`, `connect_tcp_timeout_detailed`, `OutboundConnectErrorKind` | `client.rs:476-482,811-827` |
+| `eggress-relay` | `relay_with_options` + `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` opaque byte copy | `client/open.rs:67`, `server/service.rs:121` |
+| `eggress-transport-tls` | `TlsClient/ServerConfigBuilder`, `tls_connect`, `tls_accept` | `client.rs:5,650-660,269-272`; `client/open.rs:40`; `server/tls.rs:23-35,235-242` |
+| `eggress-transport-quic` | `QuicListener/Client/Connection`, `QuicClient/ServerConfig`, stream open/accept | `client/reconnect.rs:401-431`; `client/open.rs:59-64`; `server/config.rs:74-86,131-322` |
+| `eggress-protocol-websocket` | `WebSocketTunnelClient/Server`, `connect_over_stream_with_config`, `accept_upgrade_with_config_over_stream` | `client/reconnect.rs:276-286`; `client/open.rs:45-52`; `server/accept.rs:257-262` |
+| `eggress-outbound` (+ `pproxy-compat`) | `OutboundConnector::from_pproxy_uri`, `connect_tcp_timeout_detailed`, `OutboundConnectErrorKind` | `client.rs:577-581,330-397` |
 
 Also: `tokio-tungstenite 0.26.2` supplies only the `WebSocketConfig`
 (1 MiB `max_message_size` + `max_frame_size`) passed into the Eggress adapter
-(`client.rs:716-718`, `client/open.rs:46-48`; `server.rs:923-925`) — the tunnel framing itself is Eggress's.
+(`client/reconnect.rs:282-284`, `client/open.rs:46-48`; `server/accept.rs:254-256`) — the tunnel framing itself is Eggress's.
 
 Boundaries worth asserting in review:
 
@@ -703,27 +703,27 @@ pins current behavior.
 
 - [ ] **No plaintext fallback.** Control and every data connection establish
       TLS before the first Eggtunnel byte on all profiles
-      (`client.rs:690-699`, `client/open.rs:31-41`; `server.rs:887-895`). WS upgrade
-      happens only over verified TLS (`client.rs:713-729`,
-      `client/open.rs:42-53`, `server.rs:921-936`). There is no `ws://` or bare-TCP session path.
+      (`client/reconnect.rs:265-274`, `client/open.rs:31-41`; `server/accept.rs:234-242`). WS upgrade
+      happens only over verified TLS (`client/reconnect.rs:158-203`,
+      `client/open.rs:42-53`, `server/accept.rs:222-284`). There is no `ws://` or bare-TCP session path.
       Reject any change that adds one without an ADR.
 - [ ] **Version check is major-only, fail-closed.** `serve_control` rejects
-      `hello.version.major != CURRENT.major` (`server.rs:1055-1062`);
+      `hello.version.major != CURRENT.major` (`server/control.rs:86-93`);
       `decode_frame` rejects bad magic / unknown major (`proto:475-484`) and unknown
       message IDs (`proto:266`) / oversize frames (`proto:488-489`). Client checks `ServerHello` major
-      (`client.rs:1037-1045`). Minor is informational. Confirm tests still pin
+      (`client/reconnect.rs:283-291`). Minor is informational. Confirm tests still pin
       wire `CURRENT` + message-ID coverage (`proto:609-...`; see `proto` tests).
 - [ ] **Error-kind collapse on WS.** Client maps WS upgrade failure to
-      `Tls`/`Timeout` (`client.rs:726-728`, `client/open.rs:51`); server maps it to
-      `Timeout`/`Protocol(UnexpectedMessage)` (`server.rs:930-933`). Same
+      `Tls`/`Timeout` (`client/reconnect.rs:289-291`, `client/open.rs:51`); server maps it to
+      `Timeout`/`Protocol(UnexpectedMessage)` (`server/accept.rs:259-262`). Same
       wire event yields `Transport` on one side and `Protocol` on the other
       (`common.rs:466-482`). Acceptable today (typed, no silent retry
       difference — auth failures still break the reconnect loop,
-      `client.rs:765-773`), but do not "fix" one side without updating
+      `client/reconnect.rs:106-114`), but do not "fix" one side without updating
       dashboards/tests that key on termination categories.
 - [ ] **Auth-failure loop break preserved.** Only
       `Authentication`/`Authorization` break `reconnect_loop`/`quic_reconnect_loop`
-      (`client.rs:765-773`, `920-928`); `Tls`/`Timeout`/`Disconnected` retry
+      (`client/reconnect.rs:106-114`, `920-928`); `Tls`/`Timeout`/`Disconnected` retry
       with backoff. A downgrade attacker forcing TLS failures must not be
       reclassified into a loop-breaking category that bricks reconnect, nor
       into a retried category for auth failures.
@@ -732,28 +732,28 @@ pins current behavior.
 
 - [ ] **SNI on every connection, not just control.** `tls_server_name` is
       cloned into `ClientDataTransport::TcpTls` and reused per data dial
-      (`client.rs:740-747`, `client/open.rs:31-41`). Verify any new data-path constructor
+      (`client/reconnect.rs:305-312`, `client/open.rs:31-41`). Verify any new data-path constructor
       threads `server_name` through; a missing SNI on data connections is a
       finding.
 - [ ] **Custom CA only where supported.** Baseline + WSS + mTLS honor
-      `ca_pem` (`client.rs:628-661`); QUIC rejects it
-      (`validate_client_profile`, `client.rs:541-548`, plus `start_quic_profile`,
-      `client.rs:330-334`; CLI delegates via builder `validate()`,
+      `ca_pem` (`client/reconnect.rs:186-219`); QUIC rejects it
+      (`validate_client_profile`, `endpoint.rs:58-102`, plus `start_quic_profile`,
+      `client.rs:329-397`; CLI delegates via builder `validate()`,
       `main.rs:245`). Do not add a QUIC custom-CA
       knob by silently ignoring the PEM — the current fail-closed reject is
       the safe behavior until the adapter supports it
       (`docs/SECURITY.md:46-49`).
 - [ ] **mTLS principal binding on data.** Server captures leaf SHA-256 at
-      accept (`server.rs:898-911`, `certificate_principal` `server.rs:521-525`
+      accept (`server/accept.rs:236-249`, `certificate_principal` `server/tls.rs:35-63`
       via `sha2`, PEM parsed with the rustls `pki-types` parser
       `pem.rs:5-22`), stores it on the session (`serve_control`
-      `server.rs:1102-1112`), and `accept_data_hello` requires
-      `session.principal == principal` (`server.rs:988-997`). Bearer token is
+      `server/control.rs:125-135`), and `accept_data_hello` requires
+      `session.principal == principal` (`server/pending.rs:52-61`). Bearer token is
       still required alongside the certificate. Any new
       transport must carry the principal through `ConnectionContext`
-      (`server.rs:824-835`) or be rejected alongside mTLS (§6 table).
-      `ClientIdentity` redacts + zeroizes (`client.rs:501-516`); `ServerConfig`
-      redacts + zeroizes (`server.rs:58-78`).
+      (`server/control.rs:46-66`) or be rejected alongside mTLS (§6 table).
+      `ClientIdentity` redacts + zeroizes (`client.rs:634-649`); `ServerConfig`
+      redacts + zeroizes (`server/config.rs:29-49`).
 - [ ] **Ring-provider global.** First Eggress TLS builder call installs the
       process-default provider (`docs/SECURITY.md:41-43`). Embedding tests
       that construct two different TLS stacks in one process should assert no
@@ -766,42 +766,42 @@ pins current behavior.
       `outbound_proxy_env`, never TOML (`main.rs:133-137`, `226-239`);
       `Snapshot` has no proxy fields (`common.rs:136-160`); `ClientConfig`
       and `ServerConfig`/`ClientIdentity` `Debug` impls redact
-      (`client/config.rs:56-66`, `client.rs:501-508`; `server.rs:65-78`). Run the
+      (`client/config.rs:56-66`, `client.rs:634-641`; `server/config.rs:36-49`). Run the
       `*_without_secret_leak` / `*_without_secret_in_diagnostic` tests on any
       change to error formatting (`server_tests/proxy.rs:189`, `483`,
       `692`).
 - [ ] **Typed proxy errors, no fallback.** `OutboundConnectErrorKind` →
-      `TunnelError` mapping (`client.rs:821-826`) must stay total; adding a
+      `TunnelError` mapping (`client/reconnect.rs:332-337`) must stay total; adding a
       new Eggress error kind that hits the `_ => Disconnected` arm is fine,
       mapping it to silent direct-dial is a finding. Confirm refusal/timeout/
       cancellation tests still pass (`server_tests/proxy.rs:189`, `253`,
       `323`).
 - [ ] **`__` chain parsing stays delegated.** `parse_outbound_proxy` is a thin
-      wrapper over `from_pproxy_uri` (`client.rs:476-482`). Do not hand-roll
+      wrapper over `from_pproxy_uri` (`client.rs:577-581`). Do not hand-roll
       URI splitting (userinfo `@`, IPv6 `[]`, multi-hop `__`) in Eggtunnel;
       divergence from `pproxy-compat` semantics is a finding.
 
 ### 8.4 Stream-vs-connection limit confusion
 
 - [ ] **Name the layer.** `accepted_handshakes` (pre-auth, process-wide,
-      default 64; `common.rs:232-245`, enforced `server.rs:538,635`) ≠
+      default 64; `common.rs:232-245`, enforced `server/accept.rs:102,167`) ≠
       `active_connections_per_session` (per-session, default 128;
       `common.rs:232-245`) ≠ Eggress `1024` connection-tasks /
       `4096` stream-tasks (adapter-internal, `docs/SECURITY.md:51-53`) ≠
       `max_concurrent_streams` (QUIC transport knob, policy-derived 129 by
-      default; `server.rs:351-354`, `client.rs:871-872`) ≠ client
-      `client_open_tasks` (default 128, `client.rs:1109`) ≠
-      `control_queue` (default 128: `client.rs:1110`, `server.rs:1135`) ≠
-      `client_command_queue` (default 32: `client.rs:337,427`).
-      (`MAX_SESSIONS`/`MAX_HANDSHAKES` at `server.rs:44-46` are
+      default; `server/config.rs:80-83`, `client/reconnect.rs:405-406`) ≠ client
+      `client_open_tasks` (default 128, `client/reconnect.rs:197`) ≠
+      `control_queue` (default 128: `client/reconnect.rs:130`, `server/control.rs:145`) ≠
+      `client_command_queue` (default 32: `client.rs:385,385`).
+      (`MAX_SESSIONS`/`MAX_HANDSHAKES` at `server_tests.rs:35` are
       `#[cfg(test)]`-only.) Any log, metric,
       or doc that says "connection limit" must say which one.
 - [ ] **Admission release paths.** Pre-auth `admission` permit + `handshake_guard`
       are dropped exactly once on auth success/failure/serve entry
-      (`server.rs:1081-1082`, `1094-1095`; data-fast-path `server.rs:948-949`,
-      `handle_quic_data_stream` `server.rs:814`). QUIC
+      (`server/control.rs:112-113`, `1094-1095`; data-fast-path `server/accept.rs:251-252`,
+      `handle_quic_data_stream` `server/accept.rs:474`). QUIC
       `stream_admission` permits are held by the spawned data task
-      (`server.rs:778-781`). Leaking either permit under a new early-return is
+      (`server/accept.rs:436-439`). Leaking either permit under a new early-return is
       a resource-exhaustion finding; the saturation/recovery test
       (`server_tests/quic.rs:641`) is the regression net.
 - [ ] **Pre-session UDP work is outside the accepted-handshakes cap.** QUIC handshake/CPU cost
@@ -820,7 +820,7 @@ pins current behavior.
       without a new correlation test.
 - [ ] **Relay bounds identical on both ends.** Both relays use
       `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` (`client/open.rs:67`,
-      `server.rs:1370`). Changing one side's buffer/drain without the other
+      `server/service.rs:121`). Changing one side's buffer/drain without the other
       alters backpressure behavior under the 1 MiB WS caps (§5.2); the bounded
       backpressure C001 case is the gate.
 - [ ] **`DataHello`-then-opaque invariant.** `DataHello` is the last
@@ -828,8 +828,8 @@ pins current behavior.
       `accept_data_hello` both sides hand the stream to `relay_with_options`
       and never `read_boxed` again. Any post-`DataHello` framing change breaks
       relay pairing — review data-path changes with `handle_quic_data_stream`
-      (`server.rs:800-816`), `handle_connection` data branch
-      (`server.rs:946-965`), and `handle_open` (`client/open.rs:12-89`) together.
+      (`server/accept.rs:458-474`), `handle_connection` data branch
+      (`server/accept.rs:248-267`), and `handle_open` (`client/open.rs:12-89`) together.
 
 ### 8.6 Quick file:line index for reviewers
 
@@ -838,17 +838,17 @@ pins current behavior.
 | Framing semantics | `wire_io.rs:7-47`, `proto:457-504` |
 | Transport neutrality | `wire_io.rs:49-57`, `lib.rs:22-33` |
 | Feature gates | `crates/eggtunnel/Cargo.toml:15-23`, `Cargo.toml:22-30` |
-| Builder profiles | `client/config.rs:68-156`, `server.rs:80-159`, `client.rs:138-212`, `server.rs:302-380` |
-| TLS baseline build | `client.rs:628-636`, `server.rs:486-494`, `client.rs:690-699`, `server.rs:887-895` |
-| Runtime invariant | `client.rs:326-328,421-423`, `server.rs:389-391`, `lib.rs:3-5` |
+| Builder profiles | `client/config.rs:68-156`, `server/config.rs:51-130`, `client.rs:143-217`, `server.rs:180-213` |
+| TLS baseline build | `client.rs:650-659`, `server/tls.rs:23-35`, `client/reconnect.rs:269-275`, `server/accept.rs:285-331` |
+| Runtime invariant | `client.rs:335-342`, `server.rs:107-112`, `lib.rs:3-5` |
 | RuntimePolicy limits/timeouts | `common.rs:194-316` |
-| QUIC dial/accept | `client.rs:837-939`, `client/open.rs:59-67`, `server.rs:206-224,337-380,611-816` |
-| QUIC limits | `common.rs:194-245`, `server.rs:729-737,762-766`, `server.rs:350-354`, `client.rs:867-874`, `docs/SECURITY.md:46-62` |
-| WSS upgrade | `client.rs:713-729`, `client/open.rs:42-53`, `server.rs:921-936` |
+| QUIC dial/accept | `client/reconnect.rs:158-203,392-428`, `client/open.rs:59-67`, `server/config.rs:52-60,61-130` |
+| QUIC limits | `common.rs:194-245`, `server/accept.rs:388-396,428-432`, `server/config.rs:79-83`, `client/reconnect.rs:401-408`, `docs/SECURITY.md:46-62` |
+| WSS upgrade | `client/reconnect.rs:158-203`, `client/open.rs:42-53`, `server/accept.rs:222-284` |
 | WSS close semantics | `docs/SECURITY.md:64-72`, `docs/SUPPORT.md:15-16,26-30`, `server_tests/websocket.rs:17,195` |
-| Proxy dial/auth | `client.rs:476-482,806-834`, `server_tests/proxy.rs:5,91,381-...` |
+| Proxy dial/auth | `client.rs:577-581,325-392`, `server_tests/proxy.rs:5,91,381-...` |
 | Proxy redaction | `common.rs:136-160`, `client/config.rs:56-66`, `server_tests/proxy.rs:189,483,692`, `docs/SECURITY.md:74-78` |
-| Rejected combos | `client.rs:524-568`, `server.rs:459-483`, `main.rs:198-273` |
-| mTLS identity/principal | `client.rs:484-516,639-661`, `server.rs:496-525,898-911,988-997,1102-1112`, `pem.rs:5-22` |
+| Rejected combos | `endpoint.rs:58-102`, `server/config.rs:148-172`, `main.rs:198-273` |
+| mTLS identity/principal | `client.rs:612-621,82-104`, `server/tls.rs:23-35,898-911,52-61,125-135`, `pem.rs:5-22` |
 | CLI builder delegation | `main.rs:132-164,166-196,198-277` |
 | Ownership boundary | `ADR-0001` (decision + consequences), `docs/ARCHITECTURE.md:1-21` |

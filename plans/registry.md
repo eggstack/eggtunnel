@@ -30,13 +30,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014 ready | M012 release qualification and M013 publication are closed; M014 is the current post-0.2 structural/maintenance milestone. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M014 active | M012 release qualification and M013 publication are closed; M014 is the current post-0.2 structural/maintenance milestone. |
 
 ## Active and ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | ready | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | M013 publication event closed; behavior-preserving structural/feature/maintenance pass. |
+| Reverse session | M014 post-0.2 runtime topology/maintenance consolidation | active | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | M013 publication event closed; behavior-preserving structural/feature/maintenance pass. |
 
 ## Recently closed or conditionally closed implementation plans
 

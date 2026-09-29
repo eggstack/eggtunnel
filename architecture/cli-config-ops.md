@@ -40,7 +40,7 @@ Deserialization structs at `crates/eggtunnel-cli/src/main.rs:28-72`. Unknown-fie
 | `allow_public_service_binds` | `bool` (`crates/eggtunnel-cli/src/main.rs:41`) | `false` | server only | Maps 1:1 to `ServerConfig.allow_public_service_binds`. Default is loopback-only. |
 | `server_addr` | `Option<String>` (`crates/eggtunnel-cli/src/main.rs:43`) | `None` | client only | Required in client mode; parsed by `checked_endpoint` (hostname allowed, unlike `listen_addr`). |
 | `tls_server_name` | `Option<String>` (`crates/eggtunnel-cli/src/main.rs:45`) | `None` | client only | Required, must be non-empty in client mode. Used as TLS SNI/verification name end-to-end (also over proxy). |
-| `ca_cert` | `Option<PathBuf>` (`crates/eggtunnel-cli/src/main.rs:47`) | `None` | client only (file path) | Optional. If present, file must be readable (`fs::read`). `None` means Eggress system-root verifier (`crates/eggtunnel/src/client.rs:628-636`). |
+| `ca_cert` | `Option<PathBuf>` (`crates/eggtunnel-cli/src/main.rs:47`) | `None` | client only (file path) | Optional. If present, file must be readable (`fs::read`). `None` means Eggress system-root verifier (`crates/eggtunnel/src/client/reconnect.rs:186-194`). |
 | `outbound_proxy_env` | `Option<String>` (`crates/eggtunnel-cli/src/main.rs:49`) | `None` | client only | **Name** of env var holding the proxy URI/chain. Must be non-empty name; referenced var must exist, be non-blank, and pass `validate_outbound_proxy`. |
 | `client_cert` | `Option<PathBuf>` (`crates/eggtunnel-cli/src/main.rs:51`) | `None` | client only (mTLS) | Must be paired with `client_key`. Both files read; both must be non-empty. |
 | `client_key` | `Option<PathBuf>` (`crates/eggtunnel-cli/src/main.rs:53`) | `None` | client only (mTLS) | Must be paired with `client_cert`. |
@@ -53,7 +53,7 @@ Deserialization structs at `crates/eggtunnel-cli/src/main.rs:28-72`. Unknown-fie
 |---|---|---|---|
 | `id` | `id: u64` (`crates/eggtunnel-cli/src/main.rs:66`) | **required** | Wrapped as `ServiceId(u64)` in `client_services` (`crates/eggtunnel-cli/src/main.rs:91`). |
 | `name` | `name: String` (`crates/eggtunnel-cli/src/main.rs:67`) | **required** | Validated by `ServiceName::new` (wire rules: ≤128 B, `[A-Za-z0-9-_.]`; see overview §1). Failure aborts `client_builder` at `crates/eggtunnel-cli/src/main.rs:153` and `check_config` at `:219`. |
-| `target_host` | `target_host: String` (`crates/eggtunnel-cli/src/main.rs:68`) | **required** | Validated by `TcpTarget::new` (≤253 B host). Client-owned; server never sees it. |
+| `target_host` | `target_host: String` (`crates/eggtunnel-cli/src/main.rs:68`) | **required** | Validated by `TcpTarget::new` (≤253 B host). Client-owned and client-authoritative; the server receives it inside `RegisterService` as non-authoritative bounded metadata only. |
 | `target_port` | `target_port: u16` (`crates/eggtunnel-cli/src/main.rs:69`) | **required** | `u16`; TOML out-of-range is a deserialize error in `read_config`. |
 | `bind_port` | `bind_port: u16` (`crates/eggtunnel-cli/src/main.rs:71`) | `0` | Server-side requested port. `0` = ephemeral loopback. Always lowered to `RequestedBind::Loopback { port }` — the CLI cannot request a non-loopback bind directly (public binds still gated by server `allow_public_service_binds` policy). |
 
@@ -89,7 +89,7 @@ The accepted set is hard-coded once in `check_config` (`crates/eggtunnel-cli/src
 
 ## 2. `check_config()` validation matrix
 
-Entry: `crates/eggtunnel-cli/src/main.rs:198-277`. Called by all three config-consuming paths (`Check` at `:284`, `Server` at `:289`, `Client` at `:312`). Returns `Result<(), Box<dyn Error>>`; first failure wins (sequential `return Err`, no error accumulation). Each mode branch performs CLI-owned file-shape checks and then ends with `client_builder(config)?.validate()` (`:245`) / `server_builder(config)?.validate()` (`:272`), so the typed transport/CA/mTLS/proxy matrix is library-owned (`validate_client_profile` at `crates/eggtunnel/src/client.rs:524`, `validate_server_profile` at `crates/eggtunnel/src/server.rs:459`).
+Entry: `crates/eggtunnel-cli/src/main.rs:198-277`. Called by all three config-consuming paths (`Check` at `:284`, `Server` at `:289`, `Client` at `:312`). Returns `Result<(), Box<dyn Error>>`; first failure wins (sequential `return Err`, no error accumulation). Each mode branch performs CLI-owned file-shape checks and then ends with `client_builder(config)?.validate()` (`:245`) / `server_builder(config)?.validate()` (`:272`), so the typed transport/CA/mTLS/proxy matrix is library-owned (`validate_client_profile` at `crates/eggtunnel/src/endpoint.rs:58`, `validate_server_profile` at `crates/eggtunnel/src/server/config.rs:148`).
 
 ### 2.1 Common prologue (both modes)
 
@@ -111,9 +111,9 @@ Entry: `crates/eggtunnel-cli/src/main.rs:198-277`. Called by all three config-co
 | L6 | `ca_cert` file readable if present | `:220-222` (`fs::read`) | Missing file / permission error propagates as io error. **Only readability is checked; PEM is not parsed** (see §7.4). |
 | L7 | mTLS pair completeness | `:223-225` (`is_some() != is_some()`) | Exactly one of `client_cert`/`client_key` set → `client_cert and client_key must be configured together`. |
 | L8 | Proxy env name non-empty | `:226-232` (`is_some_and(str::is_empty)`) | `outbound_proxy_env = ""` → `must name an environment variable`. Note: only the *name* is checked here; the *value* is checked next. |
-| L9 | Proxy var present and non-blank | `:233-239` | Missing var → `outbound proxy variable {name} is missing`; blank/whitespace → `{name} is empty`. The URI/chain shape itself is **not** validated here — it is validated by the library (`validate_client_profile` at `crates/eggtunnel/src/client.rs:524` → `parse_outbound_proxy` at `:476-482`, mapped to `invalid outbound proxy chain`). Supported families per `docs/CONFIGURATION.md:69-80`: direct, HTTP CONNECT, SOCKS5, `__`-separated chains; userinfo auth. |
+| L9 | Proxy var present and non-blank | `:233-239` | Missing var → `outbound proxy variable {name} is missing`; blank/whitespace → `{name} is empty`. The URI/chain shape itself is **not** validated here — it is validated by the library (`validate_client_profile` at `crates/eggtunnel/src/endpoint.rs:58` → `parse_outbound_proxy` at `:476-482`, mapped to `invalid outbound proxy chain`). Supported families per `docs/CONFIGURATION.md:69-80`: direct, HTTP CONNECT, SOCKS5, `__`-separated chains; userinfo auth. |
 | L10 | mTLS files non-empty | `:240-244` (let-chains `if let … && (fs::read(cert)?.is_empty() \|\| fs::read(key)?.is_empty())`) | Either file empty → `client certificate and key files must not be empty`. Reads each file **twice** (once per `fs::read` call in the `\|\|` condition); TOCTOU window is negligible for CLI but noted in §7. |
-| L11 | Library profile validation | `:245` via `client_builder(config)?.validate()` | QUIC + `ca_cert`/identity/proxy, WSS + mTLS, proxy + mTLS, malformed proxy chain, bad endpoint/TLS-name/service-uniqueness/size limits, and non-default `RuntimePolicy` violations — all owned by `validate_client_profile` (`crates/eggtunnel/src/client.rs:524-568`). |
+| L11 | Library profile validation | `:245` via `client_builder(config)?.validate()` | QUIC + `ca_cert`/identity/proxy, WSS + mTLS, proxy + mTLS, malformed proxy chain, bad endpoint/TLS-name/service-uniqueness/size limits, and non-default `RuntimePolicy` violations — all owned by `validate_client_profile` (`crates/eggtunnel/src/endpoint.rs:58-102`). |
 
 `client_builder` itself (`crates/eggtunnel-cli/src/main.rs:132-164`): 3-way transport map (`:138-144`), `ClientConfig` assembly with `checked_endpoint` + `ca_pem` read + `load_token` + `client_services` (`:145-154`), `.transport(profile).runtime_policy(RuntimePolicy::default())` (`:155-156`), `.outbound_proxy(proxy)` when set (`:157-159`, value read once via `env::var` at `:133-137`), `.with_identity(ClientIdentity::new(...))` when the pair is present (`:160-162`).
 
@@ -127,7 +127,7 @@ Entry: `crates/eggtunnel-cli/src/main.rs:198-277`. Called by all three config-co
 | S4 | Cert + key files non-empty | `:261-263` | Either empty → `TLS certificate and key files must not be empty`. **PEM is not parsed here** (see §7.4). |
 | S5 | `client_ca` file non-empty if present | `:264-268` (let-chains `if let … &&`) | Empty → `client CA file must not be empty`. Missing/unreadable propagates io error. |
 | S6 | No `outbound_proxy_env` | `:269-271` | Any `Some` (even `""`) → `outbound_proxy is only valid in client mode`. |
-| S7 | Library profile validation | `:272` via `server_builder(config)?.validate()` | mTLS-on-QUIC/WSS (`client_ca` with a non-TCP profile), empty CA bundle, bad cert/key size, invalid `BindPolicy`/`RuntimePolicy` — all owned by `validate_server_profile` (`crates/eggtunnel/src/server.rs:459-484`). |
+| S7 | Library profile validation | `:272` via `server_builder(config)?.validate()` | mTLS-on-QUIC/WSS (`client_ca` with a non-TCP profile), empty CA bundle, bad cert/key size, invalid `BindPolicy`/`RuntimePolicy` — all owned by `validate_server_profile` (`crates/eggtunnel/src/server/config.rs:148-173`). |
 
 Not validated in server mode: `server_addr`, `tls_server_name`, `services`, `ca_cert`, `client_cert`/`client_key` (silently ignored if set — see §7.1), and `allow_public_service_binds` (any bool accepted; passed through to `ServerConfig` and `BindPolicy`).
 
@@ -137,12 +137,12 @@ Not validated in server mode: `server_addr`, `tls_server_name`, `services`, `ca_
 
 | Combination | Where rejected | Why (per code + docs) |
 |---|---|---|
-| QUIC + `ca_cert` | Library: `validate_client_profile` (`crates/eggtunnel/src/client.rs:541-548`) via CLI `:245` | Eggress QUIC uses platform roots; custom bundles unsupported (`docs/CONFIGURATION.md:57-59`). |
-| QUIC + `client_cert`/`client_key` (client) / `client_ca` (server) | Library: client `:541-548`; server `validate_server_profile` (`crates/eggtunnel/src/server.rs:469-481`) via CLI `:245` / `:272` | QUIC adapter has no mTLS identity path; server mTLS is TCP/TLS-only. |
+| QUIC + `ca_cert` | Library: `validate_client_profile` (`crates/eggtunnel/src/endpoint.rs:58-102`) via CLI `:245` | Eggress QUIC uses platform roots; custom bundles unsupported (`docs/CONFIGURATION.md:57-59`). |
+| QUIC + `client_cert`/`client_key` (client) / `client_ca` (server) | Library: client `:541-548`; server `validate_server_profile` (`crates/eggtunnel/src/server/config.rs:148-174`) via CLI `:245` / `:272` | QUIC adapter has no mTLS identity path; server mTLS is TCP/TLS-only. |
 | QUIC + `outbound_proxy_env` | Library: client `:541-548` via CLI `:245` | QUIC is UDP; proxy traversal unsupported (`docs/OPERATIONS.md:40-41`, `59-60`). |
 | WSS + mTLS (`client_cert`/`key` or `client_ca`) | Library: client `:549-554`; server `:469-481` via CLI `:245` / `:272` | Current WSS profile: bearer + CA roots only (`docs/CONFIGURATION.md:63-67`). |
 | Proxy + mTLS | Library: client `:555-560` via CLI `:245` | Outbound-proxy path establishes TCP before TLS; mTLS identity not plumbed through it. |
-| Malformed proxy URI/chain | Library: client `:561-564` (`parse_outbound_proxy` at `crates/eggtunnel/src/client.rs:476-482`) via CLI `:245`; re-exported as `validate_outbound_proxy` (`crates/eggtunnel/src/client.rs:470-473`) | `OutboundConnector::from_pproxy_uri` rejects; mapped to `invalid outbound proxy chain`. |
+| Malformed proxy URI/chain | Library: client `:561-564` (`parse_outbound_proxy` at `crates/eggtunnel/src/client.rs:577-581`) via CLI `:245`; re-exported as `validate_outbound_proxy` (`crates/eggtunnel/src/client.rs:598-607`) | `OutboundConnector::from_pproxy_uri` rejects; mapped to `invalid outbound proxy chain`. |
 | Server + `outbound_proxy_env` | CLI-owned: `:269-271` | Proxy is a client-egress concept; server never dials out via proxy. |
 | mTLS half-pair | CLI-owned: `:223-225` | Identity requires both cert chain and key; one without the other is a certain startup failure. |
 | Empty proxy env name | CLI-owned: `:226-232` | `""` names no variable. |
@@ -156,7 +156,7 @@ Not validated in server mode: `server_addr`, `tls_server_name`, `services`, `ca_
 
 ### 3.1 Server path (`crates/eggtunnel-cli/src/main.rs:287-309`)
 
-1. `read_config` (`:288`) → `check_config` (`:289`) → `server_builder(&config)?.bind().await` (`:290`). `server_builder` (`:166-196`) re-parses `listen_addr` with `checked_addr`, re-reads `certificate_pem`/`private_key_pem` with `fs::read`, re-loads the token, maps the transport string to a typed `ServerTransportProfile`, applies `RuntimePolicy::default()` and the `BindPolicy` derived from `allow_public_service_binds`, and attaches `client_ca_pem` when present. Missing `listen_addr`/`tls_cert`/`tls_key` re-errors with `missing …` (unreachable after `check_config` unless the file changed — defensive re-check). `bind()` runs `validate()` first (`crates/eggtunnel/src/server.rs:147-158`), so startup enforces the same library matrix as `check`.
+1. `read_config` (`:288`) → `check_config` (`:289`) → `server_builder(&config)?.bind().await` (`:290`). `server_builder` (`:166-196`) re-parses `listen_addr` with `checked_addr`, re-reads `certificate_pem`/`private_key_pem` with `fs::read`, re-loads the token, maps the transport string to a typed `ServerTransportProfile`, applies `RuntimePolicy::default()` and the `BindPolicy` derived from `allow_public_service_binds`, and attaches `client_ca_pem` when present. Missing `listen_addr`/`tls_cert`/`tls_key` re-errors with `missing …` (unreachable after `check_config` unless the file changed — defensive re-check). `bind()` runs `validate()` first (`crates/eggtunnel/src/server/config.rs:118-129`), so startup enforces the same library matrix as `check`.
 2. Print `server listening on {}` with `server.local_addr()` (`:291`).
 3. Effective-bind print loop (`:292-307`): a `HashSet<(SessionId-ish, ServiceId-ish, addr, port)>` called `printed` (`:293`); a `tokio::time::interval(250 ms)` (`:294`); `tokio::select!` over `ctrl_c` (`:297`) vs `refresh.tick()` (`:298`). Each tick snapshots `handle.snapshot().effective_binds` (`:299`), keys by `(session, service, bind.address, bind.port)` (`:300`), and prints each never-before-seen key as `service {id} session {session:?} listening on [{ipv6}]:{port}` (`:302`), where the address is rendered via `Ipv6Addr::from(bind.address)` (the 16-byte wire form, so IPv4 appears as `::ffff:a.b.c.d`). Matches `docs/OPERATIONS.md:7-10` ("CLI prints newly assigned service addresses while it is running").
 4. Shutdown: `break` on Ctrl-C → `server.shutdown().await` (`:308`), which sends the bounded Drain before joining (per `docs/OPERATIONS.md:4-5`).
@@ -182,7 +182,7 @@ Both paths require the `signal` Tokio feature, declared in `crates/eggtunnel-cli
 | Port rules | Std range `0–65535`; **port 0 accepted** by the parser (bind-ephemeral is legal for `listen_addr`) | Must parse as `u16` **and be nonzero** (`is_ok_and(\|port\| port != 0)`, `:125`); port 0, empty port, non-numeric port, and `>65535` all map to `endpoint must contain a host and numeric port` |
 | Empty host | Rejected by std parser | Explicitly rejected (`host.is_empty()`, `:123`) — covers `":9443"` and `"[]:9443"` (inner slice empty) |
 | Error strings | `{key} must be a socket address such as 127.0.0.1:443` (`:105`) | Three distinct messages: `IPv6 endpoint must use [address]:port syntax` (`:112`), `endpoint must end with :port` (`:114`), `endpoint must use host:port syntax` (`:120`), and the catch-all `endpoint must contain a host and numeric port` (`:127`). None echo the offending value. |
-| Return | `SocketAddr` (ready for `ServerConfig.listen_addr`) | `String` (the original `value.to_owned()`, `:129`; DNS resolution deferred to Tokio connect per `crates/eggtunnel/src/client.rs:90-91`) |
+| Return | `SocketAddr` (ready for `ServerConfig.listen_addr`) | `String` (the original `value.to_owned()`, `:129`; DNS resolution deferred to Tokio connect per `crates/eggtunnel/src/client.rs:110-111`) |
 
 Edge cases reviewers should keep in mind (see §7.5):
 
@@ -221,15 +221,15 @@ Feature definitions live in `crates/eggtunnel/Cargo.toml:15-23`: `default = ["cl
 | Type / function | Role | Key definition |
 |---|---|---|
 | `ClientConfig { server_addr, tls_server_name, ca_pem, token, services }` | Programmatic equivalent of the client TOML (minus `token_env` indirection) | `crates/eggtunnel/src/client/config.rs:46-54`; `Debug` redacts token and CA bytes (`:56-66`) |
-| `ClientBuilder` + `ClientTransportProfile` | Typed composition: `new(config).transport(profile).runtime_policy(policy).with_connector(...).outbound_proxy(...).with_identity(...)`; `validate()` then `start()` | `crates/eggtunnel/src/client/config.rs:68-156` (`validate` at `:130-140`, `start` at `:142-155`); profile validation at `crates/eggtunnel/src/client.rs:524-568` |
+| `ClientBuilder` + `ClientTransportProfile` | Typed composition: `new(config).transport(profile).runtime_policy(policy).with_connector(...).outbound_proxy(...).with_identity(...)`; `validate()` then `start()` | `crates/eggtunnel/src/client/config.rs:68-156` (`validate` at `:130-140`, `start` at `:142-155`); profile validation at `crates/eggtunnel/src/endpoint.rs:58-102` |
 | `Client` + `ClientHandle` | `start` family via builder profiles (TCP/QUIC/WebSocket × connector/proxy/mTLS compositions); `handle()`, joined `shutdown().await`; handle offers `snapshot()`, `shutdown()`, `register_service(id)`, `unregister_service(id)` | `crates/eggtunnel/src/client.rs` (handle methods; `shutdown` at `:461-467`) |
 | `TargetConnector` / `TargetContext` / `TargetStream` / `TargetFuture` / `TargetError` | Application-owned dial: `connect(service: ClientService, context: TargetContext) -> TargetFuture`; default is TCP dial (`TcpTargetConnector`, `config.rs:32-43`); server can never rewrite the target | `crates/eggtunnel/src/client/config.rs:3-43` |
-| `ServerConfig { listen_addr: SocketAddr, certificate_pem, private_key_pem, token, allow_public_service_binds }` | Programmatic equivalent of the server TOML | `crates/eggtunnel/src/server.rs:49-56`; `Debug` redacts key/token (`:65-78`); `Drop` zeroizes key (`:58-63`) |
-| `ServerBuilder` + `ServerTransportProfile` | Typed composition: `new(config).transport(profile).runtime_policy(policy).bind_policy(policy).client_ca_pem(...)`; `validate()` then `bind()` | `crates/eggtunnel/src/server.rs:80-159` (`validate` at `:136-145`, `bind` at `:147-158`); profile validation at `:459-484` |
-| `Server` + `ServerHandle` | `Server::bind*` legacy constructors delegate to the builder (`bind` at `:184-186`); handle offers `snapshot()` + `shutdown()` (`:174-181`) | `crates/eggtunnel/src/server.rs:161-186` |
+| `ServerConfig { listen_addr: SocketAddr, certificate_pem, private_key_pem, token, allow_public_service_binds }` | Programmatic equivalent of the server TOML | `crates/eggtunnel/src/server/config.rs:20-27`; `Debug` redacts key/token (`:65-78`); `Drop` zeroizes key (`:58-63`) |
+| `ServerBuilder` + `ServerTransportProfile` | Typed composition: `new(config).transport(profile).runtime_policy(policy).bind_policy(policy).client_ca_pem(...)`; `validate()` then `bind()` | `crates/eggtunnel/src/server/config.rs:51-130` (`validate` at `:136-145`, `bind` at `:147-158`); profile validation at `:459-484` |
+| `Server` + `ServerHandle` | `Server::bind*` legacy constructors delegate to the builder (`bind` at `:184-186`); handle offers `snapshot()` + `shutdown()` (`:174-181`) | `crates/eggtunnel/src/server/auth.rs:22-47` |
 | `BindPolicy` | Typed admission policy the CLI does not expose beyond the bool: `allow_public_addresses`, `allowed_addresses`, `allowed_port_ranges`, `allow_ephemeral_ports`, `max_services_per_session` (default 64); `validate()` + `loopback_only()` | `crates/eggtunnel/src/common.rs:83-124` |
 | `RuntimePolicy` + `ResourceLimits` + `TimeoutPolicy` | Caller-selected finite ceilings/timeouts; CLI uses `RuntimePolicy::default()` and does not expose TOML knobs | `crates/eggtunnel/src/common.rs:194-316`; `HeartbeatSnapshot` at `:162-169` |
-| `validate_outbound_proxy(&str)` | `parse_outbound_proxy` (`OutboundConnector::from_pproxy_uri`) mapped to `TunnelError::Configuration("invalid outbound proxy chain")` | `crates/eggtunnel/src/client.rs:470-482`; re-exported at `crates/eggtunnel/src/lib.rs:20-21`; enforced via builder `validate()` at `client.rs:561-564` (shared by CLI `check` at `crates/eggtunnel-cli/src/main.rs:245` and startup at `:313`) |
+| `validate_outbound_proxy(&str)` | `parse_outbound_proxy` (`OutboundConnector::from_pproxy_uri`) mapped to `TunnelError::Configuration("invalid outbound proxy chain")` | `crates/eggtunnel/src/client.rs:598-607`; re-exported at `crates/eggtunnel/src/lib.rs:20-21`; enforced via builder `validate()` at `endpoint.rs:58-102` (shared by CLI `check` at `crates/eggtunnel-cli/src/main.rs:245` and startup at `:313`) |
 | `SecretToken`, `ClientService`, `Snapshot`, `TunnelError`, … | Shared vocabulary (redacted secrets, client-vs-server service views, counters, typed errors) | `crates/eggtunnel/src/common.rs:17-71`; `crates/eggtunnel/src/lib.rs:27-30` |
 
 ### 5.3 `fixtures/embedder` walkthrough
@@ -293,12 +293,12 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 | Topic | Doc | CLI/code counterpart |
 |---|---|---|
 | Start / stop | `server server.toml` / `client client.toml`; both stop on Ctrl-C; server sends bounded Drain before closing (`docs/OPERATIONS.md:3-5`) | `:297` + `:308` (server), `:315-316` (client) |
-| Listening / binds | `listen_addr` takes control + data; every connection starts with TLS; actual service address is server-assigned, visible via `ServerHandle` snapshot; CLI prints new addresses while running. QUIC: `listen_addr` is UDP control; service listeners stay TCP (`docs/OPERATIONS.md:7-12`) | `:291-302` (print loop); `crates/eggtunnel/src/server.rs:147-158` (builder `bind`) |
+| Listening / binds | `listen_addr` takes control + data; every connection starts with TLS; actual service address is server-assigned, visible via `ServerHandle` snapshot; CLI prints new addresses while running. QUIC: `listen_addr` is UDP control; service listeners stay TCP (`docs/OPERATIONS.md:7-12`) | `:291-302` (print loop); `crates/eggtunnel/src/server/config.rs:118-129` (builder `bind`) |
 | Client resilience | Bounded exponential backoff + jitter on transient failures; invalid auth/authorization stops retries; registrations restored after new authenticated Session (`docs/OPERATIONS.md:14-17`) | Library reconnect loop (see client deep dive); CLI just prints `waiting for authenticated session` (`:314`) |
 | Certs / permissions | Trusted cert with SAN covering `tls_server_name`; token + key files readable only by the service account; loopback-only unless explicitly enabled (`docs/OPERATIONS.md:19-22`) | `tls_server_name` check (`:213-215`); `allow_public_service_binds` passthrough (`server_builder` at `:171-177`, `:188-191`) |
-| Limits / throttling | 64 concurrent handshakes, 128 sessions, 64 services / 128 pending / 128 active per session, 128 client open tasks + control queue; per-IP auth throttle (10 fails / 60 s, 1024-source table) (`docs/OPERATIONS.md:24-28`) | `BindPolicy` defaults (`crates/eggtunnel/src/common.rs:114-124`); server constants (`crates/eggtunnel/src/server.rs:39-46`); `ResourceLimits::default` (`crates/eggtunnel/src/common.rs:232-245`) |
+| Limits / throttling | 64 concurrent handshakes, 128 sessions, 64 services / 128 pending / 128 active per session, 128 client open tasks + control queue; per-IP auth throttle (10 fails / 60 s, 1024-source table) (`docs/OPERATIONS.md:24-28`) | `BindPolicy` defaults (`crates/eggtunnel/src/common.rs:114-124`); server constants (`crates/eggtunnel/src/server/auth.rs:20-27`); `ResourceLimits::default` (`crates/eggtunnel/src/common.rs:232-245`) |
 | Snapshot monitoring | Current + high-water counts for sessions/services/pending/active/open/handshakes; latest termination category + panicked-task count; no event history or error text; counters are per-process, not persisted (`docs/OPERATIONS.md:30-35`) | `handle.snapshot().effective_binds` (`:299`); `Snapshot` type (`crates/eggtunnel/src/common.rs:136-160`) |
-| Restricted egress | `outbound_proxy_env` → HTTP CONNECT / SOCKS5 / `__` chains; TLS+SNI stays end-to-end; WSS on TCP endpoint; QUIC has no proxy (`docs/OPERATIONS.md:37-48`) | CLI-owned name/value checks (`:226-239`); library shape + dispatch (`crates/eggtunnel/src/client.rs:541-564` via CLI `:245`, `:313`) |
+| Restricted egress | `outbound_proxy_env` → HTTP CONNECT / SOCKS5 / `__` chains; TLS+SNI stays end-to-end; WSS on TCP endpoint; QUIC has no proxy (`docs/OPERATIONS.md:37-48`) | CLI-owned name/value checks (`:226-239`); library shape + dispatch (`crates/eggtunnel/src/endpoint.rs:58-102` via CLI `:245`, `:313`) |
 
 ---
 
@@ -330,7 +330,7 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 - [ ] **No PEM parsing at `check` time.** `check` asserts existence + non-emptiness only (`:221`, `:240-244`, `:261-268`). Garbage bytes (or a valid PEM of the wrong type) pass `eggtunnel check` and fail at `client_builder(...).start()` / `server_builder(...).bind()` when the TLS builders parse them — the doc explicitly scopes this: "`eggtunnel check` validate[s] the TOML structure…" while "server startup also parses and validates its certificate and key" (`docs/CONFIGURATION.md:82-84`). Any test or runbook that treats `check`-green as deployable is over-reading.
 - [ ] **No network I/O at `check` time.** `server_addr` DNS is never resolved, ports never dialed, proxy never connected — `checked_endpoint` is string-level only (§4). A typo'd hostname passes `check`.
 - [ ] **`ServiceName`/`TcpTarget` are the exception.** Because L5 (`:219`) runs the real proto constructors, those two validations are as strong at `check` time as at runtime. Everything else file-shaped is weaker.
-- [ ] **Library re-validates anyway.** `validate_client_profile` (`crates/eggtunnel/src/client.rs:524-568`) and `validate_server_profile` (`crates/eggtunnel/src/server.rs:459-484`) re-apply the transport/identity/proxy matrix at `start`/`bind` time, so CLI `check` is defense-in-depth, not the enforcement point for embedders.
+- [ ] **Library re-validates anyway.** `validate_client_profile` (`crates/eggtunnel/src/endpoint.rs:58-102`) and `validate_server_profile` (`crates/eggtunnel/src/server/config.rs:148-173`) re-apply the transport/identity/proxy matrix at `start`/`bind` time, so CLI `check` is defense-in-depth, not the enforcement point for embedders.
 
 ### 7.5 IPv6 / endpoint edge cases
 
@@ -357,8 +357,8 @@ builders. `check_config` ends each branch with `builder.validate()`
 (`:245` client, `:272` server), and the runtime paths start/bind the
 same builder after the same config check (`:290`, `:313`).
 Transport/CA/mTLS/proxy compatibility is library-owned
-(`validate_client_profile` at `crates/eggtunnel/src/client.rs:524`,
-`validate_server_profile` at `crates/eggtunnel/src/server.rs:459`);
+(`validate_client_profile` at `crates/eggtunnel/src/endpoint.rs:58`,
+`validate_server_profile` at `crates/eggtunnel/src/server/config.rs:148`);
 file shape, environment lookup, pair-completeness, proxy name/value,
 mTLS cert/key/client-CA non-emptiness, and server+proxy remain
 CLI-owned (§2.2-§2.3).

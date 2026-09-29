@@ -929,7 +929,7 @@
         echo_task.abort();
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn production_quic_profile_rejects_untrusted_server_certificate() {
         let (cert, key) = certificate();
@@ -1614,12 +1614,12 @@
         );
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     pub(super) struct CapturingBlockingConnector {
         pub(super) captured: std::sync::Arc<std::sync::Mutex<Option<eggtunnel_proto::ConnectionId>>>,
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     impl TargetConnector for CapturingBlockingConnector {
         fn connect(&self, _service: ClientService, context: TargetContext) -> TargetFuture {
             let captured = self.captured.clone();
@@ -1630,7 +1630,7 @@
         }
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     pub(super) async fn wait_for_quic_pending(server_handle: &crate::ServerHandle, expected: usize) {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -1644,7 +1644,7 @@
         .unwrap();
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     pub(super) async fn write_quic_data_hello(
         stream: &mut eggress_core::BoxStream,
         hello: eggtunnel_proto::DataHello,

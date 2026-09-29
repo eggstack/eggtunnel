@@ -64,8 +64,8 @@ secrets, policy, observability, errors. Facade re-exports 11 types including
 - `SecretToken`: validated (1–4096 B), redacted `Debug`, `zeroize` on drop,
   `expose()` is `pub(crate)`.
 - `ClientService` (client view: id + name + requested bind + `TcpTarget`) vs
-  `ServiceSpec` (server view: no target — server never learns the local
-  destination).
+  `ServiceSpec` (server view: no target — the server receives the bounded `TcpTarget` wire field
+  as non-authoritative metadata only, never as the client-side destination).
 - `BindPolicy`: loopback-only by default; allowlists, port ranges, ephemeral
   policy; `validate()` ceiling is 65536 (decoupled from the default
   64-session service count); server-only `bind_to_socket()` / `permits_*`.
@@ -134,7 +134,7 @@ relay. Runtime is `server.rs` (1489 lines); tests moved to `server_tests.rs`
 (harness + `ServerBuilder::validate` tests) + `server_tests/{tcp,mtls,quic,
 websocket,proxy}.rs`.
 
-- Canonical composition via `ServerBuilder` (`server.rs:89-159`):
+- Canonical composition via `ServerBuilder` (`server/config.rs:60-130`):
   `ServerTransportProfile` (TCP/TLS, QUIC, WebSocket) + `BindPolicy` +
   `RuntimePolicy` + optional client CA; `validate()` rejects mTLS on
   QUIC/WSS before bind; legacy `Server::bind*` helpers delegate through it

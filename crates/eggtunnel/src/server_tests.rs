@@ -1,18 +1,39 @@
 #[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
-    use crate::{BindPolicy, RuntimePolicy, ServerBuilder, ServerConfig, ServerTransportProfile};
+    use crate::server::auth::AuthFailureLimiter;
+    use crate::server::pending::{PendingEntry, accept_data_hello};
+    use crate::server::session::SessionContext;
+    use crate::{
+        BindPolicy, RuntimePolicy, SecretToken, ServerBuilder, ServerConfig,
+        ServerTransportProfile, TerminationCategory,
+    };
     #[cfg(feature = "mtls")]
     use crate::ClientIdentity;
     use crate::{
         Client, ClientConfig, ClientService, TargetConnector, TargetContext, TargetError,
         TargetFuture, TargetStream,
     };
-    use eggtunnel_proto::{RequestedBind, ServiceName, TcpTarget};
+    use crate::common::bind_to_socket;
+    use crate::wire_io::{read_boxed, write_boxed};
+    use eggtunnel_proto::{
+        Capabilities, ClientHello, DataHello, Message, ProtocolVersion, RequestedBind, ServiceId,
+        ServiceName, SessionId, TcpTarget,
+    };
+    use eggress_core::BoxStream;
+    use std::collections::HashMap;
+    use std::net::IpAddr;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
+        sync::{Mutex, Semaphore, oneshot},
     };
+
+    /// Test-only reference ceilings matching the default `RuntimePolicy`.
+    const MAX_SESSIONS: usize = 128;
+    const MAX_HANDSHAKES: usize = 64;
 
     async fn test_session(
         session_id: SessionId,
@@ -61,7 +82,7 @@ mod tests {
         assert!(builder().validate().is_ok());
     }
 
-    #[cfg(feature = "quic")]
+    #[cfg(feature = "quic-server")]
     #[test]
     fn server_builder_accepts_quic() {
         assert!(builder()
@@ -70,7 +91,7 @@ mod tests {
             .is_ok());
     }
 
-    #[cfg(feature = "websocket")]
+    #[cfg(feature = "websocket-server")]
     #[test]
     fn server_builder_accepts_websocket() {
         assert!(builder()
@@ -85,7 +106,7 @@ mod tests {
         assert!(builder().client_ca_pem(b"client CA".to_vec()).validate().is_ok());
     }
 
-    #[cfg(all(feature = "mtls", feature = "quic"))]
+    #[cfg(all(feature = "mtls", feature = "quic-server"))]
     #[test]
     fn server_builder_rejects_quic_mtls() {
         assert!(builder()
@@ -95,7 +116,7 @@ mod tests {
             .is_err());
     }
 
-    #[cfg(all(feature = "mtls", feature = "websocket"))]
+    #[cfg(all(feature = "mtls", feature = "websocket-server"))]
     #[test]
     fn server_builder_rejects_websocket_mtls() {
         assert!(builder()
@@ -220,10 +241,12 @@ mod tests {
     #[cfg(feature = "mtls")]
     #[path = "../server_tests/mtls.rs"]
     mod mtls;
-    #[cfg(feature = "quic")]
+    // Transport integration suites exercise both roles, so they need both
+    // halves of the role-specific slice.
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[path = "../server_tests/quic.rs"]
     mod quic;
-    #[cfg(feature = "websocket")]
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[path = "../server_tests/websocket.rs"]
     mod websocket;
     #[cfg(feature = "outbound-proxy")]

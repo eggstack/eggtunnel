@@ -5,6 +5,7 @@
 //! runtime or tracing state. Optional transports remain Cargo-feature gated.
 
 mod common;
+mod endpoint;
 #[cfg(feature = "mtls")]
 mod pem;
 #[cfg(any(feature = "client", feature = "server"))]
@@ -29,5 +30,6 @@ pub use common::{
     ServiceSpec, Snapshot, TerminationCategory, TimeoutPolicy, TunnelError,
 };
 pub use eggtunnel_proto as proto;
+pub use endpoint::{Endpoint, EndpointError};
 #[cfg(feature = "server")]
 pub use server::{Server, ServerBuilder, ServerConfig, ServerHandle, ServerTransportProfile};

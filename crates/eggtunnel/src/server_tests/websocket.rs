@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(feature = "websocket")]
+#[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
 async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Vec<u8> {
     let mut external = TcpStream::connect(address).await.unwrap();
     external.write_all(payload).await.unwrap();
@@ -12,7 +12,7 @@ async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Ve
     response
 }
 
-    #[cfg(feature = "websocket")]
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[tokio::test]
     async fn websocket_tls_session_registers_and_relays_data_paths() {
         let (cert, key) = certificate();
@@ -71,7 +71,7 @@ async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Ve
         server.shutdown().await;
     }
 
-    #[cfg(feature = "websocket")]
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[tokio::test]
     #[ignore = "bounded WSS data-path churn qualification"]
     async fn qualification_wss_connection_churn_soak() {
@@ -190,7 +190,7 @@ async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Ve
         );
     }
 
-    #[cfg(feature = "websocket")]
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[tokio::test]
     async fn wss_peer_close_during_active_relay_terminates_cleanly() {
         let (cert, key) = certificate();
@@ -269,7 +269,7 @@ async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Ve
         server.shutdown().await;
     }
 
-    #[cfg(feature = "websocket")]
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[tokio::test]
     async fn wss_payload_larger_than_message_cap_roundtrips_multiple_frames() {
         let (cert, key) = certificate();

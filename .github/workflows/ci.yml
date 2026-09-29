@@ -8,8 +8,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
@@ -18,7 +18,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
       - run: cargo check --locked --manifest-path fixtures/embedder/Cargo.toml
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-audit,cargo-deny
       - run: cargo audit
@@ -37,17 +37,24 @@ jobs:
           - client,server,tls,websocket
           - client,tls,outbound-proxy
           - client,server,tls,websocket,outbound-proxy
+          - client,tls,quic-client
+          - client,tls,websocket-client
+          - client,tls,quic-client,websocket-client
+          - server,tls,quic-server
+          - server,tls,websocket-server
+          - client,server,tls,quic-client,quic-server
+          - client,server,tls,websocket-client,websocket-server
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - run: cargo check --locked -p eggtunnel --no-default-features --features "${{ matrix.features }}"
       - run: cargo test --locked -p eggtunnel --no-default-features --features "${{ matrix.features }}" -- --test-threads=1
 
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
       - run: cargo check --locked -p eggtunnel-proto
       - run: cargo check --locked -p eggtunnel --no-default-features --features client,tls
       - run: cargo check --locked -p eggtunnel --no-default-features --features client,server,tls
@@ -55,7 +62,19 @@ jobs:
   minimal-dependencies:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls -e normal > /tmp/client-tree.txt
       - run: '! grep -E "eggress-(transport-quic|protocol-websocket|outbound)|eggress-protocol-reverse|tokio-tungstenite" /tmp/client-tree.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls,quic-client -e normal > /tmp/quic-client-tree.txt
+      - run: '! grep -E "eggress-protocol-websocket|eggress-outbound|tokio-tungstenite" /tmp/quic-client-tree.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls,quic-client -e features -i eggtunnel > /tmp/quic-client-features.txt
+      - run: '! grep -E "feature \"(server|quic-server|websocket|websocket-server|websocket-client|outbound-proxy|mtls)\" \\(command-line\\)" /tmp/quic-client-features.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls,websocket-client -e normal > /tmp/websocket-client-tree.txt
+      - run: '! grep -E "eggress-transport-quic|eggress-outbound" /tmp/websocket-client-tree.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features client,tls,websocket-client -e features -i eggtunnel > /tmp/websocket-client-features.txt
+      - run: '! grep -E "feature \"(server|quic|quic-server|quic-client|websocket|websocket-server|outbound-proxy|mtls)\" \\(command-line\\)" /tmp/websocket-client-features.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features server,tls,quic-server -e features -i eggtunnel > /tmp/quic-server-features.txt
+      - run: '! grep -E "feature \"(client|quic-client|websocket|websocket-client|websocket-server|outbound-proxy|mtls)\" \\(command-line\\)" /tmp/quic-server-features.txt'
+      - run: cargo tree --locked -p eggtunnel --no-default-features --features server,tls,websocket-server -e features -i eggtunnel > /tmp/websocket-server-features.txt
+      - run: '! grep -E "feature \"(client|quic|quic-client|quic-server|websocket|websocket-client|outbound-proxy|mtls)\" \\(command-line\\)" /tmp/websocket-server-features.txt'

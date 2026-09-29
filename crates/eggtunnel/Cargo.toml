@@ -17,8 +17,17 @@ default = ["client", "tls"]
 client = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:getrandom", "dep:rustls", "dep:tracing", "tls"]
 server = ["dep:tokio", "dep:tokio-util", "dep:eggress-core", "dep:eggress-transport-tls", "dep:eggress-relay", "dep:rustls", "dep:tracing", "tls"]
 tls = ["dep:eggress-transport-tls"]
-quic = ["client", "server", "dep:eggress-transport-quic"]
-websocket = ["client", "server", "dep:eggress-protocol-websocket", "dep:tokio-tungstenite"]
+# `quic` / `websocket` keep their published role-enabling umbrella meaning.
+# Role-specific slices let an embedder compile a QUIC or WebSocket client
+# without any server runtime code, and vice versa.
+quic = ["quic-client", "quic-server"]
+quic-client = ["client", "quic-transport"]
+quic-server = ["server", "quic-transport"]
+quic-transport = ["dep:eggress-transport-quic"]
+websocket = ["websocket-client", "websocket-server"]
+websocket-client = ["client", "websocket-transport"]
+websocket-server = ["server", "websocket-transport"]
+websocket-transport = ["dep:eggress-protocol-websocket", "dep:tokio-tungstenite"]
 outbound-proxy = ["client", "dep:eggress-outbound"]
 mtls = ["tls", "dep:tokio-rustls", "dep:webpki-roots", "dep:sha2"]
 

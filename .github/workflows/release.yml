@@ -24,8 +24,8 @@ jobs:
             runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Verify release tag matches workspace version
         shell: bash
         run: |
@@ -57,7 +57,7 @@ jobs:
           "$RUNNER_TEMP/install-test/eggtunnel" version
           echo "archive=$RUNNER_TEMP/$archive" >> "$GITHUB_OUTPUT"
         id: package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.target }}
           path: ${{ steps.package.outputs.archive }}
@@ -73,15 +73,15 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           pattern: release-*
           merge-multiple: true
       - name: Create SHA-256 manifest
         run: cd dist && LC_ALL=C sha256sum *.tar.gz > SHA256SUMS
-      - uses: actions/attest@v4
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: dist/*.tar.gz
           github-token: ${{ github.token }}
