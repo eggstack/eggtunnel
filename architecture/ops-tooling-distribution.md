@@ -14,8 +14,8 @@ the sibling dives (proto / client / server / transports / CLI).
   `plans/closure/reverse-session/012-status.md` (qualification) +
   `plans/closure/reverse-session/013-status.md` (publication event).
   (Older `0.1.0`-only historical quotes are marked as such.)
-- Wire protocol stays v1.0; crate version is independent.
-- M007–M013 closed, corrective addendum archived (`plans/registry.md`);
+- Wire protocol is v1.1 with 1.0 fallback; crate version is independent.
+- M001–M016 closed, corrective addendum archived (`plans/registry.md`);
   `scripts/test-install.sh` pins `0.2.0`.
 - "Supported" in this repo means **hosted build + checksum + per-runner
   install/version smoke for that archive** — `docs/DISTRIBUTION.md:24-28`,
@@ -73,7 +73,7 @@ CI runs a main qualification job plus a supported feature-slice matrix, a Rust
 | Job | Qualification |
 |---|---|
 | `check` | fmt, workspace check/test/clippy, rustdoc with `-D warnings`, downstream embedder check, audit, license deny |
-| `feature-slices` | Locked compile and test for `client,tls`; `client,server,tls`; mTLS; QUIC; WebSocket; outbound proxy; and WebSocket+proxy profiles |
+| `feature-slices` | Locked compile and test for 14 combos (TCP/TLS roles, mTLS, QUIC incl. `quic-client`/`quic-server` role slices, WebSocket incl. role slices, outbound proxy, WebSocket+proxy) |
 | `msrv` | Rust 1.89 checks for proto, minimal client, and client+server TLS |
 | `minimal-dependencies` | Asserts `client,tls` excludes QUIC, WebSocket, outbound proxy, and Eggress reverse protocol crates |
 
@@ -344,7 +344,7 @@ Why exact (`=`) rather than caret:
 | Doc | Owns | Review anchor |
 |---|---|---|
 | `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-21` |
-| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
+| `PROTOCOL.md` | Wire v1.1 (15 stable IDs) with 1.0 fallback: 14-byte header table, 1 MiB cap, exact-consumption decoding, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.1`) | `docs/PROTOCOL.md:1-39` |
 | `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-84` |
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-85` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-52` |

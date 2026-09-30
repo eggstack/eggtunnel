@@ -10,12 +10,15 @@
 > `proto-wire-protocol.md`; for shared types see `common-core.md`;
 > for transports see `transports-wire-io.md`.
 
-Scope: the private-side, outbound-only initiator. `client.rs` (~1410 lines)
-is the orchestrator (reconnect/session loops, validation); composable logic
+Scope: the private-side, outbound-only initiator. `client.rs` (1210 lines)
+is the orchestrator (entry points, `start_profile`, `run_session`,
+`validate_client_profile` at `client.rs:570-613`); composable logic
 lives in `client/config.rs` (`ClientConfig`, canonical `ClientBuilder`,
-target contract), `client/service_state.rs` (dynamic-Service lifecycle,
+target contract), `client/reconnect.rs` (supervisor + `StreamTransport` /
+`QuicTransport` dial), `client/service_state.rs` (dynamic-Service lifecycle,
 M009), `client/heartbeat.rs` (one-outstanding-Ping probe), and
-`client/open.rs` (data path per `Open`). Tests live in `client/tests.rs`,
+`client/open.rs` (data path per `Open`). (`endpoint.rs` owns only
+`Endpoint::parse` for `host:port` shape — no transport/profile validation.) Tests live in `client/tests.rs`,
 `client/qualification_tests.rs` (deterministic 10k-step seeded sequence),
 plus unit tests in `service_state.rs`/`heartbeat.rs`; cross-transport E2E
 remains under `server_tests/`. The client owns one

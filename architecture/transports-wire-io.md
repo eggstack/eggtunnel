@@ -30,7 +30,7 @@ Related overview sections: [wire protocol](proto-wire-protocol.md) (framing),
 > (`common.rs:194-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in `server_tests.rs:35`
 > are `#[cfg(test)]`-only. QUIC `max_concurrent_streams` is policy-derived
 > (server: `active_connections_per_session + 1`, client:
-> `client_open_tasks + 1` = 129 by default), `idle_timeout` is
+> `client_open_tasks` verbatim on the client (128 by default), `idle_timeout` is
 > `policy.timeouts.control_idle`, and both relays use
 > `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` at
 > `client/open.rs:67` and `server/service.rs:121`. WSS sets 1 MiB caps via
@@ -202,10 +202,12 @@ workers reached only after `validate_client_profile` / `validate_server_profile`
 
 Notes:
 
-- `client` implies `tls` (`crates/eggtunnel/Cargo.toml:17`: `client = [... "tls"]`),
-  and `quic` / `websocket` imply `client` + `server`. There is no supported
-  `quic`-without-`server` or `websocket`-without-`tls` slice; the CLI enforces
-  the same coupling at config-check time (§6).
+- `client` implies `tls` (`crates/eggtunnel/Cargo.toml:17`: `client = [... "tls"]`).
+  Role slices `quic-client` / `quic-server` and `websocket-client` /
+  `websocket-server` exist precisely for single-role builds. Transport
+  profile validation lives in `validate_client_profile`
+  (`client.rs:570-613`), not in `endpoint.rs` (which owns only
+  `Endpoint::parse`); the CLI enforces the same coupling at config-check time (§6).
 - `mod wire_io` exists iff `client` or `server` is enabled
   (`lib.rs:10-11`). A `proto`-only build has no socket dependency, per
   `docs/ARCHITECTURE.md:3-6`.
@@ -355,7 +357,7 @@ Feature: `quic` (`crates/eggtunnel/Cargo.toml:20`). Docs:
 
 ```text
 client (QuicClient)                       server (QuicListener, UDP)
-  | QuicClient::connect(host, port, QuicClientConfig{server_name, idle = policy.timeouts.control_idle, max_streams = policy.limits.client_open_tasks + 1}) [policy.timeouts.connect]
+  | QuicClient::connect(host, port, QuicClientConfig{server_name, insecure:false, idle = policy.timeouts.control_idle, max_streams = policy.limits.client_open_tasks}) [policy.timeouts.connect]
   |--------------------------------------->| accept_connection(&cancel)
   | get_connection() [connect] → open_stream() [connect] (control)
   |--------------------------------------->| accept_stream() [handshake] → read_boxed → expect ClientHello
@@ -451,8 +453,9 @@ Additional QUIC specifics:
   max_concurrent_streams: policy.limits.active_connections_per_session + 1 }`
   (`server/config.rs:79-83`); client mirrors `idle_timeout:
   policy.timeouts.control_idle, max_concurrent_streams:
-  policy.limits.client_open_tasks + 1` (`client/reconnect.rs:401-408`) — 129 by default
-  on both sides, i.e. one control stream plus the full data-stream budget, so
+  policy.limits.client_open_tasks` (`client.rs:357` → `client/reconnect.rs:371-405`) — 128 by default
+  on the client, i.e. the client passes the budget verbatim while the server
+  adds one control stream (`active_connections_per_session + 1` = 129), so
   Eggtunnel admission rejects first.
 - Test-only admission override: `bind_quic_with_admission_for_test` scales
   `max_concurrent_streams = max(1, n) * 2` (`server/config.rs:93`) — test-only,

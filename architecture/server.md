@@ -1,10 +1,13 @@
-# Reverse-session server — `crates/eggtunnel/src/server.rs` + `server/`
+# Reverse-session server — `crates/eggtunnel/src/server.rs` (324) + `server/`
 
-> Runtime is the `server.rs` coordinator (bind orchestration, `Server`/`ServerHandle`)
+> Runtime is the `server.rs` coordinator (bind orchestration, `Server`/`ServerHandle`,
+> `bind_profile` / `bind_quic_profile` / `bind_with_tls_profile`)
 > plus private responsibility modules `server/{config,tls,accept,auth,session,control,pending,service}.rs`;
 > transport and lifecycle tests live in
-> `server_tests.rs` (harness + `ServerBuilder::validate` tests) plus
-> `server_tests/{tcp,mtls,quic,websocket,proxy}.rs`.
+> `server_tests.rs` (255 lines harness + `ServerBuilder::validate` tests) plus
+> `server_tests/{tcp (1920),mtls (187),quic (967),websocket (405),proxy (905)}.rs`.
+> `MAX_SESSIONS`/`MAX_HANDSHAKES` are `cfg(test)`-only aliases in
+> `server_tests.rs`, not production constants.
 > All `server/*.rs:NNN` anchors below track the current module layout;
 > test anchors use `server_tests.rs` / `server_tests/<file>.rs` paths.
 >

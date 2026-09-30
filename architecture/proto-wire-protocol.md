@@ -2,7 +2,7 @@
 
 Back to [Architecture Overview](overview.md) §1.
 
-Sources: `crates/eggtunnel-proto/src/lib.rs` (754 lines), `crates/eggtunnel-proto/Cargo.toml`,
+Sources: `crates/eggtunnel-proto/src/lib.rs` (886 lines, wire v1.1), `crates/eggtunnel-proto/Cargo.toml`,
 `docs/PROTOCOL.md`, `crates/eggtunnel/src/wire_io.rs` (58 lines).
 Cross-references below use `file:line` anchors. All claims were read from code; no invented behavior.
 
@@ -16,7 +16,7 @@ wire protocol. It owns:
 - bounded wire DTOs and their validation (`crates/eggtunnel-proto/src/lib.rs:13-22`, `crates/eggtunnel-proto/src/lib.rs:37-227`),
 - the 14-byte framing (`crates/eggtunnel-proto/src/lib.rs:2-7`, `docs/PROTOCOL.md:12-21`),
 - `encode_frame` / `decode_frame` (`crates/eggtunnel-proto/src/lib.rs:457-525`),
-- the 14 stable message IDs (`crates/eggtunnel-proto/src/lib.rs:229-246`, `docs/PROTOCOL.md:31-34`).
+- the 15 stable message IDs (`crates/eggtunnel-proto/src/lib.rs:264-282`, `docs/PROTOCOL.md:32-37`).
 
 **Scope.**
 
@@ -122,7 +122,7 @@ callers do not misinterpret a write failure as “peer needs more bytes.”
 
 ---
 
-## 3. Every message type 1–14
+## 3. Every message type 1–15
 
 IDs are explicit `#[repr(u16)]` discriminants (`crates/eggtunnel-proto/src/lib.rs:229-246`),
 parsed by total `TryFrom<u16>` (`crates/eggtunnel-proto/src/lib.rs:248-269`), pinned by test
