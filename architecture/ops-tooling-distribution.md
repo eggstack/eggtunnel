@@ -375,7 +375,7 @@ Doc-vs-code consistency risks (check these first in any behavior change):
    `release.yml`.
 5. **Wire-vs-crate versioning** (PROTOCOL + API + roadmap §13): the "no 1.x
    guarantee" disclaimer must survive any copy-edit; deleting it would imply a
-   stability promise the code does not keep. Wire stays `1.0` while the crate
+   stability promise the code does not keep. Wire stays `1.1` (with `1.0` fallback) while the crate
    line is `0.2.0` — never conflate the two numbers.
 6. **Published language** (`docs/DISTRIBUTION.md:5-9`, `docs/SUPPORT.md:48-51`,
    `CHANGELOG.md:3-43`, `plans/closure/reverse-session/012-status.md:5-22`):
@@ -546,13 +546,13 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [ ] Published-vs-previous sweep (run before any release): `docs/DISTRIBUTION.md:5-9`
   (current published `0.2.0` vs `0.1.0` historical line + Eggpack no-interface line),
   `docs/SUPPORT.md:48-51` (crates published at `0.2.0`),
-  `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.0`),
+  `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.1` with `1.0` fallback),
   `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.2`),
   `CHANGELOG.md:3-43` (released entry), and
   `plans/closure/reverse-session/013-status.md` (tag, GitHub release,
   crates.io publication, clean registry consumer) must all agree on the
   current published line. Re-flip them together plus rerun CI if any future
-  release rewinds state. Never write crate `0.2.0` where wire `1.0` is
+  release rewinds state. Never write crate `0.2.0` where wire `1.1` is
   meant (see §5 sync-point #5).
 - [ ] Eggpack re-validation (`plans/registry.md:116`, `012-status.md:32`):
   Eggpack `main` at `4d673b90` has manifest/ReleasePlan/bootstrap foundations
