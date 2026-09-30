@@ -190,18 +190,37 @@ impl TcpTarget {
 ///
 /// Rejects empty text, text over [`MAX_TARGET_HOST_BYTES`], control characters,
 /// whitespace, and the characters that would be ambiguous once the host is
-/// embedded in a URL authority. A colon is accepted: the host is carried
-/// without a port, so IPv6 literals are valid.
+/// embedded in a URL authority. A colon is accepted only for a valid IPv6
+/// literal; anything else containing `:` (e.g. `":"`, `":::"`, `"foo:bar"`)
+/// fails closed. Unicode format characters (`Cf`, e.g. bidi overrides) are
+/// rejected alongside `Cc`/`Zl`/`Zp` (the latter two already covered by
+/// `is_whitespace`/`is_control`, checked explicitly for clarity).
 pub fn validate_target_host(host: &str) -> Result<(), ProtocolError> {
     if host.is_empty()
         || host.len() > MAX_TARGET_HOST_BYTES
-        || host
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || "/?#@[]\\\"'<>".contains(c))
+        || host.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || is_format_char(c) || "/?#@[]\\\"'<>".contains(c)
+        })
     {
         return Err(ProtocolError::InvalidTarget);
     }
+    if host.contains(':') && host.parse::<core::net::Ipv6Addr>().is_err() {
+        return Err(ProtocolError::InvalidTarget);
+    }
     Ok(())
+}
+
+/// Unicode format characters (`Cf` general category + `Zl`/`Zp` separators):
+/// bidi overrides, zero-width joiners, word joiners, BOM, etc. These pass
+/// `is_whitespace`/`is_control` checks but enable spoofing, so they fail
+/// closed here and in [`BoundedDiagnostic`].
+fn is_format_char(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'
+        | '\u{200B}'..='\u{200F}'
+        | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{FEFF}')
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -213,6 +232,12 @@ impl Capabilities {
         if ids.len() > MAX_CAPABILITIES {
             return Err(ProtocolError::InvalidPayload);
         }
+        // Normalized set semantics: sorted + deduped at construction so
+        // `new(vec![2,1]) == new(vec![1,2])`. `intersect()` was already
+        // deterministic; now construction is too.
+        let mut ids = ids;
+        ids.sort_unstable();
+        ids.dedup();
         Ok(Self(ids))
     }
 
@@ -263,8 +288,17 @@ impl BoundedDiagnostic {
         if text.len() > MAX_DIAGNOSTIC_BYTES {
             return Err(ProtocolError::InvalidPayload);
         }
+        // Bound charset as well as length: controls/newlines/ANSI/bidi
+        // enable log injection/spoofing in any sink that logs `as_str()`
+        // verbatim. Fail closed on `Cc`/`Cf`/`Zl`/`Zp` (`ESC` is `Cc`).
+        if text.chars().any(|c| c.is_control() || is_format_char(c)) {
+            return Err(ProtocolError::InvalidPayload);
+        }
         Ok(Self(text))
     }
+    /// Raw diagnostic text. Sinks must not log this verbatim without
+    /// sanitization: construction rejects controls/format chars, but defense
+    /// in depth still applies at the logging layer.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -347,6 +381,13 @@ impl Auth {
 
     pub fn token(&self) -> &[u8] {
         &self.token
+    }
+}
+
+impl Drop for Auth {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.token.zeroize();
     }
 }
 

@@ -472,31 +472,42 @@ async fn cancelled_registration_is_unregistered_and_never_becomes_desired_state(
 }
 
 #[tokio::test]
-async fn command_from_an_older_session_generation_cannot_register() {
+async fn command_uses_live_session_generation() {
+    // The handle no longer snapshots a generation; the worker stamps the
+    // live Session generation at `begin()` time, so a command sent while
+    // connected is served by the live Session.
     let (handle, counters, task, mut peer) = fake_connected_client().await;
     let (reply, response) = oneshot::channel();
-    let generation = counters
-        .session_generation
-        .load(std::sync::atomic::Ordering::Relaxed);
     handle
         .commands
         .send(ClientCommand::Register {
-            service: service(2, "stale-generation", 82),
-            generation: generation.saturating_sub(1),
+            service: service(2, "live-generation", 82),
             reply,
         })
         .await
         .unwrap();
-    assert!(matches!(
-        response.await.unwrap(),
-        Err(TunnelError::Disconnected)
-    ));
-    assert_eq!(counters.snapshot().registered_services, 1);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), read_boxed(&mut peer))
-            .await
-            .is_err()
-    );
+    let dynamic = tokio::time::timeout(Duration::from_secs(2), read_boxed(&mut peer))
+        .await
+        .unwrap()
+        .unwrap();
+    let Message::RegisterService(register) = dynamic else {
+        panic!("expected dynamic registration");
+    };
+    assert_eq!(register.service_id, ServiceId(2));
+    write_boxed(
+        &mut peer,
+        &Message::RegisterAck(eggtunnel_proto::RegisterAck {
+            service_id: ServiceId(2),
+            effective_bind: EffectiveBind {
+                address: std::net::Ipv6Addr::LOCALHOST.octets(),
+                port: 31001,
+            },
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(response.await.unwrap().is_ok());
+    assert_eq!(counters.snapshot().registered_services, 2);
     handle.shutdown();
     assert!(task.await.unwrap().is_ok());
 }

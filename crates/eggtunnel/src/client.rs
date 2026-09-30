@@ -71,7 +71,6 @@ pub struct ClientHandle {
 enum ClientCommand {
     Register {
         service: ClientService,
-        generation: u64,
         reply: oneshot::Sender<Result<EffectiveBind, TunnelError>>,
     },
     Unregister {
@@ -103,6 +102,10 @@ impl ClientHandle {
 
     /// Register a Service in the current authenticated Session. Only a
     /// server-acknowledged Service becomes desired state for reconnects.
+    /// The Session generation is stamped by the worker at `begin()` time,
+    /// never snapshotted in the handle, so a rotation between the
+    /// `connected` check and command processing cannot spuriously fail a
+    /// registration a live Session could serve.
     pub async fn register_service(
         &self,
         service: ClientService,
@@ -115,14 +118,10 @@ impl ClientHandle {
         {
             return Err(TunnelError::Disconnected);
         }
-        let generation = self
-            .counters
-            .session_generation
-            .load(std::sync::atomic::Ordering::Relaxed);
         let (reply, response) = oneshot::channel();
         tokio::select! {
             _ = self.cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = self.commands.send(ClientCommand::Register { service, generation, reply }) => result.map_err(|_| TunnelError::Disconnected)?,
+            result = self.commands.send(ClientCommand::Register { service, reply }) => result.map_err(|_| TunnelError::Disconnected)?,
         }
         tokio::select! {
             _ = self.cancel.cancelled() => Err(TunnelError::Cancelled),
@@ -919,7 +918,10 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             AckDisposition::Unexpected => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
                             AckDisposition::Stale(reply) => { if let Some(reply) = reply { let _ = reply.send(Err(TunnelError::Disconnected)); } continue; }
                             AckDisposition::Abandoned => {
-                                write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id }), counters.policy.timeouts.handshake).await?;
+                                // Best-effort cleanup for a dead caller: a
+                                // stalled write here must not kill a healthy
+                                // Session with live services.
+                                let _ = write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id }), counters.policy.timeouts.handshake).await;
                                 continue;
                             }
                             AckDisposition::Commit(service, reply) => (service, reply),
@@ -934,6 +936,14 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         }
                     }
                     Ok(Message::Error(error)) => {
+                        // Generic `Error` carries no `ServiceId`, so in
+                        // correlated mode it cannot be attributed to one of
+                        // several in-flight transactions. The server sends
+                        // `RegisterReject` (not generic `Error`) for dynamic
+                        // registration failures whenever capability 1 is
+                        // negotiated, so a generic `Error` here is a protocol
+                        // violation or server bug and fails the Session
+                        // closed. This is intentional fail-closed behavior.
                         if let Some(reply) = service_state.reject() {
                             let error = registration_error(error);
                             tracing::debug!(registration_error = ?error.termination_category(), session_generation = generation, "Service registration rejected");
@@ -987,11 +997,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
             Some(message) = out_rx.recv() => { write_control(&mut writer, &message, counters.policy.timeouts.handshake).await?; }
             Some(command) = commands.recv() => {
                 match command {
-                    ClientCommand::Register { service, generation: command_generation, reply } => {
-                        if command_generation != generation {
-                            let _ = reply.send(Err(TunnelError::Disconnected));
-                            continue;
-                        }
+                    ClientCommand::Register { service, reply } => {
                         if service_state
                             .desired()
                             .len()
@@ -1004,7 +1010,11 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         if reply.is_closed() {
                             continue;
                         }
-                        if let Err((error, reply)) = service_state.begin(service.clone(), command_generation, reply) {
+                        // Generation is stamped here, at worker `begin()`
+                        // time, from the live Session — never snapshotted in
+                        // the handle — so a rotation before processing cannot
+                        // fail a registration a live Session could serve.
+                        if let Err((error, reply)) = service_state.begin(service.clone(), generation, reply) {
                             let _ = reply.send(Err(error));
                             continue;
                         }
@@ -1033,8 +1043,9 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                                         // Only this transaction is
                                         // ambiguous; the Session and
                                         // unrelated transactions survive. A
-                                        // late Ack for it fails closed via
-                                        // `take_ack`.
+                                        // late Ack/Reject for it is benign
+                                        // cleanup via the `abandoned`
+                                        // tombstone in `take_ack`/`take_reject`.
                                         service_state.abandon(service.id);
                                         continue;
                                     }
@@ -1062,8 +1073,14 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             counters.services.store(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
                             counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, service_id, _)| *service_id != id);
                             tracing::info!(service_id = id.0, session_generation = generation, "Service unregistered");
+                            write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id }), counters.policy.timeouts.handshake).await?;
+                        } else {
+                            // No-op unregister (unknown/typo'd id): still
+                            // send best-effort cleanup for a possibly
+                            // ambiguous in-flight transaction, but never fail
+                            // the Session on a write timeout.
+                            let _ = write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id }), counters.policy.timeouts.handshake).await;
                         }
-                        write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id }), counters.policy.timeouts.handshake).await?;
                         let _ = reply.send(Ok(()));
                     }
                 }
@@ -1101,6 +1118,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
     };
     service_state.finish_pending(match pending_error {
         TunnelError::Cancelled => TunnelError::Cancelled,
+        TunnelError::Timeout => TunnelError::Timeout,
         _ => TunnelError::Disconnected,
     });
     service_state.clear_active();

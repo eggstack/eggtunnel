@@ -66,6 +66,11 @@ pub(super) struct ServiceState {
     active: HashMap<ServiceId, ClientService>,
     pending: Option<PendingRegistration>,
     in_flight: HashMap<ServiceId, PendingRegistration>,
+    /// Recently abandoned correlated transactions (slow-write timeouts).
+    /// A late Ack/Reject for one of these is benign cleanup (`Abandoned`/
+    /// `Stale`), never a terminal `Unexpected`/`Unknown`. Bounded and
+    /// cleared on every Session switch so it cannot grow across reconnects.
+    abandoned: HashMap<ServiceId, u64>,
     mode: RegistrationMode,
 }
 
@@ -76,6 +81,7 @@ impl ServiceState {
             active: HashMap::new(),
             pending: None,
             in_flight: HashMap::new(),
+            abandoned: HashMap::new(),
             mode: RegistrationMode::LegacySerial,
         }
     }
@@ -86,6 +92,7 @@ impl ServiceState {
     /// them through `finish_pending`.
     pub fn set_mode(&mut self, mode: RegistrationMode) {
         self.finish_pending(TunnelError::Disconnected);
+        self.abandoned.clear();
         self.mode = mode;
     }
 
@@ -145,11 +152,18 @@ impl ServiceState {
             }
             !overdue
         });
-        if let Some(pending) = self.pending.as_mut()
-            && pending.deadline.is_some_and(|deadline| deadline <= now)
-            && let Some(reply) = pending.reply.take()
+        // Legacy expiry clears the slot instead of leaving a dead `Some`
+        // with a past deadline that `next_deadline()` would return forever.
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.deadline.is_some_and(|deadline| deadline <= now))
         {
-            let _ = reply.send(Err(TunnelError::Timeout));
+            if let Some(pending) = self.pending.take()
+                && let Some(reply) = pending.reply
+            {
+                let _ = reply.send(Err(TunnelError::Timeout));
+            }
             return Expiry::Legacy;
         }
         if correlated > 0 {
@@ -184,6 +198,9 @@ impl ServiceState {
         {
             return Err((TunnelError::ServiceAlreadyExists, reply));
         }
+        // A fresh registration for a previously abandoned id takes
+        // precedence over its tombstone.
+        self.abandoned.remove(&service.id);
         match self.mode {
             RegistrationMode::LegacySerial => {
                 if self.pending.is_some() {
@@ -240,6 +257,15 @@ impl ServiceState {
         let (pending, _) = match self.take_transaction(id) {
             TransactionTake::Found(pending, home) => (pending, home),
             TransactionTake::Mismatched | TransactionTake::Missing => {
+                // A late Ack for a write-timeout abandon is benign cleanup,
+                // never a terminal protocol violation. Truly unknown ids
+                // (never abandoned in this generation) stay `Unexpected`.
+                if let Some(abandoned_generation) = self.abandoned.remove(&id) {
+                    if abandoned_generation == generation {
+                        return AckDisposition::Abandoned;
+                    }
+                    return AckDisposition::Stale(None);
+                }
                 return AckDisposition::Unexpected;
             }
         };
@@ -259,6 +285,11 @@ impl ServiceState {
         let (pending, _) = match self.take_transaction(id) {
             TransactionTake::Found(pending, home) => (pending, home),
             TransactionTake::Mismatched | TransactionTake::Missing => {
+                // Symmetric with `take_ack`: a late reject for an abandoned
+                // transaction is stale cleanup, not a terminal violation.
+                if self.abandoned.remove(&id).is_some() {
+                    return RejectDisposition::Stale(None);
+                }
                 return RejectDisposition::Unknown;
             }
         };
@@ -273,12 +304,19 @@ impl ServiceState {
         self.pending.take().map(|pending| pending.reply)
     }
     /// Abandon one correlated transaction (write timeout): fail its reply
-    /// without touching the Session or unrelated transactions.
+    /// without touching the Session or unrelated transactions. The id is
+    /// tombstoned (bounded) so a late Ack/Reject for it is treated as benign
+    /// cleanup instead of a terminal protocol violation.
     pub fn abandon(&mut self, id: ServiceId) {
-        if let Some(mut txn) = self.in_flight.remove(&id)
-            && let Some(reply) = txn.reply.take()
-        {
-            let _ = reply.send(Err(TunnelError::Timeout));
+        if let Some(mut txn) = self.in_flight.remove(&id) {
+            let generation = txn.generation;
+            if let Some(reply) = txn.reply.take() {
+                let _ = reply.send(Err(TunnelError::Timeout));
+            }
+            if self.abandoned.len() >= 256 {
+                self.abandoned.clear();
+            }
+            self.abandoned.insert(id, generation);
         }
     }
     pub fn unregister(&mut self, id: ServiceId) -> bool {
@@ -316,6 +354,7 @@ impl ServiceState {
                 let _ = reply.send(Err(duplicate_error(&error)));
             }
         }
+        self.abandoned.clear();
     }
 }
 

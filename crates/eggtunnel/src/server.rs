@@ -113,6 +113,26 @@ impl Server {
         require_caller_runtime("Server::bind_quic requires a caller-owned Tokio runtime")?;
         config::validate_config(&config)?;
         let bind_policy = BindPolicy::default();
+        bind_policy.validate()?;
+        crate::common::RuntimePolicy::default().validate()?;
+        // Mirror the production `ServerBuilder::bind()` gate: profile
+        // validation (mTLS/QUIC rejection) plus bind/runtime policy checks,
+        // so the test helper cannot diverge from the real admission path.
+        #[cfg(feature = "mtls")]
+        config::validate_server_profile(
+            &config,
+            &bind_policy,
+            &config::ServerTransportProfile::Quic,
+            None,
+            &crate::common::RuntimePolicy::default(),
+        )?;
+        #[cfg(not(feature = "mtls"))]
+        config::validate_server_profile(
+            &config,
+            &bind_policy,
+            &config::ServerTransportProfile::Quic,
+            &crate::common::RuntimePolicy::default(),
+        )?;
         let listener = QuicListener::bind(
             config.listen_addr,
             QuicServerConfig {

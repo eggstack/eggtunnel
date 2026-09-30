@@ -247,8 +247,12 @@ async fn handle_connection(
         .map_err(|_| TunnelError::Timeout)??;
     match first {
         Message::DataHello(hello) => {
-            drop(permit);
-            drop(handshake_guard);
+            // Hold handshake admission until the correlation outcome so a
+            // sustained bogus-`DataHello` flood is bounded by
+            // `accepted_handshakes` instead of spinning short tasks limited
+            // only by the scheduler.
+            let _permit = permit;
+            let _handshake_guard = handshake_guard;
             accept_data_hello(
                 stream,
                 hello,
@@ -275,9 +279,15 @@ async fn handle_connection(
             })
             .await
         }
-        _ => Err(TunnelError::Protocol(
-            eggtunnel_proto::ProtocolError::UnexpectedMessage,
-        )),
+        _ => {
+            context
+                .counters
+                .rejected
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(TunnelError::Protocol(
+                eggtunnel_proto::ProtocolError::UnexpectedMessage,
+            ))
+        }
     }
 }
 
@@ -385,6 +395,10 @@ async fn handle_quic_connection(
         .await
         .map_err(|_| TunnelError::Timeout)??;
     let Message::ClientHello(hello) = first else {
+        context
+            .counters
+            .rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnexpectedMessage,
         ));
@@ -468,10 +482,13 @@ async fn handle_quic_data_stream(
         result = timeout(handshake_timeout, read_boxed(&mut stream)) => result.map_err(|_| TunnelError::Timeout)??,
     };
     let Message::DataHello(hello) = first else {
+        counters
+            .rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnexpectedMessage,
         ));
     };
-    drop(handshake_guard);
+    let _handshake_guard = handshake_guard;
     accept_data_hello(stream, hello, None, &context.sessions, &counters).await
 }

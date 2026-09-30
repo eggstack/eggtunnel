@@ -14,8 +14,10 @@ use thiserror::Error;
 use zeroize::Zeroize;
 
 /// Secret credential storage with redacted formatting and best-effort clearing
-/// on drop.
-#[derive(Clone, Eq, PartialEq)]
+/// on drop. Deliberately no `PartialEq`/`Eq`: the correct comparison is the
+/// constant-time `verify_token`, and a derived short-circuiting `==` on
+/// secrets would leak timing.
+#[derive(Clone)]
 pub struct SecretToken(Vec<u8>);
 
 impl SecretToken {
@@ -111,6 +113,7 @@ impl BindPolicy {
     pub fn validate(&self) -> Result<(), TunnelError> {
         if self.max_services_per_session == 0
             || self.max_services_per_session > 65_536
+            || self.allowed_addresses.len() > 1024
             || self
                 .allowed_port_ranges
                 .iter()
@@ -390,9 +393,12 @@ impl Counters {
                 let heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
                 HeartbeatSnapshot {
                     session_generation: self.session_generation.load(Ordering::Relaxed),
-                    last_pong_age_ms: heartbeat
-                        .last_pong_at
-                        .map(|instant| instant.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                    last_pong_age_ms: heartbeat.last_pong_at.map(|instant| {
+                        std::time::Instant::now()
+                            .saturating_duration_since(instant)
+                            .as_millis()
+                            .min(u64::MAX as u128) as u64
+                    }),
                     latest_rtt_ms: heartbeat.latest_rtt_ms,
                     missed_heartbeats: heartbeat.missed_heartbeats,
                 }
@@ -432,7 +438,12 @@ impl Counters {
     pub fn record_heartbeat_pong(&self, sent_at: Instant) {
         let mut heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
         heartbeat.last_pong_at = Some(Instant::now());
-        heartbeat.latest_rtt_ms = Some(sent_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        heartbeat.latest_rtt_ms = Some(
+            Instant::now()
+                .saturating_duration_since(sent_at)
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+        );
         heartbeat.missed_heartbeats = 0;
     }
 
@@ -516,6 +527,24 @@ pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
 }
 
 #[cfg(feature = "server")]
+fn is_loopback_octets(address: [u8; 16]) -> bool {
+    use std::net::Ipv6Addr;
+    let ip = Ipv6Addr::from(address);
+    if ip.is_loopback() {
+        return true;
+    }
+    // IPv4-mapped (`::ffff:127/8`) and IPv4-compatible (`::127/8`) loopback:
+    // `Ipv6Addr::is_loopback` is true only for `::1`, so check the embedded
+    // IPv4 127/8 explicitly. Fail-closed otherwise.
+    if let Some(mapped) = ip.to_ipv4_mapped()
+        && mapped.octets()[0] == 127
+    {
+        return true;
+    }
+    address[..12] == [0; 12] && address[12] == 127
+}
+
+#[cfg(feature = "server")]
 pub(crate) fn bind_to_socket(
     request: &RequestedBind,
     policy: &BindPolicy,
@@ -534,7 +563,9 @@ pub(crate) fn bind_to_socket(
         }
         RequestedBind::Ip { address, port } => {
             let ip = Ipv6Addr::from(*address);
-            if !policy.permits_address(*address, ip.is_loopback()) || !policy.permits_port(*port) {
+            if !policy.permits_address(*address, is_loopback_octets(*address))
+                || !policy.permits_port(*port)
+            {
                 return Err(TunnelError::Authorization);
             }
             SocketAddr::V6(SocketAddrV6::new(ip, *port, 0, 0))
@@ -638,7 +669,10 @@ mod runtime_policy_tests {
         let generation = counters.begin_session().unwrap();
         counters.record_heartbeat_missed();
         assert_eq!(counters.snapshot().heartbeat.missed_heartbeats, 1);
-        counters.record_heartbeat_pong(Instant::now() - std::time::Duration::from_millis(5));
+        let sent_at = Instant::now()
+            .checked_sub(std::time::Duration::from_millis(5))
+            .unwrap_or_else(Instant::now);
+        counters.record_heartbeat_pong(sent_at);
         let heartbeat = counters.snapshot().heartbeat;
         assert_eq!(heartbeat.session_generation, generation);
         assert_eq!(heartbeat.missed_heartbeats, 0);

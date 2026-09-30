@@ -229,7 +229,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                         write_bounded(
                             &mut writer,
                             &Message::Pong(Pong { nonce }),
-                            idle_timeout,
+                            handshake_budget,
                         )
                         .await?;
                     }
@@ -243,7 +243,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
             }
             Some(message) = open_rx.recv() => {
                 let draining = matches!(&message, Message::Drain(_));
-                write_bounded(&mut writer, &message, idle_timeout).await?;
+                write_bounded(&mut writer, &message, handshake_budget).await?;
                 idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                 if draining { break; }
             }

@@ -131,19 +131,20 @@ impl ReconnectSupervisor {
     }
 
     /// Bounded jittered wait before the next attempt. Returns `false` when the
-    /// caller was cancelled while waiting.
+    /// caller was cancelled while waiting. A cancelled sleep is never counted
+    /// as a reconnect: the counter increments only after the sleep completes.
     async fn backoff(&mut self, counters: &Counters, cancel: &CancellationToken) -> bool {
         if cancel.is_cancelled() {
             return false;
         }
-        counters
-            .reconnects
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let jitter = random_jitter_ms(self.reconnect_delay);
         tokio::select! {
             _ = cancel.cancelled() => return false,
             _ = tokio::time::sleep(self.reconnect_delay + Duration::from_millis(jitter)) => {}
         }
+        counters
+            .reconnects
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.reconnect_delay = self
             .reconnect_delay
             .saturating_mul(2)

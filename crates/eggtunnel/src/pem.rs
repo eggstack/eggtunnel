@@ -3,10 +3,14 @@
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
 pub(crate) fn certificates(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, ()> {
+    // Bound the chain to remove the unbounded-`Vec` OOM vector on huge
+    // local PEM inputs. `private_key` already rejects `>1` key.
+    const MAX_CERTS: usize = 32;
     let certificates = CertificateDer::pem_slice_iter(pem)
+        .take(MAX_CERTS + 1)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| ())?;
-    if certificates.is_empty() {
+    if certificates.is_empty() || certificates.len() > MAX_CERTS {
         return Err(());
     }
     Ok(certificates)

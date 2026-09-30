@@ -188,6 +188,9 @@ impl From<eggtunnel::TunnelError> for CliError {
             eggtunnel::TunnelError::Tls => ErrorCategory::TlsMaterial,
             eggtunnel::TunnelError::Configuration(_) => ErrorCategory::ProfileValidation,
             eggtunnel::TunnelError::Authentication => ErrorCategory::Authentication,
+            eggtunnel::TunnelError::Authorization => ErrorCategory::Authentication,
+            eggtunnel::TunnelError::ServiceAlreadyExists => ErrorCategory::ProfileValidation,
+            eggtunnel::TunnelError::ResourceExhausted => ErrorCategory::RuntimeStart,
             _ => ErrorCategory::RuntimeStart,
         };
         Self::new(category, error.to_string())
@@ -355,16 +358,31 @@ fn load_token_with(
 }
 
 /// Read one file exactly once. Paths appear in errors; contents never do.
+/// The size is checked via metadata before reading so a GB-sized path
+/// cannot OOM the CLI; the library's 1 MiB frame cap applies afterwards.
 fn read_material(path: &Option<PathBuf>, what: &'static str) -> Result<Option<Vec<u8>>, CliError> {
+    const MAX_MATERIAL_BYTES: u64 = 16 * 1024 * 1024;
     let Some(path) = path else {
         return Ok(None);
     };
+    if fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_MATERIAL_BYTES {
+        return Err(CliError::new(
+            ErrorCategory::TlsMaterial,
+            format!("{what} file exceeds size limit"),
+        ));
+    }
     let bytes = fs::read(path).map_err(|_| {
         CliError::new(
             ErrorCategory::ConfigResolution,
             format!("{what} file is missing or unreadable"),
         )
     })?;
+    if bytes.len() as u64 > MAX_MATERIAL_BYTES {
+        return Err(CliError::new(
+            ErrorCategory::TlsMaterial,
+            format!("{what} file exceeds size limit"),
+        ));
+    }
     if bytes.is_empty() {
         return Err(CliError::new(
             ErrorCategory::TlsMaterial,
@@ -525,6 +543,19 @@ fn resolve_client_with(
             "mode must be 'client' for the client command",
         ));
     }
+    // Wrong-mode fields are rejected, never silently ignored: a server-only
+    // key in a client file is a structural error caught by `check`.
+    if config.listen_addr.is_some()
+        || config.tls_cert.is_some()
+        || config.tls_key.is_some()
+        || config.client_ca.is_some()
+        || config.allow_public_service_binds
+    {
+        return Err(CliError::new(
+            ErrorCategory::ConfigResolution,
+            "server-only fields are not valid in client mode",
+        ));
+    }
     let transport = client_transport(&config.transport)?;
     let server_addr =
         Endpoint::parse(config.server_addr.as_deref().ok_or_else(|| {
@@ -624,6 +655,19 @@ fn resolve_server_with(
         return Err(CliError::new(
             ErrorCategory::ConfigResolution,
             "outbound_proxy is only valid in client mode",
+        ));
+    }
+    // Wrong-mode fields are rejected, never silently ignored.
+    if config.server_addr.is_some()
+        || config.tls_server_name.is_some()
+        || config.ca_cert.is_some()
+        || config.client_cert.is_some()
+        || config.client_key.is_some()
+        || !config.services.is_empty()
+    {
+        return Err(CliError::new(
+            ErrorCategory::ConfigResolution,
+            "client-only fields are not valid in server mode",
         ));
     }
     let transport = server_transport(&config.transport)?;
@@ -741,28 +785,52 @@ struct CheckError {
 }
 
 fn check_report_ok(config: &FileConfig, transport: &str) -> CheckReport {
+    // Flags are scoped by mode so a wrong-mode key (already rejected above)
+    // can never inflate the opposite mode's booleans.
+    let (custom_ca, mtls) = match config.mode.as_str() {
+        "client" => (
+            config.ca_cert.is_some(),
+            config.client_cert.is_some() || config.client_key.is_some(),
+        ),
+        "server" => (false, config.client_ca.is_some()),
+        _ => (
+            config.ca_cert.is_some() || config.client_ca.is_some(),
+            config.client_cert.is_some() || config.client_ca.is_some(),
+        ),
+    };
     CheckReport {
         schema: CHECK_SCHEMA,
         ok: true,
         mode: config.mode.clone(),
         transport: transport.to_owned(),
         services: config.services.len(),
-        custom_ca: config.ca_cert.is_some() || config.client_ca.is_some(),
-        mtls: config.client_cert.is_some() || config.client_ca.is_some(),
+        custom_ca,
+        mtls,
         outbound_proxy: config.outbound_proxy_env.is_some(),
         error: None,
     }
 }
 
 fn check_report_err(config: Option<&FileConfig>, error: &CliError) -> CheckReport {
+    let (custom_ca, mtls) = match config.map(|c| c.mode.as_str()) {
+        Some("client") => (
+            config.is_some_and(|c| c.ca_cert.is_some()),
+            config.is_some_and(|c| c.client_cert.is_some() || c.client_key.is_some()),
+        ),
+        Some("server") => (false, config.is_some_and(|c| c.client_ca.is_some())),
+        _ => (
+            config.is_some_and(|c| c.ca_cert.is_some() || c.client_ca.is_some()),
+            config.is_some_and(|c| c.client_cert.is_some() || c.client_ca.is_some()),
+        ),
+    };
     CheckReport {
         schema: CHECK_SCHEMA,
         ok: false,
         mode: config.map(|c| c.mode.clone()).unwrap_or_default(),
         transport: config.map(|c| c.transport.clone()).unwrap_or_default(),
         services: config.map(|c| c.services.len()).unwrap_or_default(),
-        custom_ca: config.is_some_and(|c| c.ca_cert.is_some() || c.client_ca.is_some()),
-        mtls: config.is_some_and(|c| c.client_cert.is_some() || c.client_ca.is_some()),
+        custom_ca,
+        mtls,
         outbound_proxy: config.is_some_and(|c| c.outbound_proxy_env.is_some()),
         error: Some(CheckError {
             category: error.category.as_str(),
@@ -917,7 +985,15 @@ async fn run_server(
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
             _ = refresh.tick() => {
-                for (session, service, bind) in handle.snapshot().effective_binds {
+                let binds = handle.snapshot().effective_binds;
+                // Prune ended Sessions so `printed` stays bounded across
+                // churn instead of growing forever.
+                let live: std::collections::HashSet<_> = binds
+                    .iter()
+                    .map(|(session, service, bind)| (*session, *service, bind.address, bind.port))
+                    .collect();
+                printed.retain(|key| live.contains(key));
+                for (session, service, bind) in binds {
                     let key = (session, service, bind.address, bind.port);
                     if printed.insert(key) {
                         if json {

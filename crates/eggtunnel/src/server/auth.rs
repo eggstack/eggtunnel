@@ -78,6 +78,16 @@ impl AuthFailureLimiter {
             return;
         }
         sources.entry(source).or_default().push_back(now);
+        // Bound the in-window burst per source to the blocking threshold:
+        // `is_blocked` only needs `threshold` entries to verdict, so any
+        // excess is dropped from the front. This keeps the documented
+        // "never retains unbounded per-source history" true even for a
+        // single-IP flood within `AUTH_FAILURE_WINDOW`.
+        if let Some(deque) = sources.get_mut(&source) {
+            while deque.len() > self.threshold {
+                deque.pop_front();
+            }
+        }
     }
 
     pub(super) fn prune(&self, sources: &mut HashMap<IpAddr, VecDeque<Instant>>, now: Instant) {

@@ -160,6 +160,7 @@ dependencies = [
  "postcard",
  "serde",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
