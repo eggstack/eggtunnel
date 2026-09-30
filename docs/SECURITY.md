@@ -3,8 +3,11 @@
 The native TCP transport always performs TLS before sending the bearer token.
 Clients verify the configured server name against either system roots or an
 explicit custom CA bundle. The server rejects a bad token before creating a
-Session or registering services. Token comparison uses constant-time equality,
-and secret-bearing configuration Debug output is redacted.
+Session or registering services. Token comparison is a single fixed-width
+constant-time comparison covering both content and length, so length equality
+is not observable through timing, and secret-bearing configuration Debug output
+is redacted. Session IDs are redacted too, because a Session ID is a capability
+in `DataHello`.
 
 The server chooses the effective listener address. Service binds are loopback
 only unless `allow_public_service_binds` is explicitly enabled. The server
@@ -13,8 +16,10 @@ local target after a valid Open.
 
 Embedders can use `Server::bind_with_policy` for address allowlists, port
 ranges, ephemeral-port policy, and a per-session service ceiling. `BindPolicy`
-is evaluated before a listener is bound. Authentication success never grants
-bind permission by itself.
+is evaluated before a listener is bound; a `Loopback` request resolves to
+`[::1]:port` and is checked against the same address allowlist as an explicit
+address request, so a pinned allowlist is never an escape hatch. Authentication
+success never grants bind permission by itself.
 
 Each accepted external connection receives a random 128-bit ConnectionId,
 bound to the current Session and Service, with a 30-second lifetime and
@@ -36,8 +41,12 @@ local-only timing. Unknown or unnegotiated extension messages fail closed.
 Unauthenticated accepted connections are capped at 64 concurrent handshakes.
 The server retains a sliding 60-second authentication failure window for at
 most 1,024 source IPs, blocks a source after 10 failures, and applies a 100 ms
-delay after each failed token check. Unknown sources are rejected when the
-bounded limiter table is full. This is a process-local, per-source throttle;
+delay after each failed token check. A blocked source and a bad token are
+indistinguishable to the peer: both leave through one path that applies the
+same delay and the same `Error` frame, so blocklist state cannot be probed.
+Once the bounded limiter table is full, further sources are left untracked
+rather than blocked, so the table cannot be filled with spoofed addresses to
+lock out a legitimate new peer. This is a process-local, per-source throttle;
 deployments behind a shared NAT should account for the shared source address.
 
 The optional `mtls` feature adds `Server::bind_mtls` and

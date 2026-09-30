@@ -495,7 +495,24 @@ impl TunnelError {
 #[cfg(feature = "server")]
 pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
-    expected.expose().len() == received.len() && bool::from(expected.expose().ct_eq(received))
+    // One fixed-width constant-time comparison covering both content and
+    // length: the length lives in its own non-overlapping field, so it is
+    // neither short-circuited (a wrong-length token costs the same as a
+    // wrong-content one) nor aliased by padding (`token\0` is not `token`).
+    // The bound checks are on values `SecretToken::new` and the wire decoder
+    // already guarantee.
+    const WIDTH: usize = eggtunnel_proto::MAX_AUTH_TOKEN_BYTES;
+    let expected_bytes = expected.expose();
+    if expected_bytes.len() > WIDTH || received.len() > WIDTH {
+        return false;
+    }
+    let mut left = [0u8; WIDTH + 2];
+    let mut right = [0u8; WIDTH + 2];
+    left[..expected_bytes.len()].copy_from_slice(expected_bytes);
+    right[..received.len()].copy_from_slice(received);
+    left[WIDTH..].copy_from_slice(&(expected_bytes.len() as u16).to_be_bytes());
+    right[WIDTH..].copy_from_slice(&(received.len() as u16).to_be_bytes());
+    bool::from(left.ct_eq(&right))
 }
 
 #[cfg(feature = "server")]
@@ -506,7 +523,11 @@ pub(crate) fn bind_to_socket(
     use std::net::{Ipv6Addr, SocketAddrV6};
     let addr = match request {
         RequestedBind::Loopback { port } => {
-            if !policy.permits_port(*port) {
+            // A loopback request is checked against the same address allowlist
+            // as an explicit one, so a pinned allowlist is not an escape hatch.
+            if !policy.permits_address(Ipv6Addr::LOCALHOST.octets(), true)
+                || !policy.permits_port(*port)
+            {
                 return Err(TunnelError::Authorization);
             }
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, *port, 0, 0))

@@ -9,6 +9,7 @@ use std::{
     collections::{HashMap, HashSet},
     net::IpAddr,
     sync::Arc,
+    time::Duration,
 };
 
 use eggtunnel_proto::{
@@ -32,7 +33,20 @@ use super::service::{ServiceEntry, run_service, socket_to_effective};
 use super::session::{
     HandshakeGuard, Principal, SessionContext, SessionGuard, SessionRegistry, record_saturation,
 };
-use crate::wire_io::{read_boxed, read_message, write_boxed, write_message};
+use crate::wire_io::{read_boxed, read_message, write_message};
+
+/// Write one control message under a bounded budget. A peer that stops reading
+/// can no longer pin a Session (and its Service listeners) past the budget: the
+/// write fails closed as a `Timeout` instead of holding the loop forever.
+async fn write_bounded<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    message: &Message,
+    budget: Duration,
+) -> Result<(), TunnelError> {
+    tokio::time::timeout(budget, write_message(writer, message))
+        .await
+        .map_err(|_| TunnelError::Timeout)?
+}
 
 /// Generic `Error` codes used when the peer has not negotiated correlated
 /// registration rejection. The same numeric vocabulary is reused by
@@ -81,9 +95,6 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
         mut handshake_guard,
     } = admission;
 
-    if auth_failures.is_blocked(source) {
-        return Err(TunnelError::Authentication);
-    }
     if hello.version.major != ProtocolVersion::CURRENT.major {
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnsupportedVersion(
@@ -96,23 +107,29 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
     // support are negotiated. A 1.0 peer advertises an empty list and gets
     // baseline behavior; minor inequality alone never gates anything.
     let negotiated = Capabilities::supported().intersect(&hello.capabilities);
-    write_boxed(
+    let handshake_budget = counters.policy.timeouts.handshake;
+    write_bounded(
         &mut stream,
         &Message::ServerHello(ServerHello {
             version: ProtocolVersion::CURRENT,
             capabilities: negotiated.clone(),
         }),
+        handshake_budget,
     )
     .await?;
-    let auth =
-        match tokio::time::timeout(counters.policy.timeouts.handshake, read_boxed(&mut stream))
-            .await
-            .map_err(|_| TunnelError::Timeout)??
-        {
-            Message::Auth(auth) => auth,
-            _ => return Err(TunnelError::Authentication),
-        };
-    if !verify_token(&token, auth.token()) {
+    let auth = match tokio::time::timeout(handshake_budget, read_boxed(&mut stream))
+        .await
+        .map_err(|_| TunnelError::Timeout)??
+    {
+        Message::Auth(auth) => auth,
+        _ => return Err(TunnelError::Authentication),
+    };
+    // Blocklist state and token validity are both evaluated before either can
+    // short-circuit the other, and every refusal leaves through
+    // `reject_authentication`, so neither is observable from outside.
+    let token_verified = verify_token(&token, auth.token());
+    let blocked = auth_failures.is_blocked(source);
+    if !token_verified || blocked {
         return reject_authentication(&mut stream, source, &auth_failures, &counters, || {
             drop(handshake_guard.take());
             drop(admission.take());
@@ -145,7 +162,12 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
         return Err(error);
     }
     let _session_guard = SessionGuard::new(context.clone(), sessions);
-    write_boxed(&mut stream, &Message::AuthOk(AuthOk { session_id })).await?;
+    write_bounded(
+        &mut stream,
+        &Message::AuthOk(AuthOk { session_id }),
+        handshake_budget,
+    )
+    .await?;
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (open_tx, mut open_rx) = mpsc::channel(counters.policy.limits.control_queue);
     *context.control_tx.lock().await = Some(open_tx.clone());
@@ -181,6 +203,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                             &mut services,
                             &mut names,
                             &mut children,
+                            handshake_budget,
                         ).await?;
                     }
                     Ok(Message::UnregisterService(UnregisterService { service_id })) => {
@@ -203,19 +226,25 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                     }
                     Ok(Message::Ping(Ping { nonce })) => {
                         idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                        write_message(&mut writer, &Message::Pong(Pong { nonce })).await?;
+                        write_bounded(
+                            &mut writer,
+                            &Message::Pong(Pong { nonce }),
+                            idle_timeout,
+                        )
+                        .await?;
                     }
                     Ok(Message::Drain(drain)) => {
                         peer_drain_deadline = Some(drain.deadline_ms);
                         break;
                     },
                     Ok(_) => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(error),
                 }
             }
             Some(message) = open_rx.recv() => {
                 let draining = matches!(&message, Message::Drain(_));
-                write_message(&mut writer, &message).await?;
+                write_bounded(&mut writer, &message, idle_timeout).await?;
+                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                 if draining { break; }
             }
             Some(result) = children.join_next(), if !children.is_empty() => {
@@ -270,6 +299,7 @@ async fn register_service<W>(
     services: &mut HashMap<ServiceId, ServiceEntry>,
     names: &mut HashSet<String>,
     children: &mut JoinSet<()>,
+    write_budget: Duration,
 ) -> Result<(), TunnelError>
 where
     W: AsyncWrite + Unpin,
@@ -289,6 +319,7 @@ where
             service_id,
             REGISTRATION_ERROR_ADMISSION,
             negotiated,
+            write_budget,
         )
         .await;
     }
@@ -306,6 +337,7 @@ where
             service_id,
             REGISTRATION_ERROR_DUPLICATE,
             negotiated,
+            write_budget,
         )
         .await;
     }
@@ -326,6 +358,7 @@ where
                 service_id,
                 REGISTRATION_ERROR_BIND,
                 negotiated,
+                write_budget,
             )
             .await;
         }
@@ -346,6 +379,7 @@ where
                 service_id,
                 REGISTRATION_ERROR_LISTENER,
                 negotiated,
+                write_budget,
             )
             .await;
         }
@@ -382,12 +416,13 @@ where
     counters
         .high_water_services
         .fetch_max(registered_services, std::sync::atomic::Ordering::Relaxed);
-    write_message(
+    write_bounded(
         writer,
         &Message::RegisterAck(RegisterAck {
             service_id,
             effective_bind: effective,
         }),
+        write_budget,
     )
     .await?;
     Ok(())
@@ -402,20 +437,115 @@ async fn write_registration_response<W: AsyncWrite + Unpin>(
     service_id: ServiceId,
     code: u16,
     negotiated: &Capabilities,
+    write_budget: Duration,
 ) -> Result<(), TunnelError> {
     let diagnostic = BoundedDiagnostic::new("service registration rejected")?;
     if negotiated.has(CAPABILITY_REGISTER_REJECT) {
-        write_message(
+        write_bounded(
             writer,
             &Message::RegisterReject(RegisterReject {
                 service_id,
                 code,
                 diagnostic,
             }),
+            write_budget,
         )
         .await?;
     } else {
-        write_message(writer, &Message::Error(ErrorMessage { code, diagnostic })).await?;
+        write_bounded(
+            writer,
+            &Message::Error(ErrorMessage { code, diagnostic }),
+            write_budget,
+        )
+        .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::TerminationCategory;
+    use eggtunnel_proto::Ping;
+    use std::io::ErrorKind;
+    use std::task::{Context, Poll};
+
+    /// A peer that never accepts another byte: the exact shape of a slow-loris
+    /// reader that used to pin a Session indefinitely.
+    struct StalledWriter;
+
+    impl AsyncWrite for StalledWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn control_writes_are_bounded_by_their_budget() {
+        let budget = Duration::from_millis(50);
+        let mut stalled = StalledWriter;
+        let error = write_bounded(&mut stalled, &Message::Ping(Ping { nonce: 1 }), budget)
+            .await
+            .expect_err("a stalled peer must not hold the control loop");
+        assert!(matches!(error, TunnelError::Timeout));
+        assert_eq!(error.termination_category(), TerminationCategory::Timeout);
+    }
+
+    #[tokio::test]
+    async fn control_writes_surface_transport_failures() {
+        struct BrokenWriter;
+
+        impl AsyncWrite for BrokenWriter {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Err(std::io::Error::from(ErrorKind::BrokenPipe)))
+            }
+
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let mut broken = BrokenWriter;
+        let error = write_bounded(
+            &mut broken,
+            &Message::Ping(Ping { nonce: 1 }),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("a broken pipe must surface");
+        assert!(matches!(error, TunnelError::Io(_)));
+        assert_eq!(error.termination_category(), TerminationCategory::Transport);
+    }
 }

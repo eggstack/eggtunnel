@@ -24,10 +24,14 @@ pub(super) type Principal = Option<[u8; 32]>;
 
 /// Weak-reference map of live Sessions. Kept as one bounded map so shutdown can
 /// enumerate Sessions for drain without extending any lifetime.
-pub(super) type SessionRegistry = Arc<Mutex<HashMap<SessionId, Weak<SessionContext>>>>;
+///
+/// The map is guarded by a standard mutex: every critical section is a
+/// non-awaiting map operation, and `SessionGuard::drop` must be able to remove
+/// its entry deterministically.
+pub(super) type SessionRegistry = Arc<std::sync::Mutex<HashMap<SessionId, Weak<SessionContext>>>>;
 
 pub(super) fn new_session_registry() -> SessionRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
+    Arc::new(std::sync::Mutex::new(HashMap::new()))
 }
 
 /// Per-Session ownership record. One instance exists per authenticated control
@@ -60,7 +64,7 @@ impl SessionContext {
         registry: &SessionRegistry,
         max_sessions: usize,
     ) -> Result<(), TunnelError> {
-        let mut active = registry.lock().await;
+        let mut active = registry.lock().unwrap_or_else(|p| p.into_inner());
         active.retain(|_, weak| weak.strong_count() > 0);
         if active.len() >= max_sessions {
             return Err(TunnelError::Authorization);
@@ -73,7 +77,7 @@ impl SessionContext {
     pub(super) async fn live(registry: &SessionRegistry) -> Vec<Arc<SessionContext>> {
         registry
             .lock()
-            .await
+            .unwrap_or_else(|p| p.into_inner())
             .values()
             .filter_map(Weak::upgrade)
             .collect()
@@ -124,9 +128,12 @@ impl Drop for SessionGuard {
             .counters
             .services
             .fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
-        if let Ok(mut sessions) = self.sessions.try_lock() {
-            sessions.remove(&self.context.id);
-        }
+        // The registry entry is removed here, on every exit path: a contended
+        // drop must not leave a stale entry behind.
+        self.sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.context.id);
     }
 }
 

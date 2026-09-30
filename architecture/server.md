@@ -183,17 +183,15 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
                 └──────────────┬──────────────┘
                  ClientHello → serve_control:
                              │
-              auth-gate: is_blocked(source)? ──yes──► Auth error, drop
-                             │no
               version.major == CURRENT.major? ─no──► Protocol/UnsupportedVersion
                              │yes
                   ServerHello(CURRENT, intersected caps)
                              │
                   read Auth (HANDSHAKE_TIMEOUT)
                              │
-              verify_token? ──no──► record_failure + 100 ms sleep
-                             │           + Error{code:4} + Auth error
-                             │yes
+              verify_token AND is_blocked(source) evaluated together
+                             │ either false ──► record_failure + 100 ms sleep
+                             │                 + Error{code:4} + Auth error
               SessionId::generate; admit if sessions<128
                              │
                   AuthOk{session_id}
@@ -202,7 +200,7 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
                │ RegisterService → policy+bind → run_service + Ack   │
                │ UnregisterService → cancel service + GC pending     │
                │ OpenReject{connection_id} → free pending slot       │
-               │ Ping{nonce} → Pong{nonce}                           │
+               │ Ping{nonce} → Pong{nonce} (bounded write, idle reset)  │
                │ Drain → break (graceful close)                      │
                │ unexpected → Protocol/UnexpectedMessage             │
                │ open_rx Open/Drain → forward to client              │
@@ -220,9 +218,12 @@ session allocation + `policy.limits.sessions` check `server/control.rs:119-144`;
 `AuthOk` + split + policy-sized control channel `server/control.rs:143-146`;
 main `select!` loop `server/control.rs:154-237`; teardown `server/control.rs:215-225`.
 
-`SessionGuard` (`server/session.rs:85-115`) cancels the session, decrements
+`SessionGuard` (`server/session.rs`) cancels the session, decrements
 `sessions`, removes the session's `effective_binds`, reconciles `services`
-from the binds delta, and removes the weak map entry on drop.
+from the binds delta, and removes the weak map entry on drop. The registry is
+guarded by a standard mutex (`SessionRegistry`) rather than a Tokio one so that
+removal on the non-async drop path is deterministic: a contended `try_lock`
+would silently leave the entry behind.
 `SessionContext::drop` (`server/session.rs:45-52`) subtracts any leaked pending
 count so `pending` never sticks after session teardown.
 
@@ -282,9 +283,11 @@ client                                   server
 
 Selection (`register_service`, `server/control.rs:250-307`):
 
-1. `bind_to_socket(&requested_bind, &policy)` (`common.rs:491-512`):
-   `Loopback{port}` → `[::1]:port` if `permits_port`; `Ip{address,port}` →
-   `SocketAddrV6` iff `permits_address && permits_port`.
+1. `bind_to_socket(&requested_bind, &policy)` (`common.rs`):
+   `Loopback{port}` → `[::1]:port` iff `permits_address(::1, true) &&
+   permits_port` — the loopback request runs the same address gate, so a pinned
+   allowlist is not an escape hatch; `Ip{address,port}` → `SocketAddrV6` iff
+   `permits_address && permits_port`.
 2. `permits_address` (`common.rs:516-519`):
    `(is_loopback || allow_public_addresses) && (allowlist empty || contains)`.
    `permits_port` (`common.rs:522-531`): port 0 gated by
@@ -531,21 +534,29 @@ entries older than the window and drops empty deques, so the table cannot
 grow unboundedly and never delays successful auth (doc comment
 `server/auth.rs:30-31`).
 
-- `is_blocked(source)` (`server/auth.rs:47-60`): prune, then: unknown source
-  + table full → **blocked**; known source with `len >= 10` → blocked.
-- `record_failure(source)` (`server/auth.rs:62-73`): prune, then: unknown +
-  full → drop (no insert); else push timestamp.
-- Enforcement (`server/control.rs:83-85`, `1078-1093`): pre-`ServerHello` blocked
-  check (no failure recorded, just `Authentication`); post-check failure
-  records, **drops both guards first** (frees handshake capacity before the
-  sleep), sleeps 100 ms, `rejected++`, sends `Error{code:4}`, returns
-  `Authentication`.
+- `is_blocked(source)` (`server/auth.rs:51-60`): prune, then: known source with
+  `len >= 10` → blocked. An **unknown** source is never blocked, including when
+  the table is full: the ceiling bounds memory, and treating saturation as a
+  verdict let an attacker fill the table with spoofed addresses and lock out
+  legitimate new peers.
+- `record_failure(source)` (`server/auth.rs:62-76`): prune, then: unknown +
+  full → drop (no insert, `auth_source_table_saturated` debug log); else push
+  timestamp.
+- Enforcement (`server/control.rs`): the blocklist check runs **after**
+  `ServerHello` and alongside token verification — both operands are evaluated
+  before either can short-circuit, and a blocked source and a bad token leave
+  through the same `reject_authentication` path (record failure, **drop both
+  guards first** so handshake capacity is freed before the sleep, sleep 100 ms,
+  `rejected++`, `Error{code:4}`, return `Authentication`). A prober therefore
+  cannot separate blocklist membership from token validity by frame presence or
+  timing.
 
-Properties (`docs/SECURITY.md:25-30`, `docs/OPERATIONS.md:27-28`):
-process-local, per-source-IP, 10 fails / 60 s, ≤1024 sources, 100 ms delay,
-unknown sources rejected when full. Unit-tested at
-`server_tests/tcp.rs:1539-1562` (per-source isolation, full-table rejection of a second
-source, window expiry prunes to an empty table).
+Properties (`docs/SECURITY.md`, `docs/OPERATIONS.md`):
+process-local, per-source-IP, 10 fails / 60 s, ≤1024 tracked sources, 100 ms
+delay on every refusal, indistinguishable blocked-vs-bad-token. Unit-tested at
+`server_tests/tcp.rs` (`auth_failure_limiter_is_per_source_bounded_and_expires`:
+per-source isolation, saturated table does not block an unknown source, window
+expiry prunes to an empty table).
 
 ### 6.3 Resource-exhausted paths (all bounded, all counted)
 

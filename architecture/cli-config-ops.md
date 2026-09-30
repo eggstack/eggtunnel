@@ -77,7 +77,7 @@ fn load_token_with(
 
 - The TOML file stores only the **variable name** (`token_env = "EGGTUNNEL_TOKEN"`). The secret itself lives in the environment. This is reiterated in `docs/CONFIGURATION.md:3-4` and `docs/API.md:42`.
 - Each variable is read **exactly once** per resolution (`resolve_client_with` at `crates/eggtunnel-cli/src/main.rs:496-585`, `resolve_server_with` at `:590-640`). The resolved `SecretToken` is owned by `ResolvedClient`/`ResolvedServer` from then on; builders take owned values and never re-read the environment, so rotation between `check` and `start`/`bind` does **not** propagate — the process runs from its snapshot.
-- Unset names are `missing_secret_reference` (`required environment variable {env_name} is not set`); empty/oversize values are `config_resolution`. Messages name the variable, never the value. `SecretToken` has redacted `Debug` and `zeroize` on drop (`crates/eggtunnel/src/common.rs:36-46`).
+- An empty name is rejected up front with `config_resolution` (`token_env must name an environment variable`), mirroring the `outbound_proxy_env` guard, so no lookup of the empty name is ever issued. Unset names are `missing_secret_reference` (`required environment variable {env_name} is not set`); empty/oversize values are `config_resolution`. Messages name the variable, never the value. `SecretToken` has redacted `Debug` and `zeroize` on drop (`crates/eggtunnel/src/common.rs:36-46`).
 - The lookup is injectable (`&dyn Fn`) so tests prove single-read snapshot semantics without touching ambient process state (`crates/eggtunnel-cli/src/main.rs:1039-1120`).
 
 ### 1.4 Transport strings
@@ -191,15 +191,15 @@ default.
 
 ### 3.1 Server path (`run_server` at `crates/eggtunnel-cli/src/main.rs:853-925`)
 
-1. Parse → overrides → `resolve_server` → `server_builder(resolved).bind().await`. `bind()` runs `validate()` first (`crates/eggtunnel/src/server/config.rs:118-129`), so startup enforces the same library matrix as `check` — from the same snapshot, with no re-read.
+1. Validate `--snapshot-interval-secs` first (a flag error must not open listeners and *then* fail), then parse → overrides → `resolve_server` → `server_builder(resolved).bind().await`. `bind()` runs `validate()` first (`crates/eggtunnel/src/server/config.rs:118-129`), so startup enforces the same library matrix as `check` — from the same snapshot, with no re-read.
 2. Startup event (JSON) or `server listening on {addr}` with `server.local_addr()` (human).
 3. Effective-bind loop: a `printed: HashSet<(SessionId, ServiceId, [u8;16], u16)>`, a 250 ms `refresh` interval, and `tokio::select!` over `ctrl_c` vs `refresh.tick()` vs the optional snapshot ticker. Each tick snapshots `handle.snapshot().effective_binds` and prints/emits each never-before-seen key — human `service {id} session {session:?} listening on [{ipv6}]:{port}` (address via `Ipv6Addr::from(bind.address)`, so IPv4 appears as `::ffff:a.b.c.d`), or a `service_bind` JSON event with the same fields. Matches `docs/OPERATIONS.md:7-10`.
-4. `--snapshot-interval-secs N` (validated at `:789-801`, minimum 5 s) adds a periodic `snapshot` event rendered by `snapshot_event` (`:759-788`) straight from the bounded library `Snapshot` — counters, heartbeat health, termination, and the bind list. The ticker helper (`futures_time_tick` at `:926-931`) parks the branch on a far-future tick when disabled.
+4. `--snapshot-interval-secs N` (validated by `validate_snapshot_interval` before any bind/start, minimum 5 s) adds a periodic `snapshot` event rendered by `snapshot_event` straight from the bounded library `Snapshot` — counters, heartbeat health, termination, and the bind list. The ticker helper (`futures_time_tick` at `:926-931`) parks the branch on a far-future tick when disabled.
 5. Shutdown: `break` on Ctrl-C → `shutdown` JSON event (`reason: signal`) → `server.shutdown().await`, which sends the bounded Drain before joining (per `docs/OPERATIONS.md:4-5`).
 
 ### 3.2 Client path (`run_client` at `crates/eggtunnel-cli/src/main.rs:933-1002`)
 
-1. Parse → overrides → `resolve_client` → `client_builder(resolved).start().await` (validates first via `crates/eggtunnel/src/client/config.rs:142-155`).
+1. Validate `--snapshot-interval-secs` first (a flag error must not start the runtime and *then* fail), then parse → overrides → `resolve_client` → `client_builder(resolved).start().await` (validates first via `crates/eggtunnel/src/client/config.rs:142-155`).
 2. Startup event (JSON: version, mode, transport, service count) or `client started; waiting for authenticated session` (human).
 3. Session tracking loop: each 250 ms tick compares `snapshot.connected` against the previous tick and emits `session_ready` (generation + registered services) on false→true and `session_lost` (termination + reconnects) on true→false. Same snapshot-ticker and shutdown-event shape as the server path.
 4. Reconnects use bounded exponential backoff with jitter; bad auth/service authorization stops retries (`docs/OPERATIONS.md:14-17`).
@@ -356,7 +356,7 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 
 - [x] **Double-read eliminated.** Every variable is read exactly once per resolution (`resolve_client_with` / `resolve_server_with`); builders consume owned snapshot values, so rotation between `check` and `start`/`bind` no longer propagates. Proven by `resolved_snapshot_ignores_later_input_changes` (`crates/eggtunnel-cli/src/main.rs:1183-1196`) and the injectable lookup (`load_token_with` at `:323-341`).
 - [x] **No raw `VarError`.** All environment failures map to `missing_secret_reference` (unset) or `config_resolution` (empty/unusable) with the variable *name* in the message.
-- [ ] **Empty-string `token_env` name.** `token_env = ""` looks up the empty variable name. Harmless but confusing; consider an explicit guard like the proxy-name one.
+- [x] **Empty-string `token_env` name.** `load_token_with` rejects it with the same explicit `token_env must name an environment variable` message the proxy-name guard uses, before issuing any lookup. Proven by `an_empty_token_reference_is_rejected_explicitly` (client and server shapes, asserting the lookup count stays zero).
 - [ ] **Secrets never touch the file or argv.** Enforced by schema (no secret-valued key exists) plus the absence of `--token`/password flags — verify no future field/flag reintroduces inline secrets, per `docs/CONFIGURATION.md:85-97`. JSON/`Debug`/error paths are covered by redaction tests (`:1198-1225`, integration `tests/cli.rs`).
 
 ### 7.3 File-read error paths (M015: read-once + field-named errors)

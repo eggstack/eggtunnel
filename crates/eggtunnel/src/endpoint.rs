@@ -106,16 +106,9 @@ impl std::fmt::Display for Endpoint {
 }
 
 fn validate_host(host: &str) -> Result<(), EndpointError> {
-    if host.len() > eggtunnel_proto::MAX_TARGET_HOST_BYTES {
-        return Err(EndpointError::AmbiguousHost);
-    }
-    if host
-        .chars()
-        .any(|c| c.is_whitespace() || c.is_control() || "/?#@[]\\\"'<>".contains(c))
-    {
-        return Err(EndpointError::AmbiguousHost);
-    }
-    Ok(())
+    // One validator shared with the wire `TcpTarget`: a host shape accepted
+    // here is exactly the shape a peer may register.
+    eggtunnel_proto::validate_target_host(host).map_err(|_| EndpointError::AmbiguousHost)
 }
 
 #[cfg(test)]

@@ -1547,7 +1547,10 @@
         assert!(!limiter.is_blocked_at(first, start + Duration::from_secs(1)));
         limiter.record_failure_at(first, start + Duration::from_secs(1));
         assert!(limiter.is_blocked_at(first, start + Duration::from_secs(2)));
-        assert!(limiter.is_blocked_at(second, start + Duration::from_secs(2)));
+        // The source table is saturated, but a source that has never failed
+        // is not blocked: the ceiling bounds memory, it must not be usable to
+        // lock out a legitimate new peer.
+        assert!(!limiter.is_blocked_at(second, start + Duration::from_secs(2)));
         assert!(!limiter.is_blocked_at(first, start + Duration::from_secs(6)));
         assert_eq!(
             limiter
@@ -1611,6 +1614,35 @@
                 &policy
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn loopback_binds_respect_the_address_allowlist() {
+        // A pinned allowlist is not an escape hatch: `RequestedBind::Loopback`
+        // resolves to `::1` and is checked against the same allowlist as an
+        // explicit address request.
+        let policy = BindPolicy {
+            allow_public_addresses: false,
+            allowed_addresses: vec!["2001:db8::1"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+                .octets()],
+            ..BindPolicy::default()
+        };
+        assert!(policy.validate().is_ok());
+        assert!(bind_to_socket(&RequestedBind::Loopback { port: 8080 }, &policy).is_err());
+        let policy = BindPolicy {
+            allowed_addresses: vec![std::net::Ipv6Addr::LOCALHOST.octets()],
+            ..policy
+        };
+        assert!(
+            bind_to_socket(&RequestedBind::Loopback { port: 8080 }, &policy).is_ok(),
+            "an allowlist that pins loopback must still admit loopback binds"
+        );
+        // The default (empty allowlist) admits loopback unchanged.
+        assert!(
+            bind_to_socket(&RequestedBind::Loopback { port: 8080 }, &BindPolicy::default()).is_ok()
         );
     }
 

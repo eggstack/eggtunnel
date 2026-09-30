@@ -21,7 +21,7 @@ pub use common::{BindPolicy, ClientService, HeartbeatSnapshot, ResourceLimits, R
 | Listener admission policy | `BindPolicy` | struct always; enforcement server-only | `crates/eggtunnel/src/common.rs:85` |
 | Observability | `Snapshot`, `Counters`, `HeartbeatSnapshot`, `ResourceLimits`, `RuntimePolicy`, `TimeoutPolicy`, `TerminationCategory` | `Snapshot`/`HeartbeatSnapshot`/`ResourceLimits`/`RuntimePolicy`/`TimeoutPolicy`/`TerminationCategory` always; `Counters` (+ `HeartbeatState`) gated | `Snapshot` at `crates/eggtunnel/src/common.rs:137`, `HeartbeatSnapshot` at `crates/eggtunnel/src/common.rs:164`, `TerminationCategory` at `crates/eggtunnel/src/common.rs:180`, `ResourceLimits` at `crates/eggtunnel/src/common.rs:196`, `TimeoutPolicy` at `crates/eggtunnel/src/common.rs:250`, `RuntimePolicy` at `crates/eggtunnel/src/common.rs:306`, `Counters` at `crates/eggtunnel/src/common.rs:320` |
 | Error vocabulary | `TunnelError` + `termination_category()` | always | `crates/eggtunnel/src/common.rs:437`, `crates/eggtunnel/src/common.rs:467` |
-| Server-only enforcement | `verify_token`, `bind_to_socket`, `permits_address`, `permits_port` | `server` only | `crates/eggtunnel/src/common.rs:485`, `crates/eggtunnel/src/common.rs:491`, `crates/eggtunnel/src/common.rs:516`, `crates/eggtunnel/src/common.rs:522` |
+| Server-only enforcement | `verify_token`, `bind_to_socket`, `permits_address`, `permits_port` | `server` only | `crates/eggtunnel/src/common.rs:495`, `crates/eggtunnel/src/common.rs:520`, `crates/eggtunnel/src/common.rs:543`, `crates/eggtunnel/src/common.rs:550` |
 
 Design intent, corroborated by `docs/SECURITY.md:9-17` and `docs/ARCHITECTURE.md:1-6`:
 
@@ -93,7 +93,7 @@ pub(crate) fn expose(&self) -> &[u8] {
 | Side | Use site | Behavior |
 |---|---|---|
 | Client | `crates/eggtunnel/src/client/reconnect.rs:290`: `Auth::new(token.expose().to_vec())?` | Copies the secret into a wire `Auth` message once per session handshake, inside the already-established verified TLS stream. The `Auth` wire type itself has redacted `Debug` (proto layer). |
-| Server | `crates/eggtunnel/src/server/control.rs:110`: `verify_token(&token, auth.token())` | Never serializes or logs the expected token; compares in constant time (§6.2). On mismatch: records per-source auth failure, drops handshake guards, sleeps 100 ms, bumps `rejected`, sends generic `Error{code:4, "authentication failed"}`, returns `TunnelError::Authentication` (`crates/eggtunnel/src/server/control.rs:110-125`; non-`Auth` message where `Auth` is expected returns `Authentication` at `:1075-1076`). No Session is created and no service is registered before this check passes (`docs/SECURITY.md:5-6`). |
+| Server | `server/control.rs`: `verify_token(&token, auth.token())` | Never serializes or logs the expected token; compares in constant time (§6.2). Both the token result and `auth_failures.is_blocked(source)` are evaluated before either can short-circuit the other, and either one routes through `reject_authentication`, so blocked and bad-token are indistinguishable (same delay, same frame). On refusal: records per-source auth failure, drops handshake guards, sleeps 100 ms, bumps `rejected`, sends generic `Error{code:4, "authentication failed"}`, returns `TunnelError::Authentication`; non-`Auth` message where `Auth` is expected returns `Authentication` at `:1075-1076`). No Session is created and no service is registered before this check passes (`docs/SECURITY.md:5-6`). |
 | Config plumbing | `ServerConfig.token` (`crates/eggtunnel/src/server/config.rs:30`), `ClientConfig` token, CLI `load_token` (`crates/eggtunnel-cli/src/main.rs:79-82`) | Both configs own a `SecretToken`; construction fails early on empty/oversize input. |
 | Tests | e.g. `crates/eggtunnel/src/server_tests.rs:47-57` | `SecretToken::new(b"...".to_vec()).unwrap()` per test harness; short literal tokens are fine because the lower bound is 1 byte. |
 
@@ -219,7 +219,7 @@ fn permits_port(&self, port: u16) -> bool {
 
 `bind_to_socket` — `crates/eggtunnel/src/common.rs:491-512` (`#[cfg(feature = "server")]`, `pub(crate)`):
 
-- `RequestedBind::Loopback { port }` → checks `permits_port` only, then binds `SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0))` (`crates/eggtunnel/src/common.rs:497-502`). Loopback never consults `allow_public_addresses`/`allowed_addresses` — it is always address-permitted.
+- `RequestedBind::Loopback { port }` → resolves to `::1` and runs the *same* gate as an explicit request, `permits_address(Ipv6Addr::LOCALHOST.octets(), true) && permits_port(*port)`, then binds `SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0))` (`crates/eggtunnel/src/common.rs:507-517`). With the default empty `allowed_addresses` this is always address-permitted, but a pinned allowlist that does not name `::1` now rejects loopback instead of being an escape hatch.
 - `RequestedBind::Ip { address, port }` → converts with `Ipv6Addr::from(*address)`, checks `permits_address(*address, ip.is_loopback()) && permits_port(*port)`, then binds `SocketAddrV6::new(ip, port, 0, 0)` (`crates/eggtunnel/src/common.rs:503-509`). An `Ip` request carrying `::1` is treated as loopback even though it arrived via the `Ip` variant.
 - Either rejection returns `TunnelError::Authorization` (which the registration loop translates into `rejected += 1` plus `write_registration_error(code 2)` at `crates/eggtunnel/src/server/control.rs:178`).
 - Both arms produce `SocketAddr::V6` unconditionally — dual-stack listeners via IPv6 sockets; there is no IPv4-mapped special-casing beyond what the 16-byte representation already encodes.
@@ -230,7 +230,8 @@ Call site: exactly one, the `RegisterService` handler at `crates/eggtunnel/src/s
 
 | Request | Policy | Decision | Why |
 |---|---|---|---|
-| `Loopback{port: 8080}` | default | ✅ permit (subject to OS bind) | Address gate skipped for loopback; port 8080 ≠ 0 and ranges empty → permit |
+| `Loopback{port: 8080}` | default | ✅ permit (subject to OS bind) | Empty allowlist permits `::1`; port 8080 ≠ 0 and ranges empty → permit |
+| `Loopback{port: 8080}` | `allowed_addresses = [198.51.100.9]` | ❌ `Authorization` | A pinned allowlist is not an escape hatch: the loopback path runs `permits_address(::1, true)` |
 | `Loopback{port: 0}` | default | ✅ permit (ephemeral) | `permits_port(0) == allow_ephemeral_ports == true` |
 | `Loopback{port: 0}` | `allow_ephemeral_ports = false` | ❌ `Authorization` | Port-0 branch returns `false` regardless of ranges |
 | `Loopback{port: 8080}` | `allowed_port_ranges = [(8000, 9000)]` | ✅ permit | 8080 ∈ [8000, 9000] |
@@ -375,18 +376,27 @@ Counter increment/decrement discipline (spot-checked):
 
 `Clean` is never produced by `termination_category()` — it is reserved for graceful shutdown paths that record termination directly. Every fallible session/handshake exit is expected to funnel through `record_termination(error.termination_category())` (client: `crates/eggtunnel/src/client/reconnect.rs:163`, `crates/eggtunnel/src/client/reconnect.rs:334`; server: `crates/eggtunnel/src/client.rs:650-660`, `crates/eggtunnel/src/server/accept.rs:155`).
 
-### 6.3 `verify_token` constant-time semantics — `crates/eggtunnel/src/common.rs:485-488`
+### 6.3 `verify_token` constant-time semantics — `crates/eggtunnel/src/common.rs:496-517`
 
 ```rust
 #[cfg(feature = "server")]
 pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
-    expected.expose().len() == received.len() && bool::from(expected.expose().ct_eq(received))
+    const WIDTH: usize = eggtunnel_proto::MAX_AUTH_TOKEN_BYTES;
+    // one fixed-width ct_eq over content + a non-overlapping length field
+    let mut left = [0u8; WIDTH + 2];
+    let mut right = [0u8; WIDTH + 2];
+    left[..expected_bytes.len()].copy_from_slice(expected_bytes);
+    right[..received.len()].copy_from_slice(received);
+    left[WIDTH..].copy_from_slice(&(expected_bytes.len() as u16).to_be_bytes());
+    right[WIDTH..].copy_from_slice(&(received.len() as u16).to_be_bytes());
+    bool::from(left.ct_eq(&right))
 }
 ```
 
-- `subtle::ConstantTimeEq::ct_eq` (unconditional `subtle` dependency at `crates/eggtunnel/Cargo.toml:36`) compares byte content in constant time for the compared length. The `&&` short-circuits the content comparison when lengths differ — this leaks length, which is acceptable because token length is not the secret (and the wire encoding already reveals it); content comparison itself does not early-exit on first mismatch.
-- `pub(crate)` + `server`-gated: unreachable from client builds and from downstream crates. Sole call site is the auth check at `crates/eggtunnel/src/server/accept.rs:240`, followed by the 100 ms failure delay + per-source throttle (`docs/SECURITY.md:25-30`), so online guessing is rate-limited on top of the constant-time compare.
+- `subtle::ConstantTimeEq::ct_eq` (unconditional `subtle` dependency at `crates/eggtunnel/Cargo.toml:36`) compares a fixed `MAX_AUTH_TOKEN_BYTES + 2` buffer. Length is carried in the trailing two bytes rather than compared with a short-circuiting `&&`, so a wrong-length token costs the same as a wrong-content one and length equality is not observable through timing. Putting length *after* the padded content (instead of inferring it from padding) is what stops `token\0` from aliasing to `token`.
+- The bound checks are on values `SecretToken::new` and the wire decoder already enforce, not on attacker input.
+- `pub(crate)` + `server`-gated: unreachable from client builds and from downstream crates. Sole call site is the auth check in `server/control.rs`, immediately followed by the 100 ms failure delay + per-source throttle (`docs/SECURITY.md`), so online guessing is rate-limited on top of the constant-time compare.
 
 ---
 
@@ -402,7 +412,7 @@ pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
 | `use std::net::SocketAddr` (`crates/eggtunnel/src/common.rs:2-3`) | `server` | Client-only builds do not monomorphize socket mapping |
 | `SecretToken::expose` (`crates/eggtunnel/src/common.rs:32`) | `any(client, server)` | With neither feature, the secret cannot leave the type at all (no accessor exists) |
 | `Counters` struct + `with_policy`/`snapshot`/`begin_session`/`record_heartbeat_*`/`record_termination`/`record_join_result` (`crates/eggtunnel/src/common.rs:320-433`), `Instant` + atomic imports (`crates/eggtunnel/src/common.rs:4-10`) | `any(client, server)` | `--no-default-features` build has `Snapshot` as a pure data type with no producer |
-| `verify_token` (`crates/eggtunnel/src/common.rs:485`), `bind_to_socket` (`crates/eggtunnel/src/common.rs:491`), `permits_address` (`crates/eggtunnel/src/common.rs:516`), `permits_port` (`crates/eggtunnel/src/common.rs:522`) | `server` | Client-only builds cannot evaluate policy or compare tokens; `BindPolicy::validate` (un-gated) remains callable for fail-fast config checks |
+| `verify_token` (`crates/eggtunnel/src/common.rs:495`), `bind_to_socket` (`crates/eggtunnel/src/common.rs:520`), `permits_address` (`crates/eggtunnel/src/common.rs:543`), `permits_port` (`crates/eggtunnel/src/common.rs:550`) | `server` | Client-only builds cannot evaluate policy or compare tokens; `BindPolicy::validate` (un-gated) remains callable for fail-fast config checks |
 | `lib.rs` module wiring (`crates/eggtunnel/src/lib.rs:7-16`) | `client` / `server` per module | `common` is always compiled; `wire_io` only with either side; `Client*` re-exports need `client`, `Server*` need `server` |
 
 Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exercises only the un-gated vocabulary; `--features server` is required to type-check the enforcement helpers; `--features client,server` (or default) covers `Counters`/`expose`. Transport features (`quic`, `websocket`, `outbound-proxy`, `mtls`) do not change `common.rs` compilation — they only add `bind_*`/`start_*` variants in `server.rs`/`client.rs` that still funnel through the same `verify_token`/`bind_to_socket`/`Counters` paths.
@@ -416,7 +426,7 @@ Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exe
 - [ ] New code paths touching `SecretToken` use `expose()` (borrow) rather than adding an owned/cloned accessor; any `.to_vec()` copy is scoped to the handshake message and not logged. (Current copies: `crates/eggtunnel/src/client/reconnect.rs:290` only.)
 - [ ] No `Debug`/`Display`/`Serialize` impl is added for `SecretToken`, `Auth` token bytes, proxy credentials, or mTLS key buffers. `Snapshot` must stay credential-free (proxy creds are env-var + redacted per `docs/SECURITY.md:74-78`).
 - [ ] `Clone` derivations on secret-bearing configs are justified; each clone extends zeroize responsibility. Prefer moving over cloning in session setup.
-- [ ] `verify_token` remains the sole comparison; no `==` on token bytes is introduced anywhere (length short-circuit is the only accepted early exit).
+- [ ] `verify_token` remains the sole comparison; no `==` on token bytes is introduced anywhere, and the single fixed-width `ct_eq` must keep covering the length field (a short-circuiting length pre-check reintroduces the timing oracle).
 
 ### 8.2 Policy bypass risks
 
@@ -425,7 +435,7 @@ Consequences for reviewers: `cargo check -p eggtunnel --no-default-features` exe
 - [ ] `BindPolicy::validate` is called before serving in every constructor. A new constructor that skips it could admit `max_services_per_session = 0` (denial of all registrations) or `> 65536` (above the `validate()` ceiling), or port ranges containing 0.
 - [ ] `ServiceSpec` has no `target`, but the wire `RegisterService` still carries one. Any future use of `ServiceSpec` as a registration input must construct it server-side (dropping `target`) rather than trusting a client-supplied projection.
 - [ ] `Ip{ address: ::1 }` is intentionally treated as loopback (`ip.is_loopback()` at `crates/eggtunnel/src/common.rs:505`). Do not "fix" this into a rejection without also handling IPv4-mapped `::ffff:127.0.0.1`, which `is_loopback()` does *not* flag — changing either behavior alters the loopback allowlist surface.
-- [ ] Auth-then-policy ordering is preserved: `verify_token` (`crates/eggtunnel/src/server/control.rs:110`) before any `bind_to_socket` on that session, and policy re-evaluated per `RegisterService` (a session cannot escalate by registering after a policy change — each registration checks the live `bind_policy`).
+- [ ] Auth-then-policy ordering is preserved: `verify_token` (`server/control.rs`) before any `bind_to_socket` on that session, and policy re-evaluated per `RegisterService` (a session cannot escalate by registering after a policy change — each registration checks the live `bind_policy`).
 
 ### 8.3 Counter consistency
 

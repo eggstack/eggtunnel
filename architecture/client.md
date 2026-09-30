@@ -366,8 +366,11 @@ with the private `Transport` adapter (`client/reconnect.rs:45-52`) and
   (`policy.timeouts.connect`) → `open_stream` for control
   (`policy.timeouts.connect`)). Both hand the established control stream to
   the shared `run_session`.
-- **Auth/Authz failures do not reconnect** — `Terminal` after recording
-  termination (`client/reconnect.rs:106-111`). Everything else
+- **Auth/Authz/local-exhaustion failures do not reconnect** — `Terminal` after
+  recording termination (`client/reconnect.rs:106-112`). `ResourceExhausted`
+  joins that set because it is a local, unrecoverable condition (a spent
+  Session generation counter): retrying it would back off forever and never
+  surface the error. Everything else
   records termination, zeroes `connected/services/binds`
   (`client/reconnect.rs:96-110`), increments `reconnects` and sleeps
   `delay + jitter`, then doubles `delay`
@@ -440,7 +443,7 @@ promptly.
 
 | Primitive | Where | Purpose |
 |---|---|---|
-| Control `split` reader/writer | `client/reconnect.rs:87` | Full-duplex control: `reader` only in the `read_message` arm, `writer` only for `out_rx` drain + `Register`/`Unregister` + terminal `Drain`. No lock; single owner task. |
+| Control `split` reader/writer | `client/reconnect.rs:87` | Full-duplex control: `reader` only in the `read_message` arm, `writer` only for `out_rx` drain + `Register`/`Unregister` + terminal `Drain`. No lock; single owner task. Every one of those writes goes through `write_control` (`client.rs`), a `timeout(policy.timeouts.handshake, …)` wrapper, so a server that stops reading cannot wedge the whole `select!` loop. |
 | `JoinSet opens` | `client/reconnect.rs:133` | Data-plane tasks (`handle_open`). Reaped via `join_next` inside the loop (`client/reconnect.rs:119-121`) and at teardown (`endpoint.rs:42-47`). Panics counted via `record_join_result` → `task_panics++` + `Internal` (`common.rs:428-433`). |
 | `Semaphore(policy.limits.client_open_tasks)` + `try_acquire_owned` | `client/reconnect.rs:197`, `client/reconnect.rs:174-181` | Admission for `Open` flood (default 128). Non-blocking: overload → immediate `OpenReject code=2`, no queueing. Permit moved into the task (`client/reconnect.rs:405`). |
 | `mpsc(control_queue)` (`out_tx/out_rx`) | `client/reconnect.rs:130` | Outbound control queue (default 128; `Pong`, `Ping`, `OpenReject`). All producers use `try_send` (never block the data plane); drops on full are silent (`let _ =`). Missed-ping accounting still records via `record_heartbeat_missed`. |
@@ -485,7 +488,7 @@ pre-split runtime (`common.rs:232-301`):
 | `limits.control_queue` | 128 | `client.rs:791` | Outbound control `mpsc` depth. |
 | `limits.client_command_queue` | 32 | `client.rs:344,455` | `ClientHandle →` loop command depth. |
 | `timeouts.connect` | 10 s | `client/reconnect.rs:265-271` (TCP/proxy dial), `open.rs:29,35,62`, `client/reconnect.rs:398,416-426` (QUIC) | TCP connect (direct or proxy), target `connect()`, QUIC connect/get/open. |
-| `timeouts.handshake` | 10 s | `client/reconnect.rs:269-275` (TLS), `client/reconnect.rs:276-300` (WSS), `client.rs:709-740` (control handshake), `client.rs:947-960` (dynamic `Register` write + ack deadline) | TLS handshake, WSS upgrade, every control handshake read/write, dynamic registration round-trip. |
+| `timeouts.handshake` | 10 s | `client/reconnect.rs:269-275` (TLS), `client/reconnect.rs:276-300` (WSS), `client.rs:709-740` (control handshake), `client.rs:947-960` (dynamic `Register` write + ack deadline), `client.rs` `write_control` (in-loop `Unregister` + `out_rx` drain) | TLS handshake, WSS upgrade, every control handshake read/write, dynamic registration round-trip, and every in-loop control write so a wedged peer cannot stall the loop. |
 | `timeouts.relay_drain` | 15 s | `client/open.rs:68`, `client.rs:806-808` | `RelayOptions` drain bound and advertised `Drain.deadline_ms` on local shutdown. |
 | `timeouts.shutdown_grace` | 1 s | `client.rs:982-986` | Local join window for open tasks after session break. |
 | `timeouts.reconnect_initial` → `reconnect_max` | 500 ms → 30 s, ×2 + jitter | `client/reconnect.rs:128-148`, `client/reconnect.rs:140-143` | Reset to initial on successful registration (`client.rs:783`). |

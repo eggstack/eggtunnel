@@ -57,11 +57,9 @@ impl SessionId {
 
 impl fmt::Debug for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "SessionId({:02x}{:02x}{:02x}{:02x}…)",
-            self.0[0], self.0[1], self.0[2], self.0[3]
-        )
+        // A Session ID is a capability in `DataHello`; it is redacted exactly
+        // like `ConnectionId` so no prefix is recoverable from logs.
+        f.write_str("SessionId([REDACTED])")
     }
 }
 
@@ -171,11 +169,8 @@ impl TryFrom<WireTcpTarget> for TcpTarget {
 impl TcpTarget {
     pub fn new(host: impl Into<String>, port: u16) -> Result<Self, ProtocolError> {
         let host = host.into();
-        if host.is_empty()
-            || host.len() > MAX_TARGET_HOST_BYTES
-            || host.chars().any(char::is_control)
-            || port == 0
-        {
+        validate_target_host(&host)?;
+        if port == 0 {
             return Err(ProtocolError::InvalidTarget);
         }
         Ok(Self { host, port })
@@ -186,6 +181,27 @@ impl TcpTarget {
     pub fn port(&self) -> u16 {
         self.port
     }
+}
+
+/// The single host-text validator for every Eggtunnel surface that carries a
+/// bare host: the wire `TcpTarget` and the client `host:port` endpoint both
+/// lower their text through this, so a peer cannot register a Service whose
+/// target host shape local configuration would reject.
+///
+/// Rejects empty text, text over [`MAX_TARGET_HOST_BYTES`], control characters,
+/// whitespace, and the characters that would be ambiguous once the host is
+/// embedded in a URL authority. A colon is accepted: the host is carried
+/// without a port, so IPv6 literals are valid.
+pub fn validate_target_host(host: &str) -> Result<(), ProtocolError> {
+    if host.is_empty()
+        || host.len() > MAX_TARGET_HOST_BYTES
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "/?#@[]\\\"'<>".contains(c))
+    {
+        return Err(ProtocolError::InvalidTarget);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -510,12 +526,13 @@ pub fn encode_frame(message: &Message) -> Result<Vec<u8>, ProtocolError> {
     if payload.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge);
     }
+    let payload_len = u32::try_from(payload.len()).map_err(|_| ProtocolError::FrameTooLarge)?;
     let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
     out.extend_from_slice(&MAGIC);
     out.extend_from_slice(&PROTOCOL_MAJOR.to_be_bytes());
     out.extend_from_slice(&PROTOCOL_MINOR.to_be_bytes());
     out.extend_from_slice(&(message.kind() as u16).to_be_bytes());
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&payload_len.to_be_bytes());
     out.extend_from_slice(&payload);
     Ok(out)
 }
@@ -843,6 +860,48 @@ mod tests {
     }
 
     #[test]
+    fn target_host_validation_is_shared_with_endpoint_parsing() {
+        // One validator: a host shape a peer may register is exactly the shape
+        // local configuration accepts.
+        for host in [
+            "localhost",
+            "example.internal",
+            "127.0.0.1",
+            "::1",
+            "a-b_c.d",
+        ] {
+            assert!(validate_target_host(host).is_ok(), "{host}");
+            assert!(TcpTarget::new(host, 443).is_ok(), "{host}");
+        }
+        for host in [
+            "",
+            "a b",
+            "a/b",
+            "a?b",
+            "a#b",
+            "u@h",
+            "a[b]",
+            "a\\b",
+            "a\"b",
+            "a'b",
+            "a<b>",
+            "a\u{0003}b",
+            "a\u{00a0}b",
+        ] {
+            assert!(validate_target_host(host).is_err(), "{host:?}");
+            assert!(TcpTarget::new(host, 443).is_err(), "{host:?}");
+        }
+        let over_length = "x".repeat(MAX_TARGET_HOST_BYTES + 1);
+        assert!(TcpTarget::new(over_length, 443).is_err());
+        assert!(TcpTarget::new("x".repeat(MAX_TARGET_HOST_BYTES), 443).is_ok());
+        // A wire payload carrying a hostile host revalidates on decode.
+        let hostile = postcard::to_allocvec(&("a b".to_owned(), 80u16)).unwrap();
+        assert!(postcard::from_bytes::<TcpTarget>(&hostile).is_err());
+        let hostile = postcard::to_allocvec(&("::1".to_owned(), 0u16)).unwrap();
+        assert!(postcard::from_bytes::<TcpTarget>(&hostile).is_err());
+    }
+
+    #[test]
     fn validates_bounded_types_and_redacts_secrets() {
         assert!(ServiceName::new("").is_err());
         assert!(ServiceName::new("x".repeat(MAX_NAME_BYTES)).is_ok());
@@ -851,6 +910,11 @@ mod tests {
         assert!(BoundedDiagnostic::new("x".repeat(MAX_DIAGNOSTIC_BYTES + 1)).is_err());
         assert!(!format!("{:?}", Auth::new(b"secret".to_vec()).unwrap()).contains("secret"));
         assert!(!format!("{:?}", ConnectionId([0xab; 16])).contains("ab"));
+        // Session IDs are capabilities in `DataHello` and are redacted
+        // exactly like `ConnectionId`.
+        let session_debug = format!("{:?}", SessionId([0xab; 16]));
+        assert_eq!(session_debug, "SessionId([REDACTED])");
+        assert!(!session_debug.contains("ab"));
     }
 
     #[test]

@@ -119,7 +119,11 @@ impl Server {
                 certificate_pem: config.certificate_pem.clone(),
                 private_key_pem: config.private_key_pem.clone(),
                 idle_timeout: std::time::Duration::from_secs(90),
-                max_concurrent_streams: max_active_data_streams.max(1) as u32 * 2,
+                max_concurrent_streams: u32::try_from(max_active_data_streams.max(1))
+                    .map_err(|_| {
+                        TunnelError::Configuration("data stream ceiling exceeds the QUIC limit")
+                    })?
+                    .saturating_mul(2),
                 alpn_protocols: Vec::new(),
             },
         )
@@ -226,10 +230,15 @@ impl Server {
                 certificate_pem: config.certificate_pem.clone(),
                 private_key_pem: config.private_key_pem.clone(),
                 idle_timeout: runtime_policy.timeouts.control_idle,
-                max_concurrent_streams: runtime_policy
-                    .limits
-                    .active_connections_per_session
-                    .saturating_add(1) as u32,
+                max_concurrent_streams: u32::try_from(
+                    runtime_policy
+                        .limits
+                        .active_connections_per_session
+                        .saturating_add(1),
+                )
+                .map_err(|_| {
+                    TunnelError::Configuration("connection ceiling exceeds the QUIC stream limit")
+                })?,
                 alpn_protocols: Vec::new(),
             },
         )

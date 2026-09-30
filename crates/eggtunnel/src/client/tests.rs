@@ -954,3 +954,48 @@ async fn correlated_cancelled_registration_is_unregistered_and_never_commits() {
     drop(peer);
     assert!(task.await.unwrap().is_err());
 }
+
+/// A peer that never accepts another byte: the exact shape of a server that
+/// stops reading and used to wedge the whole client `select!` loop.
+struct StalledWriter;
+
+impl tokio::io::AsyncWrite for StalledWriter {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::task::Poll::Pending
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+#[tokio::test]
+async fn control_writes_are_bounded_by_their_budget() {
+    let mut stalled = StalledWriter;
+    let error = super::write_control(
+        &mut stalled,
+        &Message::Ping(eggtunnel_proto::Ping { nonce: 1 }),
+        Duration::from_millis(50),
+    )
+    .await
+    .expect_err("a stalled server must not hold the client loop");
+    assert!(matches!(error, TunnelError::Timeout));
+    assert_eq!(
+        error.termination_category(),
+        crate::common::TerminationCategory::Timeout
+    );
+}

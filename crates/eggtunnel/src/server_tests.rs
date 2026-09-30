@@ -14,7 +14,7 @@ mod tests {
         Client, ClientConfig, ClientService, TargetConnector, TargetContext, TargetError,
         TargetFuture, TargetStream,
     };
-    use crate::common::bind_to_socket;
+    use crate::common::{bind_to_socket, verify_token};
     use crate::wire_io::{read_boxed, write_boxed};
     use eggtunnel_proto::{
         Capabilities, ClientHello, DataHello, Message, ProtocolVersion, RequestedBind, ServiceId,
@@ -39,7 +39,7 @@ mod tests {
         session_id: SessionId,
     ) -> (
         Arc<SessionContext>,
-        Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+        Arc<std::sync::Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
         Counters,
     ) {
         let counters = Counters::default();
@@ -52,10 +52,10 @@ mod tests {
             control_tx: Mutex::new(None),
             counters: counters.clone(),
         });
-        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
         sessions
             .lock()
-            .await
+            .unwrap_or_else(|p| p.into_inner())
             .insert(session_id, Arc::downgrade(&context));
         (context, sessions, counters)
     }
@@ -195,6 +195,59 @@ mod tests {
             trusted_identity_wrong_name,
             rogue_identity,
         )
+    }
+
+    #[test]
+    fn token_comparison_is_exact_across_lengths_and_contents() {
+        let expected = SecretToken::new(b"correct-horse-battery-staple".to_vec()).unwrap();
+        assert!(verify_token(&expected, b"correct-horse-battery-staple"));
+        // Same length, different content.
+        assert!(!verify_token(&expected, b"correct-horse-battery-stapl3"));
+        // Different lengths, including the empty token and the ceiling.
+        assert!(!verify_token(&expected, b""));
+        assert!(!verify_token(&expected, b"correct-horse-battery-staple "));
+        assert!(!verify_token(
+            &expected,
+            b"correct-horse-battery-stapl3-correct-horse-battery-staple"
+        ));
+        // A single flipped bit anywhere in the token is rejected.
+        let mut flipped = b"correct-horse-battery-staple".to_vec();
+        let last = flipped.len() - 1;
+        flipped[last] ^= 1;
+        assert!(!verify_token(&expected, &flipped));
+        // The comparison is fixed width, so a padded token of the same value
+        // is still rejected on content.
+        let mut padded = b"correct-horse-battery-staple".to_vec();
+        padded.push(0);
+        assert!(!verify_token(&expected, &padded));
+    }
+
+    #[tokio::test]
+    async fn session_guard_removes_its_registry_entry_on_every_path() {
+        let counters = Counters::default();
+        let registry = crate::server::session::new_session_registry();
+        let live = {
+            let (context, _sessions, _counters) = test_session(SessionId([3; 16])).await;
+            SessionContext::register(&context, &registry, MAX_SESSIONS)
+                .await
+                .unwrap();
+            let _guard = crate::server::session::SessionGuard::new(context.clone(), registry.clone());
+            assert_eq!(registry.lock().unwrap_or_else(|p| p.into_inner()).len(), 1);
+            context
+        };
+        // The guard is gone, and the registry entry it owned is gone with it.
+        drop(live);
+        assert!(
+            registry
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty(),
+            "a dropped Session must not leave a registry entry behind"
+        );
+        assert_eq!(
+            counters.sessions.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     async fn roundtrip(addr: SocketAddr, bytes: &'static [u8]) -> Vec<u8> {

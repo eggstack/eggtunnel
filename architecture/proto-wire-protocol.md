@@ -105,20 +105,21 @@ Key properties:
   `InvalidPayload` surface from nested DTO validation during `take_from_bytes`
   (via `serde(try_from)` — §4).
 
-### 2.4 `wire_io.rs` transport adapter (`crates/eggtunnel/src/wire_io.rs:7-58`)
+### 2.4 `wire_io.rs` transport adapter (`crates/eggtunnel/src/wire_io.rs:11-74`)
 
 `eggtunnel-proto` itself does no I/O. The thin async adapter in the parent crate preserves
 the same safety order:
 
 | Function | Behavior |
 |---|---|
-| `read_message` (`crates/eggtunnel/src/wire_io.rs:7-36`) | `read_exact` 14-byte header; `decode_frame(&header)` must yield `TruncatedFrame` (any other `Err` is returned immediately, `Ok` is `unreachable!` — `crates/eggtunnel/src/wire_io.rs:15-19`); parse `len` from `header[10..14]` and reject `len > MAX_FRAME_BYTES` **before** allocating (`crates/eggtunnel/src/wire_io.rs:20-23`); `resize(HEADER_LEN + len)` + `read_exact` payload (`crates/eggtunnel/src/wire_io.rs:24-30`, short read → `TruncatedFrame`); final `decode_frame(&frame)` + exact-consumption check `consumed != frame.len()` → `InvalidPayload` (`crates/eggtunnel/src/wire_io.rs:31-34`) |
-| `write_message` (`crates/eggtunnel/src/wire_io.rs:38-47`) | `encode_frame` then `write_all`; I/O failure mapped to `TruncatedFrame` (`crates/eggtunnel/src/wire_io.rs:46`) |
-| `read_boxed` / `write_boxed` (`crates/eggtunnel/src/wire_io.rs:49-58`) | same logic over Eggress `BoxStream` (delegates to `read_message` / `write_message`) |
+| `io_error` (`crates/eggtunnel/src/wire_io.rs:11-17`) | classifies a transport I/O failure: only `ErrorKind::UnexpectedEof` is a `ProtocolError::TruncatedFrame`, everything else becomes `TunnelError::Io`, whose `termination_category()` is `Transport` |
+| `read_message` (`crates/eggtunnel/src/wire_io.rs:19-56`) | `read_exact` 14-byte header; `decode_frame(&header)` must yield `TruncatedFrame` (any other `Err` is returned immediately, a header that decodes to a complete frame is `InvalidPayload` — fail closed, never a panic — `crates/eggtunnel/src/wire_io.rs:24-31`); parse `len` from `header[10..14]` and reject `len > MAX_FRAME_BYTES` **before** buffering (`crates/eggtunnel/src/wire_io.rs:32-36`); buffer the payload incrementally with `take(len).read_to_end` so a peer that announces the maximum frame and stalls holds only what it sent, not a pre-committed 1 MiB allocation (`crates/eggtunnel/src/wire_io.rs:37-47`, short payload → `TruncatedFrame`); final `decode_frame(&frame)` + exact-consumption check `consumed != frame.len()` → `InvalidPayload` (`crates/eggtunnel/src/wire_io.rs:48-54`) |
+| `write_message` (`crates/eggtunnel/src/wire_io.rs:58-64`) | `encode_frame` then `write_all`; I/O failure classified by `io_error`, so a reset/refused/broken pipe is `Transport`, not `Protocol` |
+| `read_boxed` / `write_boxed` (`crates/eggtunnel/src/wire_io.rs:66-74`) | same logic over Eggress `BoxStream` (delegates to `read_message` / `write_message`) |
 
-Review note: `write_message` mapping a failed `write_all` to `TruncatedFrame` is a deliberate
-narrowing to `ProtocolError` (no `std::io::Error` in the signature); reviewers should check
-callers do not misinterpret a write failure as “peer needs more bytes.”
+All four return `TunnelError`, not `ProtocolError`: the adapter is the I/O boundary, so a
+transport fault must be able to report itself as `Transport` instead of being laundered into
+`Protocol` and skewing `last_termination` and reconnect accounting.
 
 ---
 
@@ -175,7 +176,7 @@ Validation rules + redaction:
 | Type (code) | Validation | Redaction / display |
 |---|---|---|
 | `ServiceName` (`crates/eggtunnel-proto/src/lib.rs:87-127`) | `new` rejects empty, `len() > MAX_NAME_BYTES`, or any byte outside ASCII alphanumeric + `-_.` (`crates/eggtunnel-proto/src/lib.rs:94-98` → `InvalidName`); `#[serde(try_from = "String")]` (`crates/eggtunnel-proto/src/lib.rs:88`) + `TryFrom<String>` (`crates/eggtunnel-proto/src/lib.rs:110-115`) force revalidation on deserialize, so hostile postcard strings cannot bypass `new` | `Debug`/`Display` print the name in clear (`crates/eggtunnel-proto/src/lib.rs:117-127`) — names are non-secret routing labels |
-| `TcpTarget` (`crates/eggtunnel-proto/src/lib.rs:141-179`) | `new` rejects empty host, `len() > MAX_TARGET_HOST_BYTES`, any `char::is_control` in host, or `port == 0` (`crates/eggtunnel-proto/src/lib.rs:164-168` → `InvalidTarget`); `#[serde(try_from = "WireTcpTarget")]` (`crates/eggtunnel-proto/src/lib.rs:142`) + `TryFrom<WireTcpTarget>` (`crates/eggtunnel-proto/src/lib.rs:154-159`) revalidate on decode; private `host` field with `host()`/`port()` accessors (`crates/eggtunnel-proto/src/lib.rs:173-178`) | derived `Debug` prints host/port in clear — treated as config metadata, not a secret |
+| `TcpTarget` (`crates/eggtunnel-proto/src/lib.rs:152-197`) | `new` delegates the host to the shared `validate_target_host` (`crates/eggtunnel-proto/src/lib.rs:202-214`: empty, `len() > MAX_TARGET_HOST_BYTES`, whitespace, `char::is_control`, or any of `/?#@[]\\"'<>` — the shapes ambiguous in a URL authority) and rejects `port == 0` (`crates/eggtunnel-proto/src/lib.rs:177-184` → `InvalidTarget`). `Endpoint::parse` in the parent crate calls the same validator, so one host shape governs both the wire target and the server endpoint; a colon is accepted because the host travels without a port, so IPv6 literals stay valid; `#[serde(try_from = "WireTcpTarget")]` (`crates/eggtunnel-proto/src/lib.rs:142`) + `TryFrom<WireTcpTarget>` (`crates/eggtunnel-proto/src/lib.rs:154-159`) revalidate on decode; private `host` field with `host()`/`port()` accessors (`crates/eggtunnel-proto/src/lib.rs:173-178`) | derived `Debug` prints host/port in clear — treated as config metadata, not a secret |
 | `Capabilities` (`crates/eggtunnel-proto/src/lib.rs:181-203`) | `new` rejects `ids.len() > MAX_CAPABILITIES` → `InvalidPayload` (`crates/eggtunnel-proto/src/lib.rs:186-189`); `#[serde(try_from = "Vec<u16>")]` (`crates/eggtunnel-proto/src/lib.rs:182`) + `TryFrom<Vec<u16>>` (`crates/eggtunnel-proto/src/lib.rs:198-203`) revalidate on decode; `Default` is empty (`crates/eggtunnel-proto/src/lib.rs:181`) | plain `Debug`; currently exchanged as empty set (see §5) |
 | `Auth` (`crates/eggtunnel-proto/src/lib.rs:281-316`) | `new` rejects `token.len() > MAX_AUTH_TOKEN_BYTES` → `InvalidPayload` (`crates/eggtunnel-proto/src/lib.rs:288-292`); wire decode uses `#[serde(deserialize_with = "bounded_bytes")]` (`crates/eggtunnel-proto/src/lib.rs:283`) + `bounded_bytes` (`crates/eggtunnel-proto/src/lib.rs:300-309`) which rejects oversize tokens even if constructed by hand-rolled postcard bytes | custom `Debug` prints `Auth { token: "[REDACTED]" }` (`crates/eggtunnel-proto/src/lib.rs:310-316`); accessor is `token() -> &[u8]` (`crates/eggtunnel-proto/src/lib.rs:295-297`), field is private |
 | `BoundedDiagnostic` (`crates/eggtunnel-proto/src/lib.rs:205-227`) | `new` rejects `len() > MAX_DIAGNOSTIC_BYTES` → `InvalidPayload` (`crates/eggtunnel-proto/src/lib.rs:211-214`); `#[serde(try_from = "String")]` (`crates/eggtunnel-proto/src/lib.rs:206`) + `TryFrom<String>` (`crates/eggtunnel-proto/src/lib.rs:222-227`) revalidate on decode | plain `Debug`; length cap bounds log amplification |
@@ -186,15 +187,15 @@ ID semantics:
 
 | ID (code) | Representation | Generation / equality | Debug |
 |---|---|---|---|
-| `SessionId` (`crates/eggtunnel-proto/src/lib.rs:37-56`) | `pub struct SessionId(pub [u8;16])`, `Copy`, `Eq`/`Hash`, `Serialize`/`Deserialize` | `generate()` via `getrandom::fill` (`crates/eggtunnel-proto/src/lib.rs:40-46`); 128-bit random; `PartialEq` is derived (non-constant-time) | truncated prefix only: first 4 bytes hex + `…` (`crates/eggtunnel-proto/src/lib.rs:48-56`) — aids log correlation without printing the full bearer |
+| `SessionId` (`crates/eggtunnel-proto/src/lib.rs:47-64`) | `pub struct SessionId(pub [u8;16])`, `Copy`, `Eq`/`Hash`, `Serialize`/`Deserialize` | `generate()` via `getrandom::fill` (`crates/eggtunnel-proto/src/lib.rs:50-56`); 128-bit random; `PartialEq` is derived (non-constant-time) | fully redacted: `SessionId([REDACTED])` (`crates/eggtunnel-proto/src/lib.rs:58-64`) — a Session ID is a capability in `DataHello`, so no prefix is recoverable from logs |
 | `ConnectionId` (`crates/eggtunnel-proto/src/lib.rs:61-85`) | `pub struct ConnectionId(pub [u8;16])`, same derives | `generate()` via `getrandom` (`crates/eggtunnel-proto/src/lib.rs:64-69`); `constant_time_eq` folds `a ^ b` with `\|` (`crates/eggtunnel-proto/src/lib.rs:71-78`) “useful when IDs are treated as capabilities” | fully redacted: `ConnectionId([REDACTED])` (`crates/eggtunnel-proto/src/lib.rs:81-85`) |
 | `ServiceId` (`crates/eggtunnel-proto/src/lib.rs:58-59`) | `pub struct ServiceId(pub u64)`, `Copy`, `Debug`, `Eq`/`Hash` | no generation in proto; client-chosen per service (initial `crates/eggtunnel/src/client.rs:746-750`, dynamic `crates/eggtunnel/src/client.rs:941-945` copy `service.id`); server treats duplicate IDs/names as errors (`crates/eggtunnel/src/server/control.rs:261-270`) | transparent `u64` — non-secret multiplexing key |
 
 Measurement notes: all `len()` checks are **byte** lengths (`String::len` / `Vec::len`), not
 grapheme/char counts; `ServiceName` charset is checked per **byte**
 (`value.bytes().all(...)` at `crates/eggtunnel-proto/src/lib.rs:96-98`), which for UTF-8
-multibyte input fails closed (non-ASCII bytes are rejected). `TcpTarget` control check is per
-`char` (`host.chars().any(char::is_control)` at `crates/eggtunnel-proto/src/lib.rs:166`).
+multibyte input fails closed (non-ASCII bytes are rejected). The `TcpTarget` host check is per
+`char` (`host.chars().any(...)` at `crates/eggtunnel-proto/src/lib.rs:206`).
 
 ---
 
@@ -289,18 +290,18 @@ Caveats a reviewer should carry into `client.rs` / `server.rs`:
   `crates/eggtunnel-proto/src/lib.rs:699-711` are designed to catch — run them after any serde
   refactor.
 - [ ] **Byte vs. char.** `ServiceName`/`BoundedDiagnostic`/host limits use byte `len()`.
-  `TcpTarget`’s control check is `chars().any(char::is_control)`
-  (`crates/eggtunnel-proto/src/lib.rs:166`). Non-`control` Unicode (e.g. bidi overrides,
-  zero-width) in hosts/diagnostics passes validation — confirm upper layers normalize or reject
-  where display/lookup matters.
+  The `TcpTarget` host check is `chars().any(...)` over whitespace, control, and URL-ambiguous
+  characters (`crates/eggtunnel-proto/src/lib.rs:206`). Non-`control` Unicode (e.g. bidi
+  overrides, zero-width) in hosts/diagnostics passes validation — confirm upper layers
+  normalize or reject where display/lookup matters.
 - [ ] **`RequestedBind` / `EffectiveBind` have no proto-level validation**
   (`crates/eggtunnel-proto/src/lib.rs:129-139`). `InvalidBind`
   (`crates/eggtunnel-proto/src/lib.rs:449-450`) is defined but never constructed in the
   workspace — dead variant today. Policy lives server-side (`bind_to_socket`, `BindPolicy`).
   Either wire the variant or remove it; a reviewer should not assume the proto rejects bad binds.
 - [ ] **Double length gate.** Both `decode_frame`
-  (`crates/eggtunnel-proto/src/lib.rs:488-493`) and `wire_io::read_message`
-  (`crates/eggtunnel/src/wire_io.rs:20-23`) enforce `MAX_FRAME_BYTES`. Keep both: the first
+  (`crates/eggtunnel-proto/src/lib.rs:557-560`) and `wire_io::read_message`
+  (`crates/eggtunnel/src/wire_io.rs:32-36`) enforce `MAX_FRAME_BYTES`. Keep both: the first
   protects pure-decode callers, the second protects the allocating network path. Removing either
   re-opens allocation-before-check for that caller.
 - [ ] **`u32 → usize` and `checked_add`.** Length is `u32 BE`

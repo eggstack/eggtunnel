@@ -76,11 +76,11 @@ impl AcceptContext {
     /// configured grace period, then force-cancel and reap every child task.
     pub(super) async fn drain(&self, handlers: &mut JoinSet<()>) {
         let active = SessionContext::live(&self.sessions).await;
+        let deadline_ms = u32::try_from(self.counters.policy.timeouts.shutdown_grace.as_millis())
+            .unwrap_or(u32::MAX);
         for session in &active {
             if let Some(sender) = session.control_tx.lock().await.as_ref() {
-                let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain {
-                    deadline_ms: self.counters.policy.timeouts.shutdown_grace.as_millis() as u32,
-                }));
+                let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain { deadline_ms }));
             }
         }
         tokio::time::sleep(self.counters.policy.timeouts.shutdown_grace).await;

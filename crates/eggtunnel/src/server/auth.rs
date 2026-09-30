@@ -2,7 +2,9 @@
 //!
 //! The limiter is a bounded sliding window keyed by the transport peer
 //! address. It never delays a successful authentication and never retains
-//! unbounded per-source history.
+//! unbounded per-source history. Once the source table is full, further
+//! sources are left untracked rather than blocked, so the ceiling can never be
+//! used to lock out a legitimate new peer.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -51,9 +53,10 @@ impl AuthFailureLimiter {
     pub(super) fn is_blocked_at(&self, source: IpAddr, now: Instant) -> bool {
         let mut sources = self.failures.lock().unwrap_or_else(|p| p.into_inner());
         self.prune(&mut sources, now);
-        if !sources.contains_key(&source) && sources.len() >= self.max_sources {
-            return true;
-        }
+        // A saturated table is a memory ceiling, not a verdict: a source with
+        // no recorded failure is never blocked, so the table cannot be filled
+        // with spoofed addresses to lock out legitimate new peers. Such a
+        // source simply goes untracked until the window prunes an entry.
         sources
             .get(&source)
             .is_some_and(|failures| failures.len() >= self.threshold)
@@ -67,6 +70,11 @@ impl AuthFailureLimiter {
         let mut sources = self.failures.lock().unwrap_or_else(|p| p.into_inner());
         self.prune(&mut sources, now);
         if !sources.contains_key(&source) && sources.len() >= self.max_sources {
+            tracing::debug!(
+                category = "auth_source_table_saturated",
+                tracked_sources = sources.len(),
+                "authentication failure is not tracked",
+            );
             return;
         }
         sources.entry(source).or_default().push_back(now);
@@ -88,8 +96,11 @@ impl AuthFailureLimiter {
 /// Record a failed bearer-token verification, release the caller's admission
 /// slots, apply the fixed throttle delay, and answer the peer.
 ///
-/// The delay is a deliberate constant-cost response: it is applied only to
-/// already-failing sources and never to a successful authentication.
+/// Every refused peer leaves through this one function — blocked sources and
+/// bad tokens alike — so a prober cannot separate blocklist membership from
+/// token validity by the presence or absence of the frame. The delay is a
+/// deliberate constant-cost response: it is applied only to refused peers and
+/// never to a successful authentication.
 pub(super) async fn reject_authentication(
     stream: &mut (impl AsyncWrite + Unpin),
     source: IpAddr,
@@ -97,7 +108,7 @@ pub(super) async fn reject_authentication(
     counters: &Counters,
     release: impl FnOnce(),
 ) -> Result<(), TunnelError> {
-    tracing::debug!(category = "authentication", "client authentication failed");
+    tracing::debug!(category = "authentication", "client authentication refused");
     auth_failures.record_failure(source);
     release();
     tokio::time::sleep(AUTH_FAILURE_DELAY).await;

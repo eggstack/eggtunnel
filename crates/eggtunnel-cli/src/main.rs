@@ -334,6 +334,12 @@ fn load_token_with(
     env_name: &str,
     var: &dyn Fn(&str) -> Result<String, env::VarError>,
 ) -> Result<SecretToken, CliError> {
+    if env_name.is_empty() {
+        return Err(CliError::new(
+            ErrorCategory::ConfigResolution,
+            "token_env must name an environment variable",
+        ));
+    }
     let value = var(env_name).map_err(|_| {
         CliError::new(
             ErrorCategory::MissingSecretReference,
@@ -875,6 +881,9 @@ async fn run_server(
     json: bool,
     snapshot_interval: Option<u64>,
 ) -> Result<(), CliError> {
+    // Every flag is validated before the first side effect: an invalid
+    // interval must not open listeners and then fail.
+    let snapshot_every = validate_snapshot_interval(snapshot_interval)?;
     let mut config = read_config(path)?;
     apply_server_overrides(&mut config, overrides)?;
     let resolved = resolve_server(&config)?;
@@ -884,7 +893,6 @@ async fn run_server(
         .await
         .map_err(CliError::from)?;
     let addr = server.local_addr();
-    let snapshot_every = validate_snapshot_interval(snapshot_interval)?;
     if json {
         print_json(&serde_json::json!({
             "schema": EVENT_SCHEMA,
@@ -961,6 +969,9 @@ async fn run_client(
     json: bool,
     snapshot_interval: Option<u64>,
 ) -> Result<(), CliError> {
+    // Every flag is validated before the first side effect: an invalid
+    // interval must not start the runtime and then fail.
+    let snapshot_every = validate_snapshot_interval(snapshot_interval)?;
     let mut config = read_config(path)?;
     apply_client_overrides(&mut config, overrides)?;
     let resolved = resolve_client(&config)?;
@@ -970,7 +981,6 @@ async fn run_client(
         .start()
         .await
         .map_err(CliError::from)?;
-    let snapshot_every = validate_snapshot_interval(snapshot_interval)?;
     if json {
         print_json(&serde_json::json!({
             "schema": EVENT_SCHEMA,
@@ -1339,6 +1349,31 @@ bind_port = 0
         let error = resolve_client_with(&config, &env.provider()).unwrap_err();
         assert_eq!(error.category, ErrorCategory::MissingSecretReference);
         assert!(!error.to_string().contains("super-secret"));
+    }
+
+    #[test]
+    fn an_empty_token_reference_is_rejected_explicitly() {
+        // Same explicit rejection as an empty `outbound_proxy_env`, rather than
+        // falling through to an environment lookup of the empty name.
+        let env = TestEnv::default();
+        let config = file_config(&client_toml(""));
+        let error = resolve_client_with(&config, &env.provider()).unwrap_err();
+        assert_eq!(error.category, ErrorCategory::ConfigResolution);
+        assert_eq!(error.message, "token_env must name an environment variable");
+        assert!(env.reads.borrow().is_empty(), "no lookup should be issued");
+
+        let env = TestEnv::default().with("TOKEN", "server-token");
+        let config = file_config(
+            r#"mode = "server"
+transport = "tcp_tls"
+listen_addr = "127.0.0.1:0"
+token_env = ""
+"#,
+        );
+        let error = resolve_server_with(&config, &env.provider()).unwrap_err();
+        assert_eq!(error.category, ErrorCategory::ConfigResolution);
+        assert_eq!(error.message, "token_env must name an environment variable");
+        assert!(env.reads.borrow().is_empty(), "no lookup should be issued");
     }
 
     #[test]

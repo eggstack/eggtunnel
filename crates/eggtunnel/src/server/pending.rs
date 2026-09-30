@@ -5,14 +5,13 @@
 //! Connection. The pending table is bounded per Session and every removal
 //! path returns the `pending_connections` counter to zero.
 
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
-use eggtunnel_proto::{DataHello, ServiceId, SessionId};
-use tokio::sync::Mutex;
+use eggtunnel_proto::{DataHello, ServiceId};
 
 use crate::common::{Counters, TunnelError};
 
-use super::session::SessionContext;
+use super::session::{SessionContext, SessionRegistry};
 
 /// A service-side Open awaiting the matching client DataHello.
 pub(super) struct PendingEntry {
@@ -31,12 +30,12 @@ pub(super) async fn accept_data_hello(
     stream: eggress_core::BoxStream,
     hello: DataHello,
     principal: Option<[u8; 32]>,
-    sessions: &Arc<Mutex<std::collections::HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+    sessions: &SessionRegistry,
     counters: &Counters,
 ) -> Result<(), TunnelError> {
     let session = sessions
         .lock()
-        .await
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&hello.session_id)
         .and_then(std::sync::Weak::upgrade);
     let Some(session) = session else {

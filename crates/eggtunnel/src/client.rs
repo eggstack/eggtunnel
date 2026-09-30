@@ -834,7 +834,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         tokio::select! {
             _ = cancel.cancelled() => {
                 session_cancel.cancel();
-                let drain = Message::Drain(eggtunnel_proto::Drain { deadline_ms: counters.policy.timeouts.relay_drain.as_millis() as u32 });
+                let drain = Message::Drain(eggtunnel_proto::Drain { deadline_ms: u32::try_from(counters.policy.timeouts.relay_drain.as_millis()).unwrap_or(u32::MAX) });
                 let _ = timeout(Duration::from_millis(250), write_message(&mut writer, &drain)).await;
                 break;
             }
@@ -919,7 +919,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             AckDisposition::Unexpected => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
                             AckDisposition::Stale(reply) => { if let Some(reply) = reply { let _ = reply.send(Err(TunnelError::Disconnected)); } continue; }
                             AckDisposition::Abandoned => {
-                                write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id })).await?;
+                                write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: ack.service_id }), counters.policy.timeouts.handshake).await?;
                                 continue;
                             }
                             AckDisposition::Commit(service, reply) => (service, reply),
@@ -981,10 +981,10 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         break;
                     }
                     Ok(_) => return Err(TunnelError::Protocol(eggtunnel_proto::ProtocolError::UnexpectedMessage)),
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(error),
                 }
             }
-            Some(message) = out_rx.recv() => { write_message(&mut writer, &message).await?; }
+            Some(message) = out_rx.recv() => { write_control(&mut writer, &message, counters.policy.timeouts.handshake).await?; }
             Some(command) = commands.recv() => {
                 match command {
                     ClientCommand::Register { service, generation: command_generation, reply } => {
@@ -1021,7 +1021,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         .await
                         {
                             Ok(Ok(())) => {}
-                            Ok(Err(error)) => return Err(error.into()),
+                            Ok(Err(error)) => return Err(error),
                             Err(_) => {
                                 match service_state.mode() {
                                     RegistrationMode::LegacySerial => {
@@ -1063,7 +1063,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, service_id, _)| *service_id != id);
                             tracing::info!(service_id = id.0, session_generation = generation, "Service unregistered");
                         }
-                        write_message(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id })).await?;
+                        write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id }), counters.policy.timeouts.handshake).await?;
                         let _ = reply.send(Ok(()));
                     }
                 }
@@ -1150,6 +1150,18 @@ fn registration_error_code(code: u16) -> TunnelError {
     }
 }
 
+/// Write one control message under a bounded budget. A server that stops
+/// reading can no longer wedge the whole `select!` loop.
+async fn write_control<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    message: &Message,
+    budget: Duration,
+) -> Result<(), TunnelError> {
+    timeout(budget, write_message(writer, message))
+        .await
+        .map_err(|_| TunnelError::Timeout)?
+}
+
 async fn handshake_read(
     stream: &mut BoxStream,
     deadline: Duration,
@@ -1157,7 +1169,6 @@ async fn handshake_read(
     timeout(deadline, read_boxed(stream))
         .await
         .map_err(|_| TunnelError::Timeout)?
-        .map_err(Into::into)
 }
 
 async fn handshake_write(
@@ -1168,7 +1179,6 @@ async fn handshake_write(
     timeout(deadline, write_boxed(stream, message))
         .await
         .map_err(|_| TunnelError::Timeout)?
-        .map_err(Into::into)
 }
 
 struct CounterGuard(Arc<std::sync::atomic::AtomicUsize>);

@@ -104,7 +104,14 @@ impl ReconnectSupervisor {
             .unwrap_or_else(|p| p.into_inner())
             .clear();
         match result {
-            Err(TunnelError::Authentication | TunnelError::Authorization) => {
+            // `ResourceExhausted` is a local, unrecoverable condition (the
+            // Session generation counter is spent); retrying it forever would
+            // back off silently and never surface the error.
+            Err(
+                TunnelError::Authentication
+                | TunnelError::Authorization
+                | TunnelError::ResourceExhausted,
+            ) => {
                 if let Err(error) = result {
                     counters.record_termination(error.termination_category());
                 }
@@ -376,7 +383,7 @@ impl QuicTransport {
             server_name,
             insecure,
             timeouts,
-            max_concurrent_streams: max_concurrent_streams as u32,
+            max_concurrent_streams: u32::try_from(max_concurrent_streams).unwrap_or(u32::MAX),
             slot,
             active: None,
         }
@@ -503,7 +510,13 @@ mod tests {
             .services
             .store(2, std::sync::atomic::Ordering::Relaxed);
         let state = supervisor();
-        for error in [TunnelError::Authentication, TunnelError::Authorization] {
+        for error in [
+            TunnelError::Authentication,
+            TunnelError::Authorization,
+            // Local Session-generation exhaustion is unrecoverable: retrying
+            // it would back off forever and never surface the error.
+            TunnelError::ResourceExhausted,
+        ] {
             counters
                 .connected
                 .store(1, std::sync::atomic::Ordering::Relaxed);
@@ -522,6 +535,13 @@ mod tests {
                 0
             );
         }
+        assert_eq!(
+            *counters
+                .last_termination
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+            Some(crate::common::TerminationCategory::ResourceExhausted)
+        );
         assert_eq!(
             state.finish(&Err(TunnelError::Disconnected), &counters, "quic"),
             SessionDisposition::Retry
