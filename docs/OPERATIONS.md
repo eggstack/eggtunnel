@@ -11,7 +11,10 @@ without it both sides keep local-only shutdown timing (see
 The server's `listen_addr` accepts both control sessions and reverse data
 connections. Every accepted connection begins with TLS. A service's actual
 address is server-assigned and is available through the Rust `ServerHandle`
-snapshot. The CLI prints newly assigned service addresses while it is running.
+snapshot. The CLI prints newly assigned service addresses while it is running
+(`service <id> session <id> listening on [<addr>]:<port>`; an ephemeral
+`bind_port = 0` prints its assigned port here, and the loopback address may
+render as IPv6, e.g. `[::1]`).
 For QUIC, `listen_addr` is the UDP control endpoint; service listeners still
 bind TCP on the requested interface and port.
 

@@ -1,26 +1,69 @@
 # Eggtunnel
 
-Eggtunnel is a Rust TCP/TLS reverse-tunnel library and CLI: a process behind
-NAT connects outward to a reachable server, which exposes approved local
-services through server-owned listeners.
+Authenticated TCP reverse tunnel (Rust library + CLI): a client behind NAT
+dials out to a reachable server, which exposes approved local services
+through server-owned loopback listeners. One TLS data connection is opened
+per accepted external connection.
 
-The client establishes an authenticated TLS session, registers multiple TCP
-services, and opens a separate TLS data connection per accepted external
-connection. Embedders can provide a direct application stream connector, and
-the optional `mtls` feature adds certificate authentication alongside the
- bearer token. See the [configuration guide](docs/CONFIGURATION.md),
-[operations guide](docs/OPERATIONS.md), [security model](docs/SECURITY.md),
-and [transport support](docs/SUPPORT.md).
+## Install
+
+Release archives (Linux/macOS, x64/arm64):
 
 ```sh
+./install.sh v0.2.0
+```
+
+Or build from source:
+
+```sh
+cargo build --locked --release -p eggtunnel-cli
+./target/release/eggtunnel version
+```
+
+Library embedders: see [Embedding](docs/EMBEDDING.md)
+(`eggtunnel = { version = "0.2", default-features = false, features = ["client", "tls"] }`).
+
+## Quickstart
+
+Copy `examples/client.toml` / `examples/server.toml`, point the server file
+at a real certificate/key, then validate (the token variable must be set —
+`check` verifies it exists, not its value):
+
+```sh
+export EGGTUNNEL_TOKEN='use-a-high-entropy-secret'
+eggtunnel check server.toml
 eggtunnel check client.toml
+```
+
+Run the server, then the client:
+
+```sh
+eggtunnel server server.toml
 EGGTUNNEL_TOKEN='use-a-high-entropy-secret' eggtunnel client client.toml
 ```
 
-QUIC is available with the optional `quic` feature and `transport = "quic"` CLI
-setting. Optional `websocket` support provides WSS, and `outbound-proxy` adds
-listener-free direct, HTTP CONNECT, and SOCKS5 traversal. Proxy credentials are
-read from an environment variable; see the configuration guide and support
-matrix for limitations and tested combinations. See the
- [distribution policy](docs/DISTRIBUTION.md) for the supported release targets
-and qualification state.
+When the session is up the server prints one line per bound service, with
+the actual port (`bind_port = 0` asks for an ephemeral one; the address may
+be IPv6 loopback):
+
+```text
+server listening on 127.0.0.1:9443
+service 1 session SessionId(267e4a11…) listening on [::1]:40023
+```
+
+Connect through the printed address — traffic is relayed to the client's
+configured `target_host:target_port`. Secrets always come from environment
+variables (`token_env`); they never go in the TOML file. Both processes stop
+on Ctrl-C.
+
+## Docs
+
+| Guide | Covers |
+|---|---|
+| [Configuration](docs/CONFIGURATION.md) | TOML reference, transports, `check`, CLI overrides |
+| [Operations](docs/OPERATIONS.md) | Running server/client, events, limits, proxies |
+| [Security](docs/SECURITY.md) | Threat model, auth, bind policy, mTLS |
+| [Transport support](docs/SUPPORT.md) | TCP/TLS, QUIC, WSS, proxy matrix + limitations |
+| [Protocol](docs/PROTOCOL.md) | Wire v1.1 (1.0 fallback), capabilities |
+| [Distribution](docs/DISTRIBUTION.md) | Release targets and qualification state |
+| [API](docs/API.md) / [Embedding](docs/EMBEDDING.md) | Library surface, connectors, runtime policy |

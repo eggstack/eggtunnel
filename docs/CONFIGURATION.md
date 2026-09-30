@@ -80,7 +80,9 @@ QUIC and proxy+mTLS are rejected. Multi-hop chains use the canonical
 through one SOCKS5+HTTP CONNECT integration test.
 
 Run `eggtunnel check <file>` to validate the TOML structure, required paths,
-service names, endpoint syntax, and token environment variable. Server startup
+service names, endpoint syntax, and token environment variable. The named
+environment variables must be set and referenced files must exist for `check`
+to pass; their contents are not validated (no PEM parsing, DNS, or dialing). Server startup
 also parses and validates its certificate and key.
 
 `eggtunnel check --json <file>` emits a single versioned JSON object
