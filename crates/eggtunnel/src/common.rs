@@ -423,13 +423,21 @@ impl Counters {
     }
 
     pub fn begin_session(&self) -> Result<u64, TunnelError> {
-        let generation = self
-            .session_generation
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| TunnelError::ResourceExhausted)?
-            + 1;
+        let mut current = self.session_generation.load(Ordering::Relaxed);
+        let generation = loop {
+            let next = current
+                .checked_add(1)
+                .ok_or(TunnelError::ResourceExhausted)?;
+            match self.session_generation.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break next,
+                Err(observed) => current = observed,
+            }
+        };
         *self.heartbeat.lock().unwrap_or_else(|p| p.into_inner()) = HeartbeatState::default();
         Ok(generation)
     }
