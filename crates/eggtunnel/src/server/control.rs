@@ -96,6 +96,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
     } = admission;
 
     if hello.version.major != ProtocolVersion::CURRENT.major {
+        let _ = reject_authentication(&mut stream, source, &auth_failures, &counters).await;
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnsupportedVersion(
                 hello.version.major,
@@ -122,7 +123,9 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
         .map_err(|_| TunnelError::Timeout)??
     {
         Message::Auth(auth) => auth,
-        _ => return Err(TunnelError::Authentication),
+        _ => {
+            return reject_authentication(&mut stream, source, &auth_failures, &counters).await;
+        }
     };
     // Blocklist state and token validity are both evaluated before either can
     // short-circuit the other, and every refusal leaves through
@@ -130,11 +133,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
     let token_verified = verify_token(&token, auth.token());
     let blocked = auth_failures.is_blocked(source);
     if !token_verified || blocked {
-        return reject_authentication(&mut stream, source, &auth_failures, &counters, || {
-            drop(handshake_guard.take());
-            drop(admission.take());
-        })
-        .await;
+        return reject_authentication(&mut stream, source, &auth_failures, &counters).await;
     }
     drop(handshake_guard.take());
     drop(admission.take());
@@ -156,7 +155,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
         counters: counters.clone(),
     });
     if let Err(error) =
-        SessionContext::register(&context, &sessions, counters.policy.limits.sessions).await
+        SessionContext::register(&context, &sessions, counters.policy.limits.sessions)
     {
         record_saturation(&counters);
         return Err(error);
@@ -219,8 +218,13 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                     }
                     Ok(Message::OpenReject(reject)) => {
                         idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                        if let Some(entry) = context.pending.lock().await.remove(&reject.connection_id) {
-                            counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        let removed = {
+                            let mut pending = context.pending.lock().await;
+                            let entry = pending.remove(&reject.connection_id);
+                            if entry.is_some() { counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
+                            entry
+                        };
+                        if let Some(entry) = removed {
                             drop(entry);
                         }
                     }
@@ -384,7 +388,22 @@ where
             .await;
         }
     };
-    let effective = socket_to_effective(listener.local_addr()?);
+    let effective = match listener.local_addr() {
+        Ok(addr) => socket_to_effective(addr),
+        Err(_) => {
+            counters
+                .rejected
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return write_registration_response(
+                writer,
+                service_id,
+                REGISTRATION_ERROR_LISTENER,
+                negotiated,
+                write_budget,
+            )
+            .await;
+        }
+    };
     tracing::info!(service_id = service_id.0, service_name = register.name.as_str(), effective_address = %std::net::Ipv6Addr::from(effective.address), effective_port = effective.port, "Service listener bound");
     counters
         .binds

@@ -198,6 +198,7 @@ impl From<eggtunnel::TunnelError> for CliError {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileConfig {
     mode: String,
     #[serde(default = "default_transport")]
@@ -234,6 +235,7 @@ fn default_transport() -> String {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileService {
     id: u64,
     name: String,
@@ -361,11 +363,23 @@ fn load_token_with(
 /// The size is checked via metadata before reading so a GB-sized path
 /// cannot OOM the CLI; the library's 1 MiB frame cap applies afterwards.
 fn read_material(path: &Option<PathBuf>, what: &'static str) -> Result<Option<Vec<u8>>, CliError> {
-    const MAX_MATERIAL_BYTES: u64 = 16 * 1024 * 1024;
+    const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
     let Some(path) = path else {
         return Ok(None);
     };
-    if fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_MATERIAL_BYTES {
+    let metadata = fs::metadata(path).map_err(|_| {
+        CliError::new(
+            ErrorCategory::ConfigResolution,
+            format!("{what} file is missing or unreadable"),
+        )
+    })?;
+    if metadata.is_dir() {
+        return Err(CliError::new(
+            ErrorCategory::ConfigResolution,
+            format!("{what} file is missing or unreadable"),
+        ));
+    }
+    if metadata.len() > MAX_MATERIAL_BYTES {
         return Err(CliError::new(
             ErrorCategory::TlsMaterial,
             format!("{what} file exceeds size limit"),
@@ -1011,7 +1025,12 @@ async fn run_server(
                     }
                 }
             }
-            _ = snapshot_tick.tick(), if snapshot_every.is_some() => {
+            _ = async {
+                match snapshot_tick.as_mut() {
+                    Some(ticker) => ticker.tick().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 print_json(&snapshot_event(&handle.snapshot()));
             }
         }
@@ -1027,16 +1046,9 @@ async fn run_server(
     Ok(())
 }
 
-/// A ticker that only fires when an interval is configured. Without an
-/// interval it never ticks, keeping the `select!` branch dormant.
-fn futures_time_tick(interval: Option<std::time::Duration>) -> tokio::time::Interval {
-    // Far-future first tick; the branch is only enabled when configured.
-    let start = tokio::time::Instant::now()
-        + interval.unwrap_or(std::time::Duration::from_secs(86400 * 365));
-    tokio::time::interval_at(
-        start,
-        interval.unwrap_or(std::time::Duration::from_secs(86400 * 365)),
-    )
+/// Build a ticker only when periodic snapshots are enabled.
+fn futures_time_tick(interval: Option<std::time::Duration>) -> Option<tokio::time::Interval> {
+    interval.map(|period| tokio::time::interval_at(tokio::time::Instant::now() + period, period))
 }
 
 async fn run_client(
@@ -1097,7 +1109,12 @@ async fn run_client(
                 }
                 was_connected = snapshot.connected;
             }
-            _ = snapshot_tick.tick(), if snapshot_every.is_some() => {
+            _ = async {
+                match snapshot_tick.as_mut() {
+                    Some(ticker) => ticker.tick().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 print_json(&snapshot_event(&handle.snapshot()));
             }
         }
@@ -1220,6 +1237,14 @@ bind_port = 0
     }
 
     #[test]
+    fn rejects_unknown_configuration_fields_during_parse() {
+        let path = write_toml(&client_toml("TOKEN").replace("server_addr =", "sever_addr ="));
+        let error = read_config(&path).err().unwrap();
+        fs::remove_file(path).ok();
+        assert_eq!(error.category, ErrorCategory::ConfigParse);
+    }
+
+    #[test]
     fn overrides_win_over_toml_without_touching_unrelated_fields() {
         let env = TestEnv::default().with("TOKEN", "override-token-value");
         let mut config = file_config(&client_toml("TOKEN"));
@@ -1321,8 +1346,10 @@ bind_port = 0
             .with("TOKEN", secret)
             .with("PROXY", proxy_value);
         let ca = temp_file("ca.pem", b"ca-bytes");
-        let mut body = client_toml("TOKEN");
-        body.push_str("outbound_proxy_env = \"PROXY\"\n");
+        let body = client_toml("TOKEN").replace(
+            "[[services]]",
+            "outbound_proxy_env = \"PROXY\"\n\n[[services]]",
+        );
         let mut config = file_config(&body);
         config.ca_cert = Some(ca.clone());
         let resolved = resolve_client_with(&config, &env.provider()).unwrap();
@@ -1379,7 +1406,10 @@ bind_port = 0
         let ca = temp_file("ca.pem", b"ca-bytes");
         let mut body = client_toml("TOKEN");
         body = body.replace("tcp_tls", "quic");
-        body.push_str(&format!("ca_cert = {:?}\n", ca.to_string_lossy()));
+        body = body.replace(
+            "[[services]]",
+            &format!("ca_cert = {:?}\n\n[[services]]", ca.to_string_lossy()),
+        );
         let mut config = file_config(&body);
         config.ca_cert = Some(ca.clone());
         let resolved = resolve_client_with(&config, &env.provider()).unwrap();

@@ -23,6 +23,7 @@ pub(super) const AUTH_FAILURES_PER_SOURCE: usize = 10;
 pub(super) const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 pub(super) const MAX_AUTH_SOURCES: usize = 1024;
 pub(super) const AUTH_FAILURE_DELAY: Duration = Duration::from_millis(100);
+const AUTH_FAILURE_WRITE_BUDGET: Duration = Duration::from_secs(1);
 /// `Error` code emitted to a peer whose bearer token did not verify.
 pub(super) const AUTH_FAILURE_CODE: u16 = 4;
 
@@ -116,11 +117,9 @@ pub(super) async fn reject_authentication(
     source: IpAddr,
     auth_failures: &AuthFailureLimiter,
     counters: &Counters,
-    release: impl FnOnce(),
 ) -> Result<(), TunnelError> {
     tracing::debug!(category = "authentication", "client authentication refused");
     auth_failures.record_failure(source);
-    release();
     tokio::time::sleep(AUTH_FAILURE_DELAY).await;
     counters
         .rejected
@@ -129,6 +128,6 @@ pub(super) async fn reject_authentication(
         code: AUTH_FAILURE_CODE,
         diagnostic: BoundedDiagnostic::new("authentication failed")?,
     });
-    let _ = write_message(stream, &failure).await;
+    let _ = tokio::time::timeout(AUTH_FAILURE_WRITE_BUDGET, write_message(stream, &failure)).await;
     Err(TunnelError::Authentication)
 }

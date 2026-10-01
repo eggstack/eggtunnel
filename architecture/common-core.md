@@ -2,7 +2,7 @@
 
 > Index: [architecture/overview.md](overview.md) §2. This is the deep dive for component #2 (shared vocabulary for client + server: secrets, policy, observability, errors).
 
-`common.rs` is 647 lines, `forbid(unsafe_code)` via `crates/eggtunnel/src/lib.rs:1`. Socket/timer/task exposure is feature-gated: `SocketAddr` mapping is `server`-only, `Instant`/atomics/`JoinError` are `client`/`server`-gated — only the `--no-default-features` build is pure vocabulary. It defines the types both sides agree on, plus the server-only policy/token enforcement helpers. Companion shared files: `endpoint.rs` (171 lines, ungated `Endpoint::parse` for client `host:port` shape) and `pem.rs` (44 lines, `mtls`-gated PEM helpers). The library facade re-exports the public vocabulary at `crates/eggtunnel/src/lib.rs:28-33`:
+`common.rs` is 706 lines, `forbid(unsafe_code)` via `crates/eggtunnel/src/lib.rs:1`. Socket/timer/task exposure is feature-gated: `SocketAddr` mapping is `server`-only, `Instant`/atomics/`JoinError` are `client`/`server`-gated — only the `--no-default-features` build is pure vocabulary. It defines the types both sides agree on, plus the server-only policy/token enforcement helpers. Companion shared files: `endpoint.rs` (183 lines, ungated `Endpoint::parse` for client `host:port` shape) and `pem.rs` (64 lines, `mtls`-gated PEM helpers). The library facade re-exports the public vocabulary at `crates/eggtunnel/src/lib.rs:28-33`:
 
 ```rust
 pub use common::{BindPolicy, ClientService, HeartbeatSnapshot, ResourceLimits, RuntimePolicy, SecretToken, ServiceSpec, Snapshot, TerminationCategory, TimeoutPolicy, TunnelError};

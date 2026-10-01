@@ -10,6 +10,10 @@ rejected. A peer with major 1 is eligible for baseline 1.0 behavior
 regardless of minor number; optional behavior is enabled only by a
 negotiated capability, never by minor version alone.
 
+The published `0.2.0` artifact used wire 1.0; this repository's source at the
+same workspace version implements wire 1.1. Crate version alone therefore
+does not identify the wire behavior of a locally built binary.
+
 Each control frame has a 14-byte header followed by one postcard payload:
 
 | Offset | Size | Meaning |

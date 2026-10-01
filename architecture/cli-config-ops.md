@@ -2,7 +2,7 @@
 
 > Parent: [Architecture Overview](overview.md) §6. This file is the review-oriented deep dive for the configuration frontend, runtime CLI loops, library facade, and embedding/operations docs.
 
-Sources (all paths relative to repo root): `crates/eggtunnel-cli/src/main.rs` (1407 lines), `crates/eggtunnel-cli/Cargo.toml`, `crates/eggtunnel/src/lib.rs` (35 lines), `crates/eggtunnel/Cargo.toml`, `examples/client.toml`, `examples/server.toml`, `fixtures/embedder/src/main.rs`, `fixtures/embedder/Cargo.toml`, `docs/CONFIGURATION.md`, `docs/API.md`, `docs/EMBEDDING.md`, `docs/OPERATIONS.md`.
+Sources (all paths relative to repo root): `crates/eggtunnel-cli/src/main.rs` (1548 lines), `crates/eggtunnel-cli/Cargo.toml`, `crates/eggtunnel/src/lib.rs` (35 lines), `crates/eggtunnel/Cargo.toml`, `examples/client.toml`, `examples/server.toml`, `fixtures/embedder/src/main.rs`, `fixtures/embedder/Cargo.toml`, `docs/CONFIGURATION.md`, `docs/API.md`, `docs/EMBEDDING.md`, `docs/OPERATIONS.md`.
 
 ---
 
@@ -16,10 +16,10 @@ Argument parsing is `clap` derive-based (`crates/eggtunnel-cli/src/main.rs:24-12
 
 | Subcommand | CLI syntax | Handler | Effect |
 |---|---|---|---|
-| `Version` | `eggtunnel version` | `crates/eggtunnel-cli/src/main.rs:1006-1009` | Prints `eggtunnel <CARGO_PKG_VERSION>` via `env!`. No config, no I/O. |
-| `Check` | `eggtunnel check [--json] <config>` (`PathBuf`) | `run_check` (`crates/eggtunnel-cli/src/main.rs:809-852`) | Parse → resolve → library `validate()`; human `configuration is structurally valid` or one `eggtunnel.check/v1` JSON object. Exit code non-zero on any `Err` via `main() -> Result`. |
-| `Server` | `eggtunnel server [--json] [--snapshot-interval-secs N] [--overrides…] <config>` | `run_server` (`crates/eggtunnel-cli/src/main.rs:853-925`) | Parse → overrides → resolve → `validate()` (inside `bind()`) → bind-print loop → Ctrl-C → `shutdown().await`. |
-| `Client` | `eggtunnel client [--json] [--snapshot-interval-secs N] [--overrides…] <config>` | `run_client` (`crates/eggtunnel-cli/src/main.rs:933-1002`) | Parse → overrides → resolve → `validate()` (inside `start()`) → print waiting line → Ctrl-C → `shutdown().await`. |
+| `Version` | `eggtunnel version` | `crates/eggtunnel-cli/src/main.rs:1136-1138` | Prints `eggtunnel <CARGO_PKG_VERSION>` via `env!`. No config, no I/O. |
+| `Check` | `eggtunnel check [--json] <config>` (`PathBuf`) | `run_check` (`crates/eggtunnel-cli/src/main.rs:912-958`) | Parse → resolve → library `validate()`; human `configuration is structurally valid` or one `eggtunnel.check/v1` JSON object. Exit code non-zero on any `Err` via `main() -> Result`. |
+| `Server` | `eggtunnel server [--json] [--snapshot-interval-secs N] [--overrides…] <config>` | `run_server` (`crates/eggtunnel-cli/src/main.rs:960-1048`) | Parse → overrides → resolve → `validate()` (inside `bind()`) → bind-print loop → Ctrl-C → `shutdown().await`. |
+| `Client` | `eggtunnel client [--json] [--snapshot-interval-secs N] [--overrides…] <config>` | `run_client` (`crates/eggtunnel-cli/src/main.rs:1054-1128`) | Parse → overrides → resolve → `validate()` (inside `start()`) → print waiting line → Ctrl-C → `shutdown().await`. |
 
 Non-secret overrides ride on every mode (`ClientOverrides` at `crates/eggtunnel-cli/src/main.rs:69-100`,
 `ServerOverrides` at `:102-127`): endpoints, TLS names, transport names,
@@ -27,13 +27,13 @@ file paths, token/proxy *variable names*, single-service `--bind-port`,
 and one-way `--allow-public-service-binds`. Precedence is CLI > TOML >
 built-in (see §2). There is deliberately no `--token` flag.
 
-`main` itself is `#[tokio::main]` (`crates/eggtunnel-cli/src/main.rs:1003`), so the CLI owns its runtime. This is the opposite of the library, which requires a caller-owned runtime (see §5).
+`main` itself is `#[tokio::main]` (`crates/eggtunnel-cli/src/main.rs:1133-1134`), so the CLI owns its runtime. This is the opposite of the library, which requires a caller-owned runtime (see §5).
 
 ### 1.2 TOML schema: `FileConfig` / `FileService`
 
-Deserialization structs at `crates/eggtunnel-cli/src/main.rs:198-241` (syntax only — no environment, file, or semantic work). Unknown-field behavior is serde default (ignored); missing-field behavior is per-field `Option`/default.
+Deserialization structs at `crates/eggtunnel-cli/src/main.rs:200-246` (syntax only — no environment, file, or semantic work). Unknown fields are rejected; missing-field behavior is per-field `Option`/default.
 
-#### `FileConfig` (`crates/eggtunnel-cli/src/main.rs:198-227`)
+#### `FileConfig` (`crates/eggtunnel-cli/src/main.rs:200-231`)
 
 | TOML key | Rust field / type | Default | Used by | Notes |
 |---|---|---|---|---|
@@ -95,8 +95,8 @@ Unknown strings are `transport` errors at resolution time — there is no silent
 ## 2. Resolution pipeline (parse → override → resolve → validate → launch)
 
 Every config-consuming path runs the same five stages exactly once.
-`run_check` at `crates/eggtunnel-cli/src/main.rs:809-852`,
-`run_server` at `:853-925`, and `run_client` at `:933-1002` share stages
+`run_check` at `crates/eggtunnel-cli/src/main.rs:912-958`,
+`run_server` at `:960-1048`, and `run_client` at `:1054-1128` share stages
 1–4; only stage 5 differs (report vs bind vs start). There is no second
 validation pass and no re-read of environment variables or files between
 validation and launch: builders take owned values out of the resolved
@@ -178,7 +178,7 @@ nonzero for every failure; JSON `check` failures still print the
 
 ### 2.6 `check --json` schema
 
-`CheckReport` (`crates/eggtunnel-cli/src/main.rs:703-751`) serializes one
+`CheckReport` (`crates/eggtunnel-cli/src/main.rs:782-793`) serializes one
 `eggtunnel.check/v1` object: `ok`, `mode`, `transport`, `services`,
 `custom_ca`/`mtls`/`outbound_proxy` booleans, and a null-or-`{category,
 message}` error. No raw configuration, paths, or secret-bearing values
@@ -189,15 +189,15 @@ default.
 
 ## 3. Runtime behavior
 
-### 3.1 Server path (`run_server` at `crates/eggtunnel-cli/src/main.rs:853-925`)
+### 3.1 Server path (`run_server` at `crates/eggtunnel-cli/src/main.rs:960-1048`)
 
 1. Validate `--snapshot-interval-secs` first (a flag error must not open listeners and *then* fail), then parse → overrides → `resolve_server` → `server_builder(resolved).bind().await`. `bind()` runs `validate()` first (`crates/eggtunnel/src/server/config.rs:118-129`), so startup enforces the same library matrix as `check` — from the same snapshot, with no re-read.
 2. Startup event (JSON) or `server listening on {addr}` with `server.local_addr()` (human).
 3. Effective-bind loop: a `printed: HashSet<(SessionId, ServiceId, [u8;16], u16)>`, a 250 ms `refresh` interval, and `tokio::select!` over `ctrl_c` vs `refresh.tick()` vs the optional snapshot ticker. Each tick snapshots `handle.snapshot().effective_binds` and prints/emits each never-before-seen key — human `service {id} session {session:?} listening on [{ipv6}]:{port}` (address via `Ipv6Addr::from(bind.address)`, so IPv4 appears as `::ffff:a.b.c.d`), or a `service_bind` JSON event with the same fields. Matches `docs/OPERATIONS.md:7-10`.
-4. `--snapshot-interval-secs N` (validated by `validate_snapshot_interval` before any bind/start, minimum 5 s) adds a periodic `snapshot` event rendered by `snapshot_event` straight from the bounded library `Snapshot` — counters, heartbeat health, termination, and the bind list. The ticker helper (`futures_time_tick` at `:926-931`) parks the branch on a far-future tick when disabled.
+4. `--snapshot-interval-secs N` (validated by `validate_snapshot_interval` before any bind/start, minimum 5 s) adds a periodic `snapshot` event rendered by `snapshot_event` straight from the bounded library `Snapshot` — counters, heartbeat health, termination, and the bind list. The ticker helper (`futures_time_tick` at `:1050`) creates no ticker when disabled.
 5. Shutdown: `break` on Ctrl-C → `shutdown` JSON event (`reason: signal`) → `server.shutdown().await`, which sends the bounded Drain before joining (per `docs/OPERATIONS.md:4-5`).
 
-### 3.2 Client path (`run_client` at `crates/eggtunnel-cli/src/main.rs:933-1002`)
+### 3.2 Client path (`run_client` at `crates/eggtunnel-cli/src/main.rs:1054-1128`)
 
 1. Validate `--snapshot-interval-secs` first (a flag error must not start the runtime and *then* fail), then parse → overrides → `resolve_client` → `client_builder(resolved).start().await` (validates first via `crates/eggtunnel/src/client/config.rs:142-155`).
 2. Startup event (JSON: version, mode, transport, service count) or `client started; waiting for authenticated session` (human).
@@ -332,12 +332,12 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 
 | Topic | Doc | CLI/code counterpart |
 |---|---|---|
-| Start / stop | `server server.toml` / `client client.toml`; both stop on Ctrl-C; server sends bounded Drain before closing (`docs/OPERATIONS.md:3-5`) | `run_server` shutdown (`crates/eggtunnel-cli/src/main.rs:918-924`), `run_client` shutdown (`:995-1001`) |
+| Start / stop | `server server.toml` / `client client.toml`; both stop on Ctrl-C; server sends bounded Drain before closing (`docs/OPERATIONS.md:3-5`) | `run_server` shutdown (`crates/eggtunnel-cli/src/main.rs:1043-1048`), `run_client` shutdown (`:1122-1130`) |
 | Listening / binds | `listen_addr` takes control + data; every connection starts with TLS; actual service address is server-assigned, visible via `ServerHandle` snapshot; CLI prints new addresses while running. QUIC: `listen_addr` is UDP control; service listeners stay TCP (`docs/OPERATIONS.md:7-12`) | bind-print loop (`crates/eggtunnel-cli/src/main.rs:886-916`); `ServerBuilder::bind` (`crates/eggtunnel/src/server/config.rs:118-130`) |
 | Client resilience | Bounded exponential backoff + jitter on transient failures; invalid auth/authorization stops retries; registrations restored after new authenticated Session (`docs/OPERATIONS.md:14-17`) | Library reconnect supervisor (see client deep dive §3.3); CLI prints `waiting for authenticated session` or `session_ready`/`session_lost` JSON events |
 | Certs / permissions | Trusted cert with SAN covering `tls_server_name`; token + key files readable only by the service account; loopback-only unless explicitly enabled (`docs/OPERATIONS.md:19-22`) | `tls_server_name` presence (`crates/eggtunnel-cli/src/main.rs:516-525`); `allow_public_service_binds` passthrough (`server_builder` at `crates/eggtunnel-cli/src/main.rs:661-681`) |
 | Limits / throttling | 64 concurrent handshakes, 128 sessions, 64 services / 128 pending / 128 active per session, 128 client open tasks + control queue; per-IP auth throttle (10 fails / 60 s, 1024-source table) (`docs/OPERATIONS.md:24-28`) | `BindPolicy` defaults (`crates/eggtunnel/src/common.rs:114-124`); server constants (`crates/eggtunnel/src/server/auth.rs:20-23`); `ResourceLimits::default` (`crates/eggtunnel/src/common.rs:232-245`) |
-| Snapshot monitoring | Current + high-water counts for sessions/services/pending/active/open/handshakes; latest termination category + panicked-task count; no event history or error text; counters are per-process, not persisted (`docs/OPERATIONS.md:30-35`); `--snapshot-interval-secs` streams the same `Snapshot` as JSON (`crates/eggtunnel-cli/src/main.rs:759-801`) | `handle.snapshot().effective_binds` (polled in both runtime loops); `Snapshot` type (`crates/eggtunnel/src/common.rs:136-160`) |
+| Snapshot monitoring | Current + high-water counts for sessions/services/pending/active/open/handshakes; latest termination category + panicked-task count; no event history or error text; counters are per-process, not persisted (`docs/OPERATIONS.md:30-35`); `--snapshot-interval-secs` streams the same `Snapshot` as JSON (`crates/eggtunnel-cli/src/main.rs:864-891`) | `handle.snapshot().effective_binds` (polled in both runtime loops); `Snapshot` type (`crates/eggtunnel/src/common.rs:151-175`) |
 | Restricted egress | `outbound_proxy_env` → HTTP CONNECT / SOCKS5 / `__` chains; TLS+SNI stays end-to-end; WSS on TCP endpoint; QUIC has no proxy (`docs/OPERATIONS.md:37-48`) | CLI-owned name/value checks (`crates/eggtunnel-cli/src/main.rs:539-566`); library shape + dispatch (`crates/eggtunnel/src/client.rs:609-612` into the resolved snapshot) |
 
 ---
@@ -346,9 +346,8 @@ Not shown: `transport` (defaults to `tcp_tls`), `client_ca` (mTLS trust roots; r
 
 ### 7.1 Config-vs-code drift
 
-- [ ] **Server-mode silent ignores.** `ca_cert`, `client_cert`, `client_key`, `server_addr`, `tls_server_name`, `services` are accepted-but-ignored in server mode (resolution never reads them). A user who pastes client keys into a server file gets `configuration is structurally valid` with no warning. Consider warn-or-reject for cross-mode keys.
-- [ ] **Client-mode silent ignores.** `listen_addr`, `tls_cert`, `tls_key`, `client_ca`, `allow_public_service_binds` are likewise ignored in client mode. Same recommendation.
-- [ ] **`allow_public_service_binds` in client files.** Accepted and ignored; only meaningful for the server. Easy to misplace — worth a cross-mode lint.
+Cross-mode fields are rejected during resolution: server-only fields in client
+files and client-only fields in server files cannot be silently ignored.
 - [ ] **Docs vs dispatch for `bind_port`.** `docs/CONFIGURATION.md:34-36` says "`bind_port` requests the server-side service port" while the code always sends `RequestedBind::Loopback` (`resolve_client_services` at `crates/eggtunnel-cli/src/main.rs:465-491`). Public binds depend on server policy, not on any client TOML value — confirm the doc sentence is read that way and not as "set `bind_port` to a public port to get one."
 - [ ] **Transport doc drift.** If a fourth transport is ever added, three places must move together: `client_transport`/`server_transport` (`crates/eggtunnel-cli/src/main.rs:441-463`), the override field docs (§1.1), and the `transport` row in §1.2.
 

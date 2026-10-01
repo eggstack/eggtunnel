@@ -92,7 +92,7 @@ a fixed-seed Service-state sequence, and ignored TCP/TLS, QUIC-stream, and
 WSS churn runs — and re-passed exact-head hosted CI
 (`plans/closure/reverse-session/011-status.md`; `plans/registry.md:45`).
 M012 re-ran the full gate (fmt, workspace check/test/clippy, rustdoc
-`-D warnings`, embedder check, audit, deny, all seven slices, MSRV,
+`-D warnings`, embedder check, audit, deny, all 14 feature slices, MSRV,
 dependency guard) locally on the `0.2.0` candidate plus exact-head hosted CI
 run `36012640890` (`plans/closure/reverse-session/012-status.md:21,36-38,43`).
 M013 captured the publication event (tag `v0.2.0`, hosted release run
@@ -128,7 +128,7 @@ thresholds.
 | `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42` + `013-status.md`). Only target with off-runner consumer evidence |
 
 Hosted CI evidence for the published `0.2.0` line: exact-head hosted CI run
-`36012640890` passed all standard jobs, all seven feature slices, MSRV, and
+`36012640890` passed all standard jobs, all 14 feature slices, MSRV, and
 the minimal-dependency guard on the `0.2.0` candidate SHA
 (`012-status.md:21,43`). The `v0.2.0` tag, four-target release workflow
 (`36058175606`), GitHub release assets, crates.io publication, and clean
@@ -458,7 +458,7 @@ suffices without the CLI, default features, or a library-owned runtime**
   the local loopback suite — verify the suite actually ran for the head under
   review (historical `006-status.md:56`: 39 lib + 8 proto tests; candidate
   `012-status.md:36-37`: 91 passed, 3 ignored workspace-wide plus the
-  seven-slice matrix counts).
+  14-slice matrix counts).
 - [ ] Checksums detect corruption against a trusted manifest; they are not
   signatures or authenticity proofs (`docs/DISTRIBUTION.md:41-45`).
   Attestations are build provenance, not independent code review.

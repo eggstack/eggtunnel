@@ -83,7 +83,6 @@ pub(super) async fn run_service(
                     counters.record_termination(crate::common::TerminationCategory::ResourceExhausted);
                     continue;
                 };
-                let active_guard = ActiveConnectionGuard::new(connection_permit, counters.clone());
                 let connection_id = match eggtunnel_proto::ConnectionId::generate() {
                     Ok(id) => id,
                     Err(_) => { counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed); continue; }
@@ -96,27 +95,31 @@ pub(super) async fn run_service(
                     counters.record_termination(crate::common::TerminationCategory::ResourceExhausted);
                     continue;
                 }
-                pending.insert(connection_id, PendingEntry { service_id, expires: Instant::now() + pending_lifetime, data_tx });
-                drop(pending);
                 let pending_connections = counters.pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 counters.high_water_pending.fetch_max(pending_connections, std::sync::atomic::Ordering::Relaxed);
+                pending.insert(connection_id, PendingEntry { service_id, expires: Instant::now() + pending_lifetime, data_tx });
+                drop(pending);
                 if opens.try_send(Message::Open(Open { service_id, connection_id })).is_err() {
-                    if session.pending.lock().await.remove(&connection_id).is_some() { counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
+                    let mut pending = session.pending.lock().await;
+                    if pending.remove(&connection_id).is_some() { counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed); }
                     counters.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 let session = session.clone();
                 let counters = counters.clone();
                 let relay_cancel = cancel.child_token();
+                let active_guard = ActiveConnectionGuard::new(connection_permit, counters.clone());
                 relays.spawn(async move {
                     let _active_guard = active_guard;
                     let outcome = tokio::select! {
                         _ = relay_cancel.cancelled() => None,
                         result = timeout(pending_lifetime, data_rx) => result.ok().and_then(Result::ok),
                     };
-                    if session.pending.lock().await.remove(&connection_id).is_some() {
+                    let mut pending = session.pending.lock().await;
+                    if pending.remove(&connection_id).is_some() {
                         counters.pending.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }
+                    drop(pending);
                     if let Some(data) = outcome {
                         match relay_with_options(external, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
                             Ok(report) => {

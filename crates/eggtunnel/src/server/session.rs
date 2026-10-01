@@ -59,7 +59,7 @@ impl SessionContext {
     /// Insert a new Session, failing closed when the bounded Session ceiling is
     /// reached. Dead weak entries are pruned first so the ceiling reflects live
     /// Sessions rather than accumulated history.
-    pub(super) async fn register(
+    pub(super) fn register(
         context: &Arc<SessionContext>,
         registry: &SessionRegistry,
         max_sessions: usize,
@@ -67,14 +67,14 @@ impl SessionContext {
         let mut active = registry.lock().unwrap_or_else(|p| p.into_inner());
         active.retain(|_, weak| weak.strong_count() > 0);
         if active.len() >= max_sessions {
-            return Err(TunnelError::Authorization);
+            return Err(TunnelError::ResourceExhausted);
         }
         active.insert(context.id, Arc::downgrade(context));
         Ok(())
     }
 
     /// Live Sessions with a strong reference, used by server shutdown drain.
-    pub(super) async fn live(registry: &SessionRegistry) -> Vec<Arc<SessionContext>> {
+    pub(super) fn live(registry: &SessionRegistry) -> Vec<Arc<SessionContext>> {
         registry
             .lock()
             .unwrap_or_else(|p| p.into_inner())

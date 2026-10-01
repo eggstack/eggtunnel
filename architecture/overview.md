@@ -23,12 +23,12 @@ negotiation, CLI resolution surface).
 
 | # | Component | Crate / path | Deep dive |
 |---|-----------|--------------|-----------|
-| 1 | Wire protocol (`eggtunnel-proto`) | `crates/eggtunnel-proto/src/lib.rs` (886 lines) | [proto-wire-protocol.md](proto-wire-protocol.md) |
-| 2 | Shared core (`common.rs` + `endpoint.rs` + `pem.rs`) | `crates/eggtunnel/src/common.rs` (647 lines), `endpoint.rs` (171 lines), `pem.rs` (44 lines, `mtls`) | [common-core.md](common-core.md) |
-| 3 | Reverse-session client | `crates/eggtunnel/src/client.rs` (1210 lines) + `client/` (`config` 156, `reconnect` 549, `service_state` 556, `heartbeat` 61, `open` 90, `tests` 956, `qualification_tests` 110) | [client.md](client.md) |
-| 4 | Reverse-session server | `crates/eggtunnel/src/server.rs` (324 lines coordinator) + `server/` (`config` 173, `tls` 67, `accept` 477, `auth` 113, `session` 163, `control` 421, `pending` 122, `service` 154) + `server_tests.rs` (255) + `server_tests/` (`tcp` 1920, `mtls` 187, `quic` 967, `websocket` 405, `proxy` 905) | [server.md](server.md) |
-| 5 | Wire I/O + transports (TLS / QUIC / WSS / outbound-proxy, Eggress) | `crates/eggtunnel/src/wire_io.rs` (58 lines), feature gates in `crates/eggtunnel/Cargo.toml` | [transports-wire-io.md](transports-wire-io.md) |
-| 6 | CLI + config + embedding API | `crates/eggtunnel-cli/src/main.rs` (1407 lines), `crates/eggtunnel/src/lib.rs` (35 lines), `examples/`, `fixtures/embedder`, `docs/CONFIGURATION.md` | [cli-config-ops.md](cli-config-ops.md) |
+| 1 | Wire protocol (`eggtunnel-proto`) | `crates/eggtunnel-proto/src/lib.rs` (991 lines) | [proto-wire-protocol.md](proto-wire-protocol.md) |
+| 2 | Shared core (`common.rs` + `endpoint.rs` + `pem.rs`) | `crates/eggtunnel/src/common.rs` (706 lines), `endpoint.rs` (183 lines), `pem.rs` (64 lines, `mtls`) | [common-core.md](common-core.md) |
+| 3 | Reverse-session client | `crates/eggtunnel/src/client.rs` (1238 lines) + `client/` (`config` 162, `reconnect` 602, `service_state` 595, `heartbeat` 78, `open` 93, `tests` 1053, `qualification_tests` 110) | [client.md](client.md) |
+| 4 | Reverse-session server | `crates/eggtunnel/src/server.rs` (353 lines coordinator) + `server/` (`config` 179, `tls` 67, `accept` 516, `auth` 133, `session` 170, `control` 570, `pending` 126, `service` 157) + `server_tests.rs` (305) + `server_tests/` (`tcp` 1952, `mtls` 187, `quic` 940, `websocket` 405, `proxy` 899) | [server.md](server.md) |
+| 5 | Wire I/O + transports (TLS / QUIC / WSS / outbound-proxy, Eggress) | `crates/eggtunnel/src/wire_io.rs` (209 lines), feature gates in `crates/eggtunnel/Cargo.toml` | [transports-wire-io.md](transports-wire-io.md) |
+| 6 | CLI + config + embedding API | `crates/eggtunnel-cli/src/main.rs` (1548 lines), `crates/eggtunnel/src/lib.rs` (35 lines), `examples/`, `fixtures/embedder`, `docs/CONFIGURATION.md` | [cli-config-ops.md](cli-config-ops.md) |
 | 7 | Ops, tooling, distribution, and process docs | `scripts/`, `.github/workflows/`, `install.sh`, `docs/`, `plans/`, `deny.toml` | [ops-tooling-distribution.md](ops-tooling-distribution.md) |
 
 Cross-cutting security, auth, resource limits, and observability are covered
@@ -41,7 +41,7 @@ Runtime-neutral, `forbid(unsafe_code)` (`lib.rs:1`), dependencies only
 (`ETUN` magic + major/minor u16 BE + message-ID u16 BE + payload-len u32 BE +
 one postcard payload), and `encode_frame` / `decode_frame` (exactly-one-frame,
 concatenated-frame friendly). I/O adaptation lives one layer up in
-`wire_io.rs:7-58`.
+`wire_io.rs`.
 
 - Wire v1.1 (crate line 0.2.0; 1.0 peers interoperate at baseline); major
   mismatch rejected (`crates/eggtunnel-proto/src/lib.rs:532-536`), minor
@@ -58,7 +58,7 @@ concatenated-frame friendly). I/O adaptation lives one layer up in
 - IDs: `SessionId` / `ConnectionId` (128-bit `getrandom`, constant-time eq for
   the latter, redacted `Debug`, 4-byte-prefix `Debug` for `SessionId`);
   `Auth` token redacted; hostile-input tests + 10k-sample fuzz-style
-  `decode_frame` never-panics test in-crate (`lib.rs:579-886`).
+  `decode_frame` never-panics test in-crate (proto `lib.rs` test module).
 - Session-time re-registration and `Ping`/`Pong` heartbeat reuse the same
   messages; M009 adds no wire message type, M016 adds `RegisterReject` plus
   the capability registry only.
@@ -66,7 +66,7 @@ concatenated-frame friendly). I/O adaptation lives one layer up in
 ## 2. Shared core — `common.rs` + `endpoint.rs` + `pem.rs` ([deep dive](common-core.md))
 
 Shared vocabulary for client and server: secrets, policy, observability,
-errors. `common.rs` (647 lines) carries no unconditional socket/timer/task
+errors. `common.rs` (706 lines) carries no unconditional socket/timer/task
 dependency — `SocketAddr` is `server`-gated, `Instant`/atomics/`JoinError`
 are `client`/`server`-gated, so only the `--no-default-features` build is
 pure vocabulary. Facade re-exports 11 common types plus `Endpoint` at
@@ -98,16 +98,16 @@ pure vocabulary. Facade re-exports 11 common types plus `Endpoint` at
   → `TerminationCategory` mapping (Cancelled/Timeout/Target/
   ResourceExhausted/PeerClosed/Auth*/Protocol/Transport/Internal).
 - Server-only `verify_token` (constant-time via `subtle`).
-- `endpoint.rs` (171 lines, ungated): `Endpoint::parse` for client `host:port`
+- `endpoint.rs` (183 lines, ungated): `Endpoint::parse` for client `host:port`
   shape (DNS/IPv4 plus bracketed IPv6, no transport/policy validation).
-  `pem.rs` (44 lines, `mtls`-gated): rustls pki-types PEM helpers.
+  `pem.rs` (64 lines, `mtls`-gated): rustls pki-types PEM helpers.
 
 ## 3. Reverse-session client — `client.rs` + `client/` ([deep dive](client.md))
 
 Outbound-only initiator behind NAT. Establishes one authenticated control
 stream per session, registers N TCP services, then dials one data connection
 per accepted external connection (`DataHello`, then opaque relay). Never
-listens. `client.rs` (1210 lines) is the orchestrator (handle/entry points,
+listens. `client.rs` (1238 lines) is the orchestrator (handle/entry points,
 `start_profile`, `run_session`, guards); composable logic lives in
 `client/config.rs` (config + `ClientBuilder` + target contract),
 `client/reconnect.rs` (supervisor + `StreamTransport`/`QuicTransport` + dial),
@@ -186,7 +186,7 @@ harness) + `server_tests/` (`tcp` 1920, `mtls` 187, `quic` 967,
 
 ## 5. Wire I/O + transports ([deep dive](transports-wire-io.md))
 
-- `wire_io.rs` (58 lines, unchanged): `read_message` / `write_message` over
+- `wire_io.rs` (209 lines): `read_message` / `write_message` over
   `AsyncRead/AsyncWrite` + `read_boxed` / `write_boxed` over Eggress
   `BoxStream`. Header-first read, hostile-header fast reject, length pre-check
   before payload allocation, exact-consumption check. All transports converge

@@ -10,6 +10,9 @@ use std::{
 };
 
 use eggtunnel_proto::{EffectiveBind, RequestedBind, ServiceId, ServiceName, SessionId, TcpTarget};
+
+#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+pub(crate) const MAX_WEBSOCKET_FRAME_SIZE: usize = eggtunnel_proto::MAX_FRAME_BYTES;
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -394,10 +397,11 @@ impl Counters {
                 HeartbeatSnapshot {
                     session_generation: self.session_generation.load(Ordering::Relaxed),
                     last_pong_age_ms: heartbeat.last_pong_at.map(|instant| {
-                        std::time::Instant::now()
-                            .saturating_duration_since(instant)
+                        let now = std::time::Instant::now();
+                        now.saturating_duration_since(instant)
                             .as_millis()
-                            .min(u64::MAX as u128) as u64
+                            .try_into()
+                            .unwrap_or(u64::MAX)
                     }),
                     latest_rtt_ms: heartbeat.latest_rtt_ms,
                     missed_heartbeats: heartbeat.missed_heartbeats,
@@ -437,12 +441,13 @@ impl Counters {
 
     pub fn record_heartbeat_pong(&self, sent_at: Instant) {
         let mut heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
-        heartbeat.last_pong_at = Some(Instant::now());
+        let now = Instant::now();
+        heartbeat.last_pong_at = Some(now);
         heartbeat.latest_rtt_ms = Some(
-            Instant::now()
-                .saturating_duration_since(sent_at)
+            now.saturating_duration_since(sent_at)
                 .as_millis()
-                .min(u64::MAX as u128) as u64,
+                .try_into()
+                .unwrap_or(u64::MAX),
         );
         heartbeat.missed_heartbeats = 0;
     }
@@ -533,15 +538,14 @@ fn is_loopback_octets(address: [u8; 16]) -> bool {
     if ip.is_loopback() {
         return true;
     }
-    // IPv4-mapped (`::ffff:127/8`) and IPv4-compatible (`::127/8`) loopback:
-    // `Ipv6Addr::is_loopback` is true only for `::1`, so check the embedded
-    // IPv4 127/8 explicitly. Fail-closed otherwise.
+    // Mapped IPv4 loopback needs an explicit check because the standard
+    // library only recognizes `::1` as an IPv6 loopback address.
     if let Some(mapped) = ip.to_ipv4_mapped()
         && mapped.octets()[0] == 127
     {
         return true;
     }
-    address[..12] == [0; 12] && address[12] == 127
+    false
 }
 
 #[cfg(feature = "server")]

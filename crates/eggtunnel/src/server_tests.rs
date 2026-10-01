@@ -82,6 +82,30 @@ mod tests {
         assert!(builder().validate().is_ok());
     }
 
+    #[test]
+    fn server_builder_keeps_public_bind_setting_in_sync_with_bind_policy() {
+        let policy = BindPolicy {
+            allow_public_addresses: true,
+            ..BindPolicy::default()
+        };
+        assert!(builder().bind_policy(policy).validate().is_ok());
+    }
+
+    #[test]
+    fn server_builder_rejects_empty_and_oversize_tls_material() {
+        let mut config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: Vec::new(),
+            private_key_pem: b"key".to_vec(),
+            token: SecretToken::new(b"test-token".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        };
+        assert!(ServerBuilder::new(config.clone()).validate().is_err());
+        config.certificate_pem = b"cert".to_vec();
+        config.private_key_pem = vec![0; eggtunnel_proto::MAX_FRAME_BYTES + 1];
+        assert!(ServerBuilder::new(config).validate().is_err());
+    }
+
     #[cfg(feature = "quic-server")]
     #[test]
     fn server_builder_accepts_quic() {
@@ -224,12 +248,12 @@ mod tests {
 
     #[tokio::test]
     async fn session_guard_removes_its_registry_entry_on_every_path() {
-        let counters = Counters::default();
         let registry = crate::server::session::new_session_registry();
+        let live_counters;
         let live = {
-            let (context, _sessions, _counters) = test_session(SessionId([3; 16])).await;
+            let (context, _sessions, counters) = test_session(SessionId([3; 16])).await;
+            live_counters = counters.clone();
             SessionContext::register(&context, &registry, MAX_SESSIONS)
-                .await
                 .unwrap();
             let _guard = crate::server::session::SessionGuard::new(context.clone(), registry.clone());
             assert_eq!(registry.lock().unwrap_or_else(|p| p.into_inner()).len(), 1);
@@ -244,10 +268,7 @@ mod tests {
                 .is_empty(),
             "a dropped Session must not leave a registry entry behind"
         );
-        assert_eq!(
-            counters.sessions.load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
+        assert_eq!(live_counters.sessions.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     async fn roundtrip(addr: SocketAddr, bytes: &'static [u8]) -> Vec<u8> {

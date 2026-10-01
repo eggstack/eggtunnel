@@ -58,7 +58,17 @@ pub(super) async fn accept_data_hello(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authentication);
     }
-    let pending = session.pending.lock().await.remove(&hello.connection_id);
+    let pending = {
+        let mut entries = session.pending.lock().await;
+        let entry = entries.remove(&hello.connection_id);
+        if entry.is_some() {
+            session
+                .counters
+                .pending
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        entry
+    };
     let Some(pending) = pending else {
         tracing::warn!(
             category = "data_hello_unknown_connection",
@@ -69,10 +79,6 @@ pub(super) async fn accept_data_hello(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authorization);
     };
-    session
-        .counters
-        .pending
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     if pending.service_id != hello.service_id || pending.expires <= Instant::now() {
         tracing::warn!(
             category = "data_hello_service_or_expiry_mismatch",
@@ -108,14 +114,13 @@ pub(super) async fn remove_service_pending(session: &SessionContext, service: Se
 
 /// Drop every pending entry for the Session (Session teardown).
 pub(super) async fn remove_all_pending(session: &SessionContext) {
-    let removed = {
+    {
         let mut pending = session.pending.lock().await;
         let len = pending.len();
         pending.clear();
-        len
-    };
-    session
-        .counters
-        .pending
-        .fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
+        session
+            .counters
+            .pending
+            .fetch_sub(len, std::sync::atomic::Ordering::Relaxed);
+    }
 }

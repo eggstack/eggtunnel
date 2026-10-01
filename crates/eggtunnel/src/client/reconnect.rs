@@ -16,6 +16,8 @@ use eggress_core::BoxStream;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "websocket-client")]
+use crate::common::MAX_WEBSOCKET_FRAME_SIZE;
 use crate::common::{ClientService, Counters, SecretToken, TimeoutPolicy, TunnelError};
 use crate::endpoint::Endpoint;
 
@@ -110,7 +112,8 @@ impl ReconnectSupervisor {
             Err(
                 TunnelError::Authentication
                 | TunnelError::Authorization
-                | TunnelError::ResourceExhausted,
+                | TunnelError::ResourceExhausted
+                | TunnelError::Configuration(_),
             ) => {
                 if let Err(error) = result {
                     counters.record_termination(error.termination_category());
@@ -138,9 +141,11 @@ impl ReconnectSupervisor {
             return false;
         }
         let jitter = random_jitter_ms(self.reconnect_delay);
+        let delay = (self.reconnect_delay + Duration::from_millis(jitter))
+            .min(counters.policy.timeouts.reconnect_max);
         tokio::select! {
             _ = cancel.cancelled() => return false,
-            _ = tokio::time::sleep(self.reconnect_delay + Duration::from_millis(jitter)) => {}
+            _ = tokio::time::sleep(delay) => {}
         }
         counters
             .reconnects
@@ -174,9 +179,18 @@ pub(super) async fn drive<T: Transport>(
         }
         supervisor.note_attempt(driver.counters, transport.label());
         supervisor.drain_disconnected_commands(driver.commands);
-        let established = tokio::select! {
-            _ = driver.cancel.cancelled() => break,
-            result = transport.establish() => result,
+        let established = {
+            let establishing = transport.establish();
+            tokio::pin!(establishing);
+            loop {
+                tokio::select! {
+                    _ = driver.cancel.cancelled() => break Err(TunnelError::Cancelled),
+                    result = &mut establishing => break result,
+                    Some(command) = driver.commands.recv() => {
+                        super::apply_disconnected_command(&mut supervisor.services, command);
+                    }
+                }
+            }
         };
         let result = match established {
             Ok((stream, data_transport)) => {
@@ -215,11 +229,19 @@ pub(super) fn random_jitter_ms(delay: Duration) -> u64 {
         return 0;
     }
     let mut random = [0; 8];
-    if getrandom::fill(&mut random).is_ok() {
-        u64::from_ne_bytes(random) % (max + 1)
-    } else {
-        0
+    let range = max + 1;
+    let zone = u64::MAX - (u64::MAX % range);
+    for _ in 0..4 {
+        if let Err(error) = getrandom::fill(&mut random) {
+            tracing::warn!(%error, "reconnect jitter randomness unavailable");
+            return max;
+        }
+        let value = u64::from_ne_bytes(random);
+        if value < zone {
+            return value % range;
+        }
     }
+    max
 }
 
 /// TCP/TLS and WebSocket establishment over one already-validated endpoint.
@@ -284,15 +306,17 @@ impl Transport for StreamTransport {
             let stream = if self.websocket {
                 #[cfg(feature = "websocket-client")]
                 {
-                    let url = format!("wss://{}", self.endpoint.as_str());
+                    let url = self.endpoint.websocket_url();
                     let ws_config =
                         tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-                            .max_message_size(Some(1024 * 1024))
-                            .max_frame_size(Some(1024 * 1024));
+                            .max_message_size(Some(MAX_WEBSOCKET_FRAME_SIZE))
+                            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_SIZE));
                     timeout(
                         self.timeouts.handshake,
-                        eggress_protocol_websocket::WebSocketTunnelClient::new(1024 * 1024)
-                            .connect_over_stream_with_config(&url, stream, ws_config),
+                        eggress_protocol_websocket::WebSocketTunnelClient::new(
+                            MAX_WEBSOCKET_FRAME_SIZE,
+                        )
+                        .connect_over_stream_with_config(&url, stream, ws_config),
                     )
                     .await
                     .map_err(|_| TunnelError::Timeout)?
@@ -351,7 +375,7 @@ pub(super) async fn connect_tcp(
     )
     .await
     .map_err(|_| TunnelError::Timeout)?
-    .map_err(|_| TunnelError::Disconnected)?;
+    .map_err(TunnelError::Io)?;
     Ok(Box::new(tcp))
 }
 
@@ -364,7 +388,7 @@ pub(super) struct QuicTransport {
     server_name: String,
     insecure: bool,
     timeouts: TimeoutPolicy,
-    max_concurrent_streams: u32,
+    max_concurrent_streams: usize,
     slot: Arc<std::sync::Mutex<Option<Arc<eggress_transport_quic::QuicClient>>>>,
     active: Option<Arc<eggress_transport_quic::QuicClient>>,
 }
@@ -384,7 +408,7 @@ impl QuicTransport {
             server_name,
             insecure,
             timeouts,
-            max_concurrent_streams: u32::try_from(max_concurrent_streams).unwrap_or(u32::MAX),
+            max_concurrent_streams,
             slot,
             active: None,
         }
@@ -401,34 +425,42 @@ impl Transport for QuicTransport {
         Box::pin(async move {
             use eggress_transport_quic::{QuicClient, QuicClientConfig};
 
-            let quic = timeout(
-                self.timeouts.connect,
-                QuicClient::connect(
+            let max_concurrent_streams =
+                u32::try_from(self.max_concurrent_streams).map_err(|_| {
+                    TunnelError::Configuration("QUIC stream limit exceeds protocol range")
+                })?;
+            let connect = async {
+                let quic = QuicClient::connect(
                     self.endpoint.host(),
                     self.endpoint.port(),
                     QuicClientConfig {
                         server_name: self.server_name.clone(),
                         insecure: self.insecure,
                         idle_timeout: self.timeouts.control_idle,
-                        max_concurrent_streams: self.max_concurrent_streams,
+                        max_concurrent_streams,
                         ..QuicClientConfig::default()
                     },
-                ),
-            )
-            .await
-            .map_err(|_| TunnelError::Timeout)?
-            .map_err(|_| TunnelError::Tls)?;
-            *self.slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(quic.clone());
-            self.active = Some(quic);
-            let quic = self.active.as_ref().expect("quic client was just stored");
-            let connection = timeout(self.timeouts.connect, quic.get_connection())
+                )
                 .await
-                .map_err(|_| TunnelError::Timeout)?
                 .map_err(|_| TunnelError::Tls)?;
-            let control = timeout(self.timeouts.connect, connection.open_stream())
+                *self.slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(quic.clone());
+                self.active = Some(quic);
+                let connection = self
+                    .active
+                    .as_ref()
+                    .expect("quic client was just stored")
+                    .get_connection()
+                    .await
+                    .map_err(|_| TunnelError::Tls)?;
+                let control = connection
+                    .open_stream()
+                    .await
+                    .map_err(|_| TunnelError::Disconnected)?;
+                Ok::<_, TunnelError>((control, connection))
+            };
+            let (control, connection) = timeout(self.timeouts.connect, connect)
                 .await
-                .map_err(|_| TunnelError::Timeout)?
-                .map_err(|_| TunnelError::Disconnected)?;
+                .map_err(|_| TunnelError::Timeout)??;
             tracing::debug!(transport = "quic", "QUIC transport established");
             Ok((control, ClientDataTransport::Quic(connection)))
         })

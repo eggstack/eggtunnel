@@ -97,6 +97,12 @@ impl Endpoint {
     pub fn as_str(&self) -> &str {
         &self.text
     }
+
+    /// WebSocket URL authority and root path for this validated endpoint.
+    #[cfg(feature = "websocket-client")]
+    pub(crate) fn websocket_url(&self) -> String {
+        format!("wss://{}/", self.text)
+    }
 }
 
 impl std::fmt::Display for Endpoint {
@@ -160,5 +166,18 @@ mod tests {
                 "endpoint {value:?} must be rejected"
             );
         }
+    }
+
+    #[cfg(feature = "websocket-client")]
+    #[test]
+    fn websocket_url_has_root_path_and_brackets_ipv6_authority() {
+        assert_eq!(
+            Endpoint::parse("[::1]:443").unwrap().websocket_url(),
+            "wss://[::1]:443/"
+        );
+        assert_eq!(
+            Endpoint::parse("example.com:443").unwrap().websocket_url(),
+            "wss://example.com:443/"
+        );
     }
 }

@@ -1,6 +1,12 @@
 use super::*;
 use eggtunnel_proto::{RequestedBind, ServiceName, TcpTarget};
 
+async fn bounded_read_boxed(reader: &mut BoxStream) -> Result<Message, TunnelError> {
+    tokio::time::timeout(Duration::from_secs(2), super::read_boxed(reader))
+        .await
+        .map_err(|_| TunnelError::Timeout)?
+}
+
 fn config(server_addr: &str) -> ClientConfig {
     ClientConfig {
         server_addr: server_addr.to_owned(),
@@ -109,7 +115,7 @@ async fn fake_connected_client_with_policy(
     });
     let mut peer: BoxStream = Box::new(server_io);
     assert!(matches!(
-        read_boxed(&mut peer).await.unwrap(),
+        bounded_read_boxed(&mut peer).await.unwrap(),
         Message::ClientHello(_)
     ));
     write_boxed(
@@ -122,7 +128,7 @@ async fn fake_connected_client_with_policy(
     .await
     .unwrap();
     assert!(matches!(
-        read_boxed(&mut peer).await.unwrap(),
+        bounded_read_boxed(&mut peer).await.unwrap(),
         Message::Auth(_)
     ));
     write_boxed(
@@ -133,7 +139,7 @@ async fn fake_connected_client_with_policy(
     )
     .await
     .unwrap();
-    let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+    let Message::RegisterService(initial) = bounded_read_boxed(&mut peer).await.unwrap() else {
         panic!("expected initial registration")
     };
     write_boxed(
@@ -207,7 +213,7 @@ async fn fake_session_with_hello(
     });
     let mut peer: BoxStream = Box::new(server_io);
     // The client must always advertise the full supported set at 1.1.
-    let Message::ClientHello(hello) = read_boxed(&mut peer).await.unwrap() else {
+    let Message::ClientHello(hello) = bounded_read_boxed(&mut peer).await.unwrap() else {
         panic!("expected ClientHello");
     };
     assert_eq!(hello.version.major, 1);
@@ -223,7 +229,7 @@ async fn fake_session_with_hello(
     .await
     .unwrap();
     assert!(matches!(
-        read_boxed(&mut peer).await.unwrap(),
+        bounded_read_boxed(&mut peer).await.unwrap(),
         Message::Auth(_)
     ));
     write_boxed(
@@ -234,7 +240,7 @@ async fn fake_session_with_hello(
     )
     .await
     .unwrap();
-    let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+    let Message::RegisterService(initial) = bounded_read_boxed(&mut peer).await.unwrap() else {
         panic!("expected initial registration")
     };
     write_boxed(
@@ -340,7 +346,7 @@ async fn a_ready_session_resets_the_shared_reconnect_backoff_independent_of_tran
         });
         let mut peer: BoxStream = Box::new(server_io);
         assert!(matches!(
-            read_boxed(&mut peer).await.unwrap(),
+            bounded_read_boxed(&mut peer).await.unwrap(),
             Message::ClientHello(_)
         ));
         write_boxed(
@@ -353,7 +359,7 @@ async fn a_ready_session_resets_the_shared_reconnect_backoff_independent_of_tran
         .await
         .unwrap();
         assert!(matches!(
-            read_boxed(&mut peer).await.unwrap(),
+            bounded_read_boxed(&mut peer).await.unwrap(),
             Message::Auth(_)
         ));
         write_boxed(
@@ -364,7 +370,7 @@ async fn a_ready_session_resets_the_shared_reconnect_backoff_independent_of_tran
         )
         .await
         .unwrap();
-        let Message::RegisterService(initial) = read_boxed(&mut peer).await.unwrap() else {
+        let Message::RegisterService(initial) = bounded_read_boxed(&mut peer).await.unwrap() else {
             panic!("{label}: expected initial registration")
         };
         write_boxed(
@@ -564,13 +570,13 @@ async fn heartbeat_tracks_rtt_misses_and_recovery_with_one_probe() {
             if counters.snapshot().heartbeat.latest_rtt_ms.is_some() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
     .unwrap();
 
-    let Message::Ping(unanswered) = read_boxed(&mut peer).await.unwrap() else {
+    let Message::Ping(unanswered) = bounded_read_boxed(&mut peer).await.unwrap() else {
         panic!("expected next heartbeat Ping")
     };
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -578,7 +584,7 @@ async fn heartbeat_tracks_rtt_misses_and_recovery_with_one_probe() {
             if counters.snapshot().heartbeat.missed_heartbeats > 0 {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -596,7 +602,7 @@ async fn heartbeat_tracks_rtt_misses_and_recovery_with_one_probe() {
             if counters.snapshot().heartbeat.missed_heartbeats == 0 {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -635,6 +641,41 @@ fn client_builder_accepts_tcp_tls_and_default_policy() {
     let mut custom_ca = config("localhost:443");
     custom_ca.ca_pem = Some(b"custom CA".to_vec());
     assert!(ClientBuilder::new(custom_ca).validate().is_ok());
+}
+
+#[test]
+fn client_builder_rejects_missing_names_oversize_ca_and_zero_service_limit() {
+    let mut empty_name = config("localhost:443");
+    empty_name.tls_server_name.clear();
+    assert!(ClientBuilder::new(empty_name).validate().is_err());
+
+    let mut long_name = config("localhost:443");
+    long_name.tls_server_name = "a".repeat(254);
+    assert!(ClientBuilder::new(long_name).validate().is_err());
+
+    let mut large_ca = config("localhost:443");
+    large_ca.ca_pem = Some(vec![0; eggtunnel_proto::MAX_FRAME_BYTES + 1]);
+    assert!(ClientBuilder::new(large_ca).validate().is_err());
+
+    let mut policy = crate::common::RuntimePolicy::default();
+    policy.limits.services_per_session = 0;
+    assert!(
+        ClientBuilder::new(config("localhost:443"))
+            .runtime_policy(policy)
+            .validate()
+            .is_err()
+    );
+}
+
+#[cfg(feature = "outbound-proxy")]
+#[test]
+fn client_builder_rejects_malformed_proxy_chain() {
+    assert!(
+        ClientBuilder::new(config("localhost:443"))
+            .outbound_proxy("not a proxy URI")
+            .validate()
+            .is_err()
+    );
 }
 
 #[cfg(feature = "mtls")]

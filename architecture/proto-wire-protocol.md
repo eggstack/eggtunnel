@@ -2,7 +2,7 @@
 
 Back to [Architecture Overview](overview.md) §1.
 
-Sources: `crates/eggtunnel-proto/src/lib.rs` (886 lines, wire v1.1), `crates/eggtunnel-proto/Cargo.toml`,
+Sources: `crates/eggtunnel-proto/src/lib.rs` (991 lines, wire v1.1), `crates/eggtunnel-proto/Cargo.toml`,
 `docs/PROTOCOL.md`, `crates/eggtunnel/src/wire_io.rs` (58 lines).
 Cross-references below use `file:line` anchors. All claims were read from code; no invented behavior.
 

@@ -10,7 +10,7 @@
 > `proto-wire-protocol.md`; for shared types see `common-core.md`;
 > for transports see `transports-wire-io.md`.
 
-Scope: the private-side, outbound-only initiator. `client.rs` (1210 lines)
+Scope: the private-side, outbound-only initiator. `client.rs` (1238 lines)
 is the orchestrator (entry points, `start_profile`, `run_session`,
 `validate_client_profile` at `client.rs:570-613`); composable logic
 lives in `client/config.rs` (`ClientConfig`, canonical `ClientBuilder`,
