@@ -26,7 +26,7 @@ eggress-transport-tls = "=1.0.8"
 eggress-transport-quic = { version = "=1.0.8", default-features = false }
 eggress-protocol-websocket = { version = "=1.0.8", default-features = false }
 eggress-outbound = { version = "=1.0.8", default-features = false, features = ["pproxy-compat"] }
-tokio-tungstenite = { version = "0.26.2", default-features = false }
+tokio-tungstenite = { version = "0.30.0", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
