@@ -14,7 +14,7 @@ mod tests {
         Client, ClientConfig, ClientService, TargetConnector, TargetContext, TargetError,
         TargetFuture, TargetStream,
     };
-    use crate::common::bind_to_socket;
+    use crate::common::{bind_to_socket, verify_token};
     use crate::wire_io::{read_boxed, write_boxed};
     use eggtunnel_proto::{
         Capabilities, ClientHello, DataHello, Message, ProtocolVersion, RequestedBind, ServiceId,
@@ -39,7 +39,7 @@ mod tests {
         session_id: SessionId,
     ) -> (
         Arc<SessionContext>,
-        Arc<Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+        Arc<std::sync::Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
         Counters,
     ) {
         let counters = Counters::default();
@@ -52,10 +52,10 @@ mod tests {
             control_tx: Mutex::new(None),
             counters: counters.clone(),
         });
-        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
         sessions
             .lock()
-            .await
+            .unwrap_or_else(|p| p.into_inner())
             .insert(session_id, Arc::downgrade(&context));
         (context, sessions, counters)
     }
@@ -80,6 +80,30 @@ mod tests {
     #[test]
     fn server_builder_accepts_tcp_tls_default_profile() {
         assert!(builder().validate().is_ok());
+    }
+
+    #[test]
+    fn server_builder_keeps_public_bind_setting_in_sync_with_bind_policy() {
+        let policy = BindPolicy {
+            allow_public_addresses: true,
+            ..BindPolicy::default()
+        };
+        assert!(builder().bind_policy(policy).validate().is_ok());
+    }
+
+    #[test]
+    fn server_builder_rejects_empty_and_oversize_tls_material() {
+        let mut config = ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: Vec::new(),
+            private_key_pem: b"key".to_vec(),
+            token: SecretToken::new(b"test-token".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        };
+        assert!(ServerBuilder::new(config.clone()).validate().is_err());
+        config.certificate_pem = b"cert".to_vec();
+        config.private_key_pem = vec![0; eggtunnel_proto::MAX_FRAME_BYTES + 1];
+        assert!(ServerBuilder::new(config).validate().is_err());
     }
 
     #[cfg(feature = "quic-server")]
@@ -195,6 +219,56 @@ mod tests {
             trusted_identity_wrong_name,
             rogue_identity,
         )
+    }
+
+    #[test]
+    fn token_comparison_is_exact_across_lengths_and_contents() {
+        let expected = SecretToken::new(b"correct-horse-battery-staple".to_vec()).unwrap();
+        assert!(verify_token(&expected, b"correct-horse-battery-staple"));
+        // Same length, different content.
+        assert!(!verify_token(&expected, b"correct-horse-battery-stapl3"));
+        // Different lengths, including the empty token and the ceiling.
+        assert!(!verify_token(&expected, b""));
+        assert!(!verify_token(&expected, b"correct-horse-battery-staple "));
+        assert!(!verify_token(
+            &expected,
+            b"correct-horse-battery-stapl3-correct-horse-battery-staple"
+        ));
+        // A single flipped bit anywhere in the token is rejected.
+        let mut flipped = b"correct-horse-battery-staple".to_vec();
+        let last = flipped.len() - 1;
+        flipped[last] ^= 1;
+        assert!(!verify_token(&expected, &flipped));
+        // The comparison is fixed width, so a padded token of the same value
+        // is still rejected on content.
+        let mut padded = b"correct-horse-battery-staple".to_vec();
+        padded.push(0);
+        assert!(!verify_token(&expected, &padded));
+    }
+
+    #[tokio::test]
+    async fn session_guard_removes_its_registry_entry_on_every_path() {
+        let registry = crate::server::session::new_session_registry();
+        let live_counters;
+        let live = {
+            let (context, _sessions, counters) = test_session(SessionId([3; 16])).await;
+            live_counters = counters.clone();
+            SessionContext::register(&context, &registry, MAX_SESSIONS)
+                .unwrap();
+            let _guard = crate::server::session::SessionGuard::new(context.clone(), registry.clone());
+            assert_eq!(registry.lock().unwrap_or_else(|p| p.into_inner()).len(), 1);
+            context
+        };
+        // The guard is gone, and the registry entry it owned is gone with it.
+        drop(live);
+        assert!(
+            registry
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty(),
+            "a dropped Session must not leave a registry entry behind"
+        );
+        assert_eq!(live_counters.sessions.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     async fn roundtrip(addr: SocketAddr, bytes: &'static [u8]) -> Vec<u8> {

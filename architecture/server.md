@@ -1,10 +1,13 @@
-# Reverse-session server — `crates/eggtunnel/src/server.rs` + `server/`
+# Reverse-session server — `crates/eggtunnel/src/server.rs` (324) + `server/`
 
-> Runtime is the `server.rs` coordinator (bind orchestration, `Server`/`ServerHandle`)
+> Runtime is the `server.rs` coordinator (bind orchestration, `Server`/`ServerHandle`,
+> `bind_profile` / `bind_quic_profile` / `bind_with_tls_profile`)
 > plus private responsibility modules `server/{config,tls,accept,auth,session,control,pending,service}.rs`;
 > transport and lifecycle tests live in
-> `server_tests.rs` (harness + `ServerBuilder::validate` tests) plus
-> `server_tests/{tcp,mtls,quic,websocket,proxy}.rs`.
+> `server_tests.rs` (255 lines harness + `ServerBuilder::validate` tests) plus
+> `server_tests/{tcp (1920),mtls (187),quic (967),websocket (405),proxy (905)}.rs`.
+> `MAX_SESSIONS`/`MAX_HANDSHAKES` are `cfg(test)`-only aliases in
+> `server_tests.rs`, not production constants.
 > All `server/*.rs:NNN` anchors below track the current module layout;
 > test anchors use `server_tests.rs` / `server_tests/<file>.rs` paths.
 >
@@ -180,17 +183,15 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
                 └──────────────┬──────────────┘
                  ClientHello → serve_control:
                              │
-              auth-gate: is_blocked(source)? ──yes──► Auth error, drop
-                             │no
               version.major == CURRENT.major? ─no──► Protocol/UnsupportedVersion
                              │yes
-                  ServerHello(CURRENT, caps)
+                  ServerHello(CURRENT, intersected caps)
                              │
                   read Auth (HANDSHAKE_TIMEOUT)
                              │
-              verify_token? ──no──► record_failure + 100 ms sleep
-                             │           + Error{code:4} + Auth error
-                             │yes
+              verify_token AND is_blocked(source) evaluated together
+                             │ either false ──► record_failure + 100 ms sleep
+                             │                 + Error{code:4} + Auth error
               SessionId::generate; admit if sessions<128
                              │
                   AuthOk{session_id}
@@ -199,7 +200,7 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
                │ RegisterService → policy+bind → run_service + Ack   │
                │ UnregisterService → cancel service + GC pending     │
                │ OpenReject{connection_id} → free pending slot       │
-               │ Ping{nonce} → Pong{nonce}                           │
+               │ Ping{nonce} → Pong{nonce} (bounded write, idle reset)  │
                │ Drain → break (graceful close)                      │
                │ unexpected → Protocol/UnexpectedMessage             │
                │ open_rx Open/Drain → forward to client              │
@@ -211,15 +212,18 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
 ```
 
 Key code: first-frame dispatch `server/accept.rs:248-265`;
-`serve_control` auth gate + version + `ServerHello` `server/control.rs:83-101`;
+`serve_control` auth gate + version + capability intersection + `ServerHello` `server/control.rs:83-101`;
 `Auth` read + `verify_token` failure path `server/control.rs:103-125`;
 session allocation + `policy.limits.sessions` check `server/control.rs:119-144`;
 `AuthOk` + split + policy-sized control channel `server/control.rs:143-146`;
 main `select!` loop `server/control.rs:154-237`; teardown `server/control.rs:215-225`.
 
-`SessionGuard` (`server/session.rs:85-115`) cancels the session, decrements
+`SessionGuard` (`server/session.rs`) cancels the session, decrements
 `sessions`, removes the session's `effective_binds`, reconciles `services`
-from the binds delta, and removes the weak map entry on drop.
+from the binds delta, and removes the weak map entry on drop. The registry is
+guarded by a standard mutex (`SessionRegistry`) rather than a Tokio one so that
+removal on the non-async drop path is deterministic: a contended `try_lock`
+would silently leave the entry behind.
 `SessionContext::drop` (`server/session.rs:45-52`) subtracts any leaked pending
 count so `pending` never sticks after session teardown.
 
@@ -228,7 +232,7 @@ count so `pending` never sticks after session teardown.
 ```text
 client                                   server
   │── ClientHello{version,caps} ──────────►│  serve_control: version check
-  │◄─ ServerHello{CURRENT,default caps} ───│  server/control.rs:94-101
+  │◄─ ServerHello{CURRENT,intersected caps} │  server/control.rs:94-101
   │── Auth{token} ──────────────────────►│  verify_token (constant-time)
   │◄─ AuthOk{session_id} ─────────────────│  server/control.rs:143
   │── RegisterService{id,name,bind,target}►│  policy → bind → listener
@@ -238,7 +242,7 @@ client                                   server
   │── Ping{nonce} ──────────────────────►│
   │◄─ Pong{nonce} ────────────────────────│  server/control.rs:196-199
   │◄─ Drain{deadline_ms} ─────────────────│  shutdown only, §5
-  │── Drain ────────────────────────────►│  client-initiated close → break
+  │── Drain{deadline_ms} ───────────────►│  capture deadline → break → bounded drain wait (cap 2)
   │── UnregisterService{id} ────────────►│  cancel + GC, §4
   │── Error{code,diagnostic} ────────────│  server→client only (auth/reg)
 ```
@@ -247,21 +251,27 @@ client                                   server
   (`server/control.rs:86-93`). Minor is informational.
 - Auth failure: `Error{code:4, "authentication failed"}` then `Authentication`
   (`server/control.rs:110-116`). No session is created.
-- Registration errors use `write_registration_error` (`server/control.rs:344-352`,
+- Registration errors use `write_registration_response` (`server/control.rs:378-399`,
   always `"service registration rejected"` + numeric code):
   `1` duplicate id/name, `2` policy denial, `3` bind failure,
-  `5` per-session service ceiling (`server/control.rs:164-200`; ceiling check at
-  `server/control.rs:253-259`). Success is
-  `RegisterAck{service_id, effective_bind}` (`server/control.rs:191`).
+  `5` per-session service ceiling (`server/control.rs:235-343`; ceiling check at
+  `server/control.rs:250-259`). With capability 1 negotiated the response is
+  the correlated `RegisterReject{service_id, code}`; otherwise the legacy
+  generic `Error` with the same codes. Success is
+  `RegisterAck{service_id, effective_bind}` (`server/control.rs:333-339`).
 - `OpenReject` flows **client→server only**. The server never emits it; it
   consumes it to free the pending slot (`server/control.rs:189-195`). Client codes
   (`1` target refused, `2` open-task exhausted) are opaque to the server.
 - `Drain` flows both ways but with different meaning: server→client carries
   `shutdown_grace` (default 1 s, `common.rs:296`) during shutdown
-  (`server/accept.rs:137-142`, `693-698`); client→server `Drain` breaks the control
-  loop immediately (`server/control.rs:200`). Outbound `Open`/`Drain` share the same
+  (`server/accept.rs:77-95`); client→server `Drain` breaks the control
+  loop (`server/control.rs:200-203`, capturing the peer deadline) and then,
+  with capability 2 negotiated, lets owned tasks drain up to
+  `min(peer deadline, shutdown_grace)` before forced cancellation
+  (`server/control.rs:226-248`); without it teardown stays immediate (1.0).
+  Outbound `Open`/`Drain` share the same
   `open_rx` channel; a `Drain` write breaks after flushing
-  (`server/control.rs:205-209`).
+  (`server/control.rs:205-210`).
 
 ### 3.3 Effective-bind selection via `BindPolicy`
 
@@ -271,11 +281,13 @@ client                                   server
 `max_services_per_session` (default 64, validated in
 `common.rs:100-111`).
 
-Selection (`serve_control`, `server/control.rs:176-195`):
+Selection (`register_service`, `server/control.rs:250-307`):
 
-1. `bind_to_socket(&requested_bind, &policy)` (`common.rs:491-512`):
-   `Loopback{port}` → `[::1]:port` if `permits_port`; `Ip{address,port}` →
-   `SocketAddrV6` iff `permits_address && permits_port`.
+1. `bind_to_socket(&requested_bind, &policy)` (`common.rs`):
+   `Loopback{port}` → `[::1]:port` iff `permits_address(::1, true) &&
+   permits_port` — the loopback request runs the same address gate, so a pinned
+   allowlist is not an escape hatch; `Ip{address,port}` → `SocketAddrV6` iff
+   `permits_address && permits_port`.
 2. `permits_address` (`common.rs:516-519`):
    `(is_loopback || allow_public_addresses) && (allowlist empty || contains)`.
    `permits_port` (`common.rs:522-531`): port 0 gated by
@@ -447,7 +459,7 @@ delta (`server/session.rs:112-126`) — a deliberate single-source-of-truth choi
 
 ### 5.4 Shutdown with `shutdown_grace` (default 1 s)
 
-TCP (`server/accept.rs:78-96`) and QUIC (`server/accept.rs:213-232`) share the sequence:
+TCP (`server/accept.rs:96-145`) and QUIC (`server/accept.rs:147-212`) share `AcceptContext::drain` (`server/accept.rs:77-95`):
 
 1. Break accept loop on `cancel`.
 2. Upgrade weak sessions → `active`; `try_send(Drain{deadline_ms: grace_ms})`
@@ -456,7 +468,7 @@ TCP (`server/accept.rs:78-96`) and QUIC (`server/accept.rs:213-232`) share the s
 4. Cancel every session token (cascades via `child_token` to services/relays).
 5. `handlers.abort_all()` + drain `join_next` (records panics).
 
-`serve_control` teardown (`server/control.rs:215-225`) cancels services,
+`serve_control` teardown (`server/control.rs:226-250`) first honors a negotiated peer drain deadline (capability 2, §3.2), then cancels services,
 `abort_all`s children, drains completions, then `remove_all_pending`.
 `run_service` exit (`server/service.rs:141-143`) aborts relays, drains them, then
 `remove_service_pending`. `server_shutdown_cancels_incomplete_tls_and_authentication_handshakes`
@@ -522,21 +534,29 @@ entries older than the window and drops empty deques, so the table cannot
 grow unboundedly and never delays successful auth (doc comment
 `server/auth.rs:30-31`).
 
-- `is_blocked(source)` (`server/auth.rs:47-60`): prune, then: unknown source
-  + table full → **blocked**; known source with `len >= 10` → blocked.
-- `record_failure(source)` (`server/auth.rs:62-73`): prune, then: unknown +
-  full → drop (no insert); else push timestamp.
-- Enforcement (`server/control.rs:83-85`, `1078-1093`): pre-`ServerHello` blocked
-  check (no failure recorded, just `Authentication`); post-check failure
-  records, **drops both guards first** (frees handshake capacity before the
-  sleep), sleeps 100 ms, `rejected++`, sends `Error{code:4}`, returns
-  `Authentication`.
+- `is_blocked(source)` (`server/auth.rs:51-60`): prune, then: known source with
+  `len >= 10` → blocked. An **unknown** source is never blocked, including when
+  the table is full: the ceiling bounds memory, and treating saturation as a
+  verdict let an attacker fill the table with spoofed addresses and lock out
+  legitimate new peers.
+- `record_failure(source)` (`server/auth.rs:62-76`): prune, then: unknown +
+  full → drop (no insert, `auth_source_table_saturated` debug log); else push
+  timestamp.
+- Enforcement (`server/control.rs`): the blocklist check runs **after**
+  `ServerHello` and alongside token verification — both operands are evaluated
+  before either can short-circuit, and a blocked source and a bad token leave
+  through the same `reject_authentication` path (record failure, **drop both
+  guards first** so handshake capacity is freed before the sleep, sleep 100 ms,
+  `rejected++`, `Error{code:4}`, return `Authentication`). A prober therefore
+  cannot separate blocklist membership from token validity by frame presence or
+  timing.
 
-Properties (`docs/SECURITY.md:25-30`, `docs/OPERATIONS.md:27-28`):
-process-local, per-source-IP, 10 fails / 60 s, ≤1024 sources, 100 ms delay,
-unknown sources rejected when full. Unit-tested at
-`server_tests/tcp.rs:1539-1562` (per-source isolation, full-table rejection of a second
-source, window expiry prunes to an empty table).
+Properties (`docs/SECURITY.md`, `docs/OPERATIONS.md`):
+process-local, per-source-IP, 10 fails / 60 s, ≤1024 tracked sources, 100 ms
+delay on every refusal, indistinguishable blocked-vs-bad-token. Unit-tested at
+`server_tests/tcp.rs` (`auth_failure_limiter_is_per_source_bounded_and_expires`:
+per-source isolation, saturated table does not block an unknown source, window
+expiry prunes to an empty table).
 
 ### 6.3 Resource-exhausted paths (all bounded, all counted)
 

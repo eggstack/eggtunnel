@@ -84,6 +84,7 @@ impl ServerBuilder {
     }
 
     pub fn bind_policy(mut self, policy: BindPolicy) -> Self {
+        self.config.allow_public_service_binds = policy.allow_public_addresses;
         self.bind_policy = policy;
         self
     }
@@ -154,6 +155,11 @@ pub(super) fn validate_server_profile(
 ) -> Result<(), TunnelError> {
     runtime_policy.validate()?;
     bind_policy.validate()?;
+    if bind_policy.allow_public_addresses != config.allow_public_service_binds {
+        return Err(TunnelError::Configuration(
+            "bind policy public-address setting must match allow_public_service_binds",
+        ));
+    }
     validate_config(config)?;
     #[cfg(feature = "mtls")]
     if let Some(ca) = trusted_client_ca {

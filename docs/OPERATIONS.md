@@ -3,13 +3,31 @@
 Start the server with `eggtunnel server server.toml`; start a private-side
 client with `eggtunnel client client.toml`. Both processes stop on Ctrl-C. The
 server sends a bounded Drain notification before closing active sessions.
+With negotiated protocol capability 2 the `deadline_ms` field carries a
+relative grace duration honored as `min(peer, local shutdown ceiling)`;
+without it both sides keep local-only shutdown timing (see
+`docs/PROTOCOL.md`).
 
 The server's `listen_addr` accepts both control sessions and reverse data
 connections. Every accepted connection begins with TLS. A service's actual
 address is server-assigned and is available through the Rust `ServerHandle`
-snapshot. The CLI prints newly assigned service addresses while it is running.
+snapshot. The CLI prints newly assigned service addresses while it is running
+(`service <id> session <id> listening on [<addr>]:<port>`; an ephemeral
+`bind_port = 0` prints its assigned port here, and the loopback address may
+render as IPv6, e.g. `[::1]`).
 For QUIC, `listen_addr` is the UDP control endpoint; service listeners still
 bind TCP on the requested interface and port.
+
+Pass `--json` to `client`/`server` for a redacted machine-readable event
+stream on stdout (`eggtunnel.events/v1`): `startup` (version, mode,
+transport, service count), `server_listening` (bound address),
+`service_bind` (service ID, session, address, port), `session_ready`
+(generation, registered services), `session_lost` (termination category,
+reconnect count), and `shutdown` (reason). Add
+`--snapshot-interval-secs N` (minimum 5) for a periodic bounded `snapshot`
+event with the same counters the library `Snapshot` exposes. No event
+carries tokens, keys, proxy values, or file paths; human-readable output
+remains the default and is unchanged.
 
 The client retries transient connection, TLS, and protocol failures with
 bounded exponential backoff and jitter. Invalid authentication or service

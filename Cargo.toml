@@ -12,6 +12,7 @@ homepage = "https://github.com/eggstack/eggtunnel"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 postcard = { version = "1", features = ["alloc"] }
 thiserror = "2"
 getrandom = "0.3"
@@ -29,7 +30,7 @@ tokio-tungstenite = { version = "0.26.2", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"

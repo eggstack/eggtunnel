@@ -37,7 +37,13 @@ impl TargetConnector for TcpTargetConnector {
             TcpStream::connect((service.target.host(), service.target.port()))
                 .await
                 .map(|stream| Box::new(stream) as TargetStream)
-                .map_err(|_| TargetError::Refused)
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::ConnectionRefused {
+                        TargetError::Refused
+                    } else {
+                        TargetError::Failed
+                    }
+                })
         })
     }
 }
@@ -140,7 +146,6 @@ impl ClientBuilder {
     }
 
     pub async fn start(self) -> Result<Client, TunnelError> {
-        self.validate()?;
         Client::start_profile(
             self.config,
             self.connector,

@@ -12,6 +12,64 @@ async fn wss_request_response(address: SocketAddr, payload: &'static [u8]) -> Ve
     response
 }
 
+    /// Concurrent dynamic registrations over WebSocket exercise the
+    /// negotiated correlated path (capability 1) on the third transport.
+    #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
+    #[tokio::test]
+    async fn websocket_concurrent_dynamic_registrations_correlate() {
+        let (cert, key) = certificate();
+        let token = SecretToken::new(b"websocket-concurrent-secret".to_vec()).unwrap();
+        let server = Server::bind_websocket(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: token.clone(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let client = Client::start_websocket(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: Some(cert.into_bytes()),
+            token,
+            services: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if client_handle.snapshot().connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let dynamic = |id: u64, name: &str| {
+            ClientService::new(
+                ServiceId(id),
+                ServiceName::new(name.to_owned()).unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                TcpTarget::new("127.0.0.1", 9).unwrap(),
+            )
+        };
+        let first_handle = client_handle.clone();
+        let second_handle = client_handle.clone();
+        let (first, second) = tokio::join!(
+            first_handle.register_service(dynamic(21, "wss-dyn-one")),
+            second_handle.register_service(dynamic(22, "wss-dyn-two"))
+        );
+        assert_ne!(first.unwrap().port, 0);
+        assert_ne!(second.unwrap().port, 0);
+        assert_eq!(server.handle().snapshot().registered_services, 2);
+        assert_eq!(client_handle.snapshot().registered_services, 2);
+        client.shutdown().await;
+        server.shutdown().await;
+    }
+
     #[cfg(all(feature = "websocket-client", feature = "websocket-server"))]
     #[tokio::test]
     async fn websocket_tls_session_registers_and_relays_data_paths() {

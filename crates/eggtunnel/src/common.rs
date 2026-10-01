@@ -10,12 +10,17 @@ use std::{
 };
 
 use eggtunnel_proto::{EffectiveBind, RequestedBind, ServiceId, ServiceName, SessionId, TcpTarget};
+
+#[cfg(any(feature = "websocket-client", feature = "websocket-server"))]
+pub(crate) const MAX_WEBSOCKET_FRAME_SIZE: usize = eggtunnel_proto::MAX_FRAME_BYTES;
 use thiserror::Error;
 use zeroize::Zeroize;
 
 /// Secret credential storage with redacted formatting and best-effort clearing
-/// on drop.
-#[derive(Clone, Eq, PartialEq)]
+/// on drop. Deliberately no `PartialEq`/`Eq`: the correct comparison is the
+/// constant-time `verify_token`, and a derived short-circuiting `==` on
+/// secrets would leak timing.
+#[derive(Clone)]
 pub struct SecretToken(Vec<u8>);
 
 impl SecretToken {
@@ -111,6 +116,7 @@ impl BindPolicy {
     pub fn validate(&self) -> Result<(), TunnelError> {
         if self.max_services_per_session == 0
             || self.max_services_per_session > 65_536
+            || self.allowed_addresses.len() > 1024
             || self
                 .allowed_port_ranges
                 .iter()
@@ -390,9 +396,13 @@ impl Counters {
                 let heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
                 HeartbeatSnapshot {
                     session_generation: self.session_generation.load(Ordering::Relaxed),
-                    last_pong_age_ms: heartbeat
-                        .last_pong_at
-                        .map(|instant| instant.elapsed().as_millis().min(u64::MAX as u128) as u64),
+                    last_pong_age_ms: heartbeat.last_pong_at.map(|instant| {
+                        let now = std::time::Instant::now();
+                        now.saturating_duration_since(instant)
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX)
+                    }),
                     latest_rtt_ms: heartbeat.latest_rtt_ms,
                     missed_heartbeats: heartbeat.missed_heartbeats,
                 }
@@ -431,8 +441,14 @@ impl Counters {
 
     pub fn record_heartbeat_pong(&self, sent_at: Instant) {
         let mut heartbeat = self.heartbeat.lock().unwrap_or_else(|p| p.into_inner());
-        heartbeat.last_pong_at = Some(Instant::now());
-        heartbeat.latest_rtt_ms = Some(sent_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        let now = Instant::now();
+        heartbeat.last_pong_at = Some(now);
+        heartbeat.latest_rtt_ms = Some(
+            now.saturating_duration_since(sent_at)
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
         heartbeat.missed_heartbeats = 0;
     }
 
@@ -495,7 +511,41 @@ impl TunnelError {
 #[cfg(feature = "server")]
 pub(crate) fn verify_token(expected: &SecretToken, received: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
-    expected.expose().len() == received.len() && bool::from(expected.expose().ct_eq(received))
+    // One fixed-width constant-time comparison covering both content and
+    // length: the length lives in its own non-overlapping field, so it is
+    // neither short-circuited (a wrong-length token costs the same as a
+    // wrong-content one) nor aliased by padding (`token\0` is not `token`).
+    // The bound checks are on values `SecretToken::new` and the wire decoder
+    // already guarantee.
+    const WIDTH: usize = eggtunnel_proto::MAX_AUTH_TOKEN_BYTES;
+    let expected_bytes = expected.expose();
+    if expected_bytes.len() > WIDTH || received.len() > WIDTH {
+        return false;
+    }
+    let mut left = [0u8; WIDTH + 2];
+    let mut right = [0u8; WIDTH + 2];
+    left[..expected_bytes.len()].copy_from_slice(expected_bytes);
+    right[..received.len()].copy_from_slice(received);
+    left[WIDTH..].copy_from_slice(&(expected_bytes.len() as u16).to_be_bytes());
+    right[WIDTH..].copy_from_slice(&(received.len() as u16).to_be_bytes());
+    bool::from(left.ct_eq(&right))
+}
+
+#[cfg(feature = "server")]
+fn is_loopback_octets(address: [u8; 16]) -> bool {
+    use std::net::Ipv6Addr;
+    let ip = Ipv6Addr::from(address);
+    if ip.is_loopback() {
+        return true;
+    }
+    // Mapped IPv4 loopback needs an explicit check because the standard
+    // library only recognizes `::1` as an IPv6 loopback address.
+    if let Some(mapped) = ip.to_ipv4_mapped()
+        && mapped.octets()[0] == 127
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(feature = "server")]
@@ -506,14 +556,20 @@ pub(crate) fn bind_to_socket(
     use std::net::{Ipv6Addr, SocketAddrV6};
     let addr = match request {
         RequestedBind::Loopback { port } => {
-            if !policy.permits_port(*port) {
+            // A loopback request is checked against the same address allowlist
+            // as an explicit one, so a pinned allowlist is not an escape hatch.
+            if !policy.permits_address(Ipv6Addr::LOCALHOST.octets(), true)
+                || !policy.permits_port(*port)
+            {
                 return Err(TunnelError::Authorization);
             }
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, *port, 0, 0))
         }
         RequestedBind::Ip { address, port } => {
             let ip = Ipv6Addr::from(*address);
-            if !policy.permits_address(*address, ip.is_loopback()) || !policy.permits_port(*port) {
+            if !policy.permits_address(*address, is_loopback_octets(*address))
+                || !policy.permits_port(*port)
+            {
                 return Err(TunnelError::Authorization);
             }
             SocketAddr::V6(SocketAddrV6::new(ip, *port, 0, 0))
@@ -617,7 +673,10 @@ mod runtime_policy_tests {
         let generation = counters.begin_session().unwrap();
         counters.record_heartbeat_missed();
         assert_eq!(counters.snapshot().heartbeat.missed_heartbeats, 1);
-        counters.record_heartbeat_pong(Instant::now() - std::time::Duration::from_millis(5));
+        let sent_at = Instant::now()
+            .checked_sub(std::time::Duration::from_millis(5))
+            .unwrap_or_else(Instant::now);
+        counters.record_heartbeat_pong(sent_at);
         let heartbeat = counters.snapshot().heartbeat;
         assert_eq!(heartbeat.session_generation, generation);
         assert_eq!(heartbeat.missed_heartbeats, 0);

@@ -68,7 +68,8 @@ application's secret store.
 ## Compatibility
 
 The current published crates.io line is `0.2.0` (see
-[distribution](DISTRIBUTION.md)); the wire protocol remains version `1.0`.
+[distribution](DISTRIBUTION.md)); the wire protocol is version `1.1` with
+`1.0` fallback.
 Public Rust API changes may be breaking across minor releases before `1.0`;
 compile against the exact version selected by the downstream lockfile.
 `eggtunnel-proto` types and message IDs are wire-facing and require extra

@@ -6,7 +6,7 @@
 //! (TCP connect + TLS + optional WebSocket upgrade, versus a QUIC connection
 //! and its control/data streams), which stays in the per-transport functions.
 
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{collections::HashSet, net::IpAddr, sync::Arc, time::Duration};
 
 use eggress_core::BoxStream;
 use eggtunnel_proto::Message;
@@ -18,6 +18,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "websocket-server")]
+use crate::common::MAX_WEBSOCKET_FRAME_SIZE;
 #[cfg(feature = "quic-server")]
 use crate::common::TerminationCategory;
 use crate::common::{BindPolicy, Counters, SecretToken, TunnelError};
@@ -75,16 +77,35 @@ impl AcceptContext {
     /// Bounded shutdown drain: stop admitting, notify live Sessions, wait the
     /// configured grace period, then force-cancel and reap every child task.
     pub(super) async fn drain(&self, handlers: &mut JoinSet<()>) {
-        let active = SessionContext::live(&self.sessions).await;
-        for session in &active {
-            if let Some(sender) = session.control_tx.lock().await.as_ref() {
-                let _ = sender.try_send(Message::Drain(eggtunnel_proto::Drain {
-                    deadline_ms: self.counters.policy.timeouts.shutdown_grace.as_millis() as u32,
-                }));
+        let deadline_ms = u32::try_from(self.counters.policy.timeouts.shutdown_grace.as_millis())
+            .unwrap_or(u32::MAX);
+        let deadline = tokio::time::Instant::now() + self.counters.policy.timeouts.shutdown_grace;
+        let mut notified = HashSet::new();
+        loop {
+            let active = SessionContext::live(&self.sessions);
+            for session in &active {
+                if !notified.insert(session.id) {
+                    continue;
+                }
+                if let Some(sender) = session.control_tx.lock().await.as_ref()
+                    && sender
+                        .try_send(Message::Drain(eggtunnel_proto::Drain { deadline_ms }))
+                        .is_err()
+                {
+                    tracing::debug!(
+                        category = "drain_queue_full",
+                        "Session drain notification was not queued"
+                    );
+                }
+            }
+            if tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_millis(25)))
+                .await
+                .is_err()
+            {
+                break;
             }
         }
-        tokio::time::sleep(self.counters.policy.timeouts.shutdown_grace).await;
-        for session in active {
+        for session in SessionContext::live(&self.sessions) {
             session.cancel.cancel();
         }
         handlers.abort_all();
@@ -139,6 +160,7 @@ pub(super) async fn server_loop(
             }
         }
     }
+    drop(listener);
     context.drain(&mut handlers).await;
 }
 
@@ -247,8 +269,12 @@ async fn handle_connection(
         .map_err(|_| TunnelError::Timeout)??;
     match first {
         Message::DataHello(hello) => {
-            drop(permit);
-            drop(handshake_guard);
+            // Hold handshake admission until the correlation outcome so a
+            // sustained bogus-`DataHello` flood is bounded by
+            // `accepted_handshakes` instead of spinning short tasks limited
+            // only by the scheduler.
+            let _permit = permit;
+            let _handshake_guard = handshake_guard;
             accept_data_hello(
                 stream,
                 hello,
@@ -275,9 +301,15 @@ async fn handle_connection(
             })
             .await
         }
-        _ => Err(TunnelError::Protocol(
-            eggtunnel_proto::ProtocolError::UnexpectedMessage,
-        )),
+        _ => {
+            context
+                .counters
+                .rejected
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(TunnelError::Protocol(
+                eggtunnel_proto::ProtocolError::UnexpectedMessage,
+            ))
+        }
     }
 }
 
@@ -342,11 +374,11 @@ async fn upgrade_websocket(
         return Ok(stream);
     }
     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-        .max_message_size(Some(1024 * 1024))
-        .max_frame_size(Some(1024 * 1024));
+        .max_message_size(Some(MAX_WEBSOCKET_FRAME_SIZE))
+        .max_frame_size(Some(MAX_WEBSOCKET_FRAME_SIZE));
     timeout(
         handshake_timeout,
-        eggress_protocol_websocket::WebSocketTunnelServer::new(1024 * 1024)
+        eggress_protocol_websocket::WebSocketTunnelServer::new(MAX_WEBSOCKET_FRAME_SIZE)
             .accept_upgrade_with_config_over_stream(stream, ws_config),
     )
     .await
@@ -385,6 +417,10 @@ async fn handle_quic_connection(
         .await
         .map_err(|_| TunnelError::Timeout)??;
     let Message::ClientHello(hello) = first else {
+        context
+            .counters
+            .rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnexpectedMessage,
         ));
@@ -446,7 +482,9 @@ async fn handle_quic_connection(
     connection_cancel.cancel();
     connection.close("session ended");
     streams.abort_all();
-    while streams.join_next().await.is_some() {}
+    while let Some(result) = streams.join_next().await {
+        counters.record_join_result(&result);
+    }
     if !control.is_finished() {
         control.abort();
     }
@@ -462,16 +500,17 @@ async fn handle_quic_data_stream(
     counters: Counters,
 ) -> Result<(), TunnelError> {
     let handshake_timeout = counters.policy.timeouts.handshake;
-    let handshake_guard = HandshakeGuard::new(counters.clone());
     let first = tokio::select! {
         _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
         result = timeout(handshake_timeout, read_boxed(&mut stream)) => result.map_err(|_| TunnelError::Timeout)??,
     };
     let Message::DataHello(hello) = first else {
+        counters
+            .rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Protocol(
             eggtunnel_proto::ProtocolError::UnexpectedMessage,
         ));
     };
-    drop(handshake_guard);
     accept_data_hello(stream, hello, None, &context.sessions, &counters).await
 }

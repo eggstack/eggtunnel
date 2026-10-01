@@ -17,3 +17,4 @@ serde.workspace = true
 postcard.workspace = true
 thiserror.workspace = true
 getrandom.workspace = true
+zeroize.workspace = true

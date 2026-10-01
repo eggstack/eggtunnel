@@ -195,10 +195,10 @@ New `crates/eggtunnel/src/endpoint.rs` (171 lines): canonical
 
 ## Hosted verification
 
-- Pushed head `410ff2a` (plus this closure commit); hosted CI (`Rust`
-  workflow: `check`, 14-combo `feature-slices`, `msrv`,
-  `minimal-dependencies`) evaluated on the pushed head — see run
-  reference recorded at push time.
+- Pushed heads `410ff2a` (implementation) and `b16ba2e` (closure);
+  hosted CI (`Rust` workflow: `check`, 14-combo `feature-slices`,
+  `msrv`, `minimal-dependencies`) run `36574166914` on the pushed head:
+  **success** (all jobs passed).
 
 ## Unresolved findings by severity
 

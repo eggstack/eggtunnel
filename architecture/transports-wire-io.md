@@ -7,7 +7,7 @@ Eggress 1.0.8 primitives.
 
 Primary sources (line anchors are load-bearing for review):
 
-- `crates/eggtunnel/src/wire_io.rs` (full, 58 LOC)
+- `crates/eggtunnel/src/wire_io.rs` (framing half, 74 LOC)
 - `crates/eggtunnel/Cargo.toml`, `Cargo.toml` (workspace)
 - `crates/eggtunnel/src/client.rs`, `crates/eggtunnel/src/client/config.rs`,
   `crates/eggtunnel/src/client/open.rs`, `crates/eggtunnel/src/server.rs`
@@ -30,7 +30,7 @@ Related overview sections: [wire protocol](proto-wire-protocol.md) (framing),
 > (`common.rs:194-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES` in `server_tests.rs:35`
 > are `#[cfg(test)]`-only. QUIC `max_concurrent_streams` is policy-derived
 > (server: `active_connections_per_session + 1`, client:
-> `client_open_tasks + 1` = 129 by default), `idle_timeout` is
+> `client_open_tasks` verbatim on the client (128 by default), `idle_timeout` is
 > `policy.timeouts.control_idle`, and both relays use
 > `RelayOptions::bounded(16 KiB, policy.timeouts.relay_drain)` at
 > `client/open.rs:67` and `server/service.rs:121`. WSS sets 1 MiB caps via
@@ -41,7 +41,7 @@ Related overview sections: [wire protocol](proto-wire-protocol.md) (framing),
 
 ## 1. `wire_io.rs`: bounded framing over any `AsyncRead/AsyncWrite`
 
-File: `crates/eggtunnel/src/wire_io.rs:1-58`.
+File: `crates/eggtunnel/src/wire_io.rs:1-74`.
 
 `wire_io.rs` is deliberately thin: it adapts the runtime-neutral
 `eggtunnel-proto` codec (`encode_frame` / `decode_frame`,
@@ -52,93 +52,97 @@ flow through `wire_io`; they go to `eggress-relay::relay_with_options`
 (`crates/eggtunnel/src/client/open.rs:67`,
 `crates/eggtunnel/src/server/service.rs:121`).
 
-### 1.1 `read_message` — header-first, length pre-check, exact consumption
+### 1.1 `read_message` — header-first, length pre-check, incremental payload, exact consumption
 
-`crates/eggtunnel/src/wire_io.rs:7-36`:
+`crates/eggtunnel/src/wire_io.rs:19-56`:
 
 1. **Header-first read (14 bytes).**
-   `reader.read_exact(&mut header)` (`wire_io.rs:11-14`). Short read / EOF /
-    reset maps to `ProtocolError::TruncatedFrame` via
-    `.map_err(|_| ProtocolError::TruncatedFrame)`. There is no distinction
-    between "peer closed cleanly" and "peer sent a short header" at this layer;
-    both become `TruncatedFrame`, which `common.rs:466-482` later maps to
-    `TunnelError::Protocol` → `TerminationCategory::Protocol` on the control path
-    (via `From<ProtocolError>`), or to `Transport`/`Timeout` wrappers where the
-    call site adds `timeout(...).map_err(|_| TunnelError::Disconnected/Timeout)`.
-2. **Header-only `decode_frame` probe.** `wire_io.rs:15-19` calls
+   `reader.read_exact(&mut header)` (`wire_io.rs:21`), with failures classified by
+   `io_error` (`wire_io.rs:11-17`): `ErrorKind::UnexpectedEof` becomes
+   `ProtocolError::TruncatedFrame`; every other `std::io::Error` (reset,
+   refused, TLS alert, broken pipe) becomes `TunnelError::Io`, whose
+   `termination_category()` is `Transport` rather than `Protocol`. Without this
+   split a transport fault was laundered into a protocol error and skewed
+   `last_termination` and reconnect accounting.
+2. **Header-only `decode_frame` probe.** `wire_io.rs:24-31` calls
    `decode_frame(&header)` expecting one of two outcomes:
    - `Err(TruncatedFrame)` → expected; a full frame cannot fit in 14 bytes, so
      continue to the payload read.
    - Any other `Err` (`InvalidMagic`, `UnsupportedVersion`, `UnknownMessage`,
      `FrameTooLarge` from the length word) → return immediately **before**
-     allocating or reading payload. This is the hostile-header fast reject.
-     The `Ok(_) => unreachable!(...)` arm documents the invariant that a
-     14-byte input can never decode to a complete frame.
+     buffering or reading payload. This is the hostile-header fast reject.
+   - `Ok(_)` → `InvalidPayload`, fail closed. The arm is reachable in principle
+     if a future message type ever encodes to zero bytes, and it must not be a
+     panic: a crafted `len = 0` header would otherwise kill the control or data
+     task (`JoinSet` records it as `Internal`).
 3. **Length pre-check before payload copy.**
-   `wire_io.rs:20-23` extracts
+   `wire_io.rs:32-36` extracts
    `u32::from_be_bytes([header[10], header[11], header[12], header[13]])` and
    rejects `len > MAX_FRAME_BYTES` (`1 MiB`,
    `crates/eggtunnel-proto/src/lib.rs:15`) with `FrameTooLarge`. This mirrors
    the identical check inside `decode_frame`
-   (`crates/eggtunnel-proto/src/lib.rs:488-490`) but happens **before**
-   `Vec::with_capacity(HEADER_LEN + len)` / `resize`, so a lying length word
-   cannot force a large allocation. Note the cap is on the **postcard payload**,
-   not the total on-wire bytes (`HEADER_LEN + len`).
-4. **Bounded payload read.** `wire_io.rs:24-30` extends the buffer with the
-   already-read header, resizes to `HEADER_LEN + len`, and `read_exact`s the
-   remainder. Short payload again maps to `TruncatedFrame`.
-5. **Exact-consumption check.** `wire_io.rs:31-34`:
+   (`crates/eggtunnel-proto/src/lib.rs:557-559`) but happens **before** any
+   payload buffering, so a lying length word cannot force a large allocation.
+   Note the cap is on the **postcard payload**, not the total on-wire bytes
+   (`HEADER_LEN + len`).
+4. **Incremental bounded payload read.** `wire_io.rs:37-47` reads the payload
+   with `(&mut *reader).take(len as u64).read_to_end(&mut payload)`, so the
+   buffer grows only as bytes actually arrive. A peer that announces the
+   1 MiB maximum and then stalls holds what it sent instead of a pre-committed
+   1 MiB allocation, and a short payload is rejected as `TruncatedFrame`.
+5. **Exact-consumption check.** `wire_io.rs:48-54`:
    ```rust
    let (message, consumed) = decode_frame(&frame)?;
    if consumed != frame.len() {
-       return Err(ProtocolError::InvalidPayload);
+       return Err(TunnelError::Protocol(ProtocolError::InvalidPayload));
    }
    ```
     `decode_frame` itself is exactly-one-frame and trailing-tolerant
-    (`crates/eggtunnel-proto/src/lib.rs:472-473`: "bytes after that frame are
+    (`crates/eggtunnel-proto/src/lib.rs:523-524`: "bytes after that frame are
     left for the caller"), and additionally rejects trailing bytes **inside**
-    the postcard payload (`crates/eggtunnel-proto/src/lib.rs:500-504`). The
+    the postcard payload (`crates/eggtunnel-proto/src/lib.rs:549-554`). The
     `consumed != frame.len()` guard in `wire_io` closes the remaining gap: the
     caller passed exactly `HEADER_LEN + len` bytes, so any mismatch means the
     declared length and the decoded payload disagree → `InvalidPayload`. There
     is no concatenated-frame fast path here; each `read_message` consumes
-    exactly one frame. Control loops that `split()` the stream
-    (`client/reconnect.rs:87`, `server/control.rs:144`) rely on this 1:1 property.
+    exactly one frame. Control loops that `split()` the stream rely on this 1:1
+    property.
 
 ### 1.2 `write_message` — encode-then-`write_all`
 
-`crates/eggtunnel/src/wire_io.rs:38-47`: `encode_frame(message)?` (which itself
+`crates/eggtunnel/src/wire_io.rs:58-64`: `encode_frame(message)?` (which itself
 enforces `payload.len() > MAX_FRAME_BYTES →
-FrameTooLarge`, `crates/eggtunnel-proto/src/lib.rs:459-461`), then
-`write_all(&frame)` with I/O failure mapped to `TruncatedFrame`. The mapping is
-lossy by design — a failed write surfaces as a protocol error, and the caller's
-`TunnelError::From<ProtocolError>` / timeout wrapper decides the termination
-category. There is no partial-frame resume; failure tears down the session or
-data stream.
+FrameTooLarge`, `crates/eggtunnel-proto/src/lib.rs:509-512`), then
+`write_all(&frame)` with the same `io_error` classification: a broken pipe is
+`TunnelError::Io` → `Transport`, never a protocol truncation. There is no
+partial-frame resume; failure tears down the session or data stream. Call sites
+that must not block forever wrap this in their own budget (server
+`write_bounded`, client `write_control`).
 
-### 1.3 `TruncatedFrame` mapping table
+### 1.3 Error mapping table
 
 | Site | Input condition | Result |
 |---|---|---|
-| `wire_io.rs:11-14` | `< HEADER_LEN` bytes available then EOF/error | `TruncatedFrame` |
-| `wire_io.rs:15-19` probe | header-only slice | expected `TruncatedFrame` → continue; any other decode error → return that error |
-| `wire_io.rs:21-23` | declared `len > 1 MiB` | `FrameTooLarge` (not `TruncatedFrame`) |
-| `wire_io.rs:27-30` | header OK but payload short | `TruncatedFrame` |
-| `wire_io.rs:31-34` | `consumed != frame.len()` | `InvalidPayload` |
+| `wire_io.rs:21` + `io_error` | `< HEADER_LEN` bytes available then EOF | `Protocol(TruncatedFrame)` |
+| `wire_io.rs:21` + `io_error` | header read reset / refused / TLS alert | `Io(..)` → `TerminationCategory::Transport` |
+| `wire_io.rs:24-31` probe | header-only slice | expected `TruncatedFrame` → continue; any other decode error → return it; `Ok` → `InvalidPayload` |
+| `wire_io.rs:32-36` | declared `len > 1 MiB` | `FrameTooLarge` (not `TruncatedFrame`) |
+| `wire_io.rs:37-47` | header OK but payload short | `Protocol(TruncatedFrame)` |
+| `wire_io.rs:48-54` | `consumed != frame.len()` | `InvalidPayload` |
+| `wire_io.rs:58-64` | `write_all` failure | `Io(..)` → `TerminationCategory::Transport` |
 
-Review note: `TruncatedFrame` therefore means three different wire realities
-(clean peer close, network truncation, mid-handshake timeout collapsed by the
-caller). If finer diagnostics are ever needed, the distinction must be added at
-the call site (which knows whether a `timeout()` fired), not in `wire_io`.
+Review note: `TruncatedFrame` means two wire realities (clean peer close and
+network truncation); a mid-handshake timeout is collapsed by the call site
+(which knows whether a `timeout()` fired) into `TunnelError::Timeout`.
 
 ### 1.4 Why `BoxStream` matters — transport neutrality
 
-`crates/eggtunnel/src/wire_io.rs:1,49-57`:
+`crates/eggtunnel/src/wire_io.rs:1,66-74`:
 
 ```rust
 use eggress_core::BoxStream;
-pub(crate) async fn read_boxed(stream: &mut BoxStream) -> Result<Message, ProtocolError>
-pub(crate) async fn write_boxed(stream: &mut BoxStream, message: &Message) -> Result<(), ProtocolError>
+pub(crate) async fn read_boxed(stream: &mut BoxStream) -> Result<Message, TunnelError>
+pub(crate) async fn write_boxed(stream: &mut BoxStream, message: &Message) -> Result<(), TunnelError>
 ```
 
 `read_boxed` / `write_boxed` are one-line delegates to `read_message` /
@@ -202,10 +206,12 @@ workers reached only after `validate_client_profile` / `validate_server_profile`
 
 Notes:
 
-- `client` implies `tls` (`crates/eggtunnel/Cargo.toml:17`: `client = [... "tls"]`),
-  and `quic` / `websocket` imply `client` + `server`. There is no supported
-  `quic`-without-`server` or `websocket`-without-`tls` slice; the CLI enforces
-  the same coupling at config-check time (§6).
+- `client` implies `tls` (`crates/eggtunnel/Cargo.toml:17`: `client = [... "tls"]`).
+  Role slices `quic-client` / `quic-server` and `websocket-client` /
+  `websocket-server` exist precisely for single-role builds. Transport
+  profile validation lives in `validate_client_profile`
+  (`client.rs:570-613`), not in `endpoint.rs` (which owns only
+  `Endpoint::parse`); the CLI enforces the same coupling at config-check time (§6).
 - `mod wire_io` exists iff `client` or `server` is enabled
   (`lib.rs:10-11`). A `proto`-only build has no socket dependency, per
   `docs/ARCHITECTURE.md:3-6`.
@@ -355,7 +361,7 @@ Feature: `quic` (`crates/eggtunnel/Cargo.toml:20`). Docs:
 
 ```text
 client (QuicClient)                       server (QuicListener, UDP)
-  | QuicClient::connect(host, port, QuicClientConfig{server_name, idle = policy.timeouts.control_idle, max_streams = policy.limits.client_open_tasks + 1}) [policy.timeouts.connect]
+  | QuicClient::connect(host, port, QuicClientConfig{server_name, insecure:false, idle = policy.timeouts.control_idle, max_streams = policy.limits.client_open_tasks}) [policy.timeouts.connect]
   |--------------------------------------->| accept_connection(&cancel)
   | get_connection() [connect] → open_stream() [connect] (control)
   |--------------------------------------->| accept_stream() [handshake] → read_boxed → expect ClientHello
@@ -451,8 +457,9 @@ Additional QUIC specifics:
   max_concurrent_streams: policy.limits.active_connections_per_session + 1 }`
   (`server/config.rs:79-83`); client mirrors `idle_timeout:
   policy.timeouts.control_idle, max_concurrent_streams:
-  policy.limits.client_open_tasks + 1` (`client/reconnect.rs:401-408`) — 129 by default
-  on both sides, i.e. one control stream plus the full data-stream budget, so
+  policy.limits.client_open_tasks` (`client.rs:357` → `client/reconnect.rs:371-405`) — 128 by default
+  on the client, i.e. the client passes the budget verbatim while the server
+  adds one control stream (`active_connections_per_session + 1` = 129), so
   Eggtunnel admission rejects first.
 - Test-only admission override: `bind_quic_with_admission_for_test` scales
   `max_concurrent_streams = max(1, n) * 2` (`server/config.rs:93`) — test-only,

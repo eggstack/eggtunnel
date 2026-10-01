@@ -38,8 +38,10 @@ cargo deny check licenses
   not inline in `server.rs`).
 - Do not skip `--all-features`: default features hide the
   `quic`/`websocket`/`mtls`/`outbound-proxy` code paths.
-- Beyond the gate: CI also runs 7 `--no-default-features` feature-slice
-  combos, an MSRV `1.89` check, and a minimal-dependencies check
-  (`client,tls` must not pull quic/websocket/outbound deps) — see
-  `.github/workflows/ci.yml`. Keep feature gates additive.
+- Beyond the gate: CI also runs a `feature-slices` matrix via
+  `--no-default-features` (14 combos including role-specific
+  `quic-client`/`quic-server`/`websocket-client`/`websocket-server` slices),
+  an MSRV `1.89` check, and a minimal-dependencies check
+  (minimal slices must not pull unrequested quic/websocket/outbound deps) —
+  see `.github/workflows/ci.yml`. Keep feature gates additive.
 - Markdown/docs-only changes need no gate run; say so instead of running them.

@@ -66,9 +66,16 @@ from the current Session and reconnect state and is safe to repeat. Calls made
 while disconnected return `TunnelError::Disconnected` for registration;
 unregistration can queue through the bounded command channel while the client
 is reconnecting.
-The existing wire `Error` has no ServiceId, so the client permits at most one
-dynamic registration acknowledgement in flight per Session. This bound is
-enforced by the private Service lifecycle state owner without a wire change.
+The existing wire `Error` has no ServiceId, so without negotiated
+capability 1 (see `docs/PROTOCOL.md`) the client permits at most one
+dynamic registration acknowledgement in flight per Session (legacy
+serial fallback). When capability 1 is negotiated with a 1.1 peer, the
+server answers failures with the correlated `RegisterReject` message and
+the client permits multiple bounded in-flight registrations (ceiling
+derived from the configured client command queue), each scoped to the
+current Session generation. Applications must not assume concurrency is
+available: with a 1.0 peer the serial fallback applies exactly as before.
+This bound is enforced by the private Service lifecycle state owner.
 
 Snapshots expose a bounded heartbeat view: current Session generation, age of
 the last matching Pong, latest RTT in milliseconds, and consecutive missed
