@@ -25,7 +25,9 @@ impl HeartbeatState {
     }
 
     pub fn mark_sent(&mut self, nonce: u64, sent_at: Instant) {
-        self.outstanding = Some((nonce, sent_at));
+        if self.outstanding.is_none() {
+            self.outstanding = Some((nonce, sent_at));
+        }
     }
 
     pub fn matching_pong(&mut self, nonce: u64) -> Option<Instant> {
@@ -57,5 +59,20 @@ mod tests {
 
         let next_session = HeartbeatState::new();
         assert!(!next_session.has_outstanding());
+    }
+
+    #[test]
+    fn preserves_only_one_probe_and_clears_it_after_a_matching_pong() {
+        let first = Instant::now();
+        let second = first + std::time::Duration::from_millis(1);
+        let mut state = HeartbeatState::new();
+        state.mark_sent(10, first);
+        state.mark_sent(11, second);
+        assert_eq!(state.matching_pong(11), None);
+        assert_eq!(state.matching_pong(10), Some(first));
+        assert_eq!(state.matching_pong(10), None);
+        assert_eq!(state.next_nonce(), 1);
+        state.nonce = u64::MAX;
+        assert_eq!(state.next_nonce(), 0);
     }
 }

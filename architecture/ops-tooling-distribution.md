@@ -14,8 +14,8 @@ the sibling dives (proto / client / server / transports / CLI).
   `plans/closure/reverse-session/012-status.md` (qualification) +
   `plans/closure/reverse-session/013-status.md` (publication event).
   (Older `0.1.0`-only historical quotes are marked as such.)
-- Wire protocol stays v1.0; crate version is independent.
-- M007–M013 closed, corrective addendum archived (`plans/registry.md`);
+- Wire protocol is v1.1 with 1.0 fallback; crate version is independent.
+- M001–M016 closed, corrective addendum archived (`plans/registry.md`);
   `scripts/test-install.sh` pins `0.2.0`.
 - "Supported" in this repo means **hosted build + checksum + per-runner
   install/version smoke for that archive** — `docs/DISTRIBUTION.md:24-28`,
@@ -73,7 +73,7 @@ CI runs a main qualification job plus a supported feature-slice matrix, a Rust
 | Job | Qualification |
 |---|---|
 | `check` | fmt, workspace check/test/clippy, rustdoc with `-D warnings`, downstream embedder check, audit, license deny |
-| `feature-slices` | Locked compile and test for `client,tls`; `client,server,tls`; mTLS; QUIC; WebSocket; outbound proxy; and WebSocket+proxy profiles |
+| `feature-slices` | Locked compile and test for 14 combos (TCP/TLS roles, mTLS, QUIC incl. `quic-client`/`quic-server` role slices, WebSocket incl. role slices, outbound proxy, WebSocket+proxy) |
 | `msrv` | Rust 1.89 checks for proto, minimal client, and client+server TLS |
 | `minimal-dependencies` | Asserts `client,tls` excludes QUIC, WebSocket, outbound proxy, and Eggress reverse protocol crates |
 
@@ -92,7 +92,7 @@ a fixed-seed Service-state sequence, and ignored TCP/TLS, QUIC-stream, and
 WSS churn runs — and re-passed exact-head hosted CI
 (`plans/closure/reverse-session/011-status.md`; `plans/registry.md:45`).
 M012 re-ran the full gate (fmt, workspace check/test/clippy, rustdoc
-`-D warnings`, embedder check, audit, deny, all seven slices, MSRV,
+`-D warnings`, embedder check, audit, deny, all 14 feature slices, MSRV,
 dependency guard) locally on the `0.2.0` candidate plus exact-head hosted CI
 run `36012640890` (`plans/closure/reverse-session/012-status.md:21,36-38,43`).
 M013 captured the publication event (tag `v0.2.0`, hosted release run
@@ -128,7 +128,7 @@ thresholds.
 | `aarch64-apple-darwin` | `macos-15` | Supported (build + install/version smoke) **plus** independent consumer-side download/checksum/install/version verification at `0.1.0` (closure `006-status.md:22,36`), and native archive/install/version + checksum-rejection smoke at `0.2.0` (`012-status.md:42` + `013-status.md`). Only target with off-runner consumer evidence |
 
 Hosted CI evidence for the published `0.2.0` line: exact-head hosted CI run
-`36012640890` passed all standard jobs, all seven feature slices, MSRV, and
+`36012640890` passed all standard jobs, all 14 feature slices, MSRV, and
 the minimal-dependency guard on the `0.2.0` candidate SHA
 (`012-status.md:21,43`). The `v0.2.0` tag, four-target release workflow
 (`36058175606`), GitHub release assets, crates.io publication, and clean
@@ -344,7 +344,7 @@ Why exact (`=`) rather than caret:
 | Doc | Owns | Review anchor |
 |---|---|---|
 | `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-21` |
-| `PROTOCOL.md` | Wire v1.0: 14-byte header table, 1 MiB cap, exact-consumption decoding, 14 stable IDs, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.0`, no 1.x guarantee) | `docs/PROTOCOL.md:1-39` |
+| `PROTOCOL.md` | Wire v1.1 (15 stable IDs) with 1.0 fallback: 14-byte header table, 1 MiB cap, exact-consumption decoding, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.1`) | `docs/PROTOCOL.md:1-39` |
 | `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-84` |
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-85` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-52` |
@@ -375,7 +375,7 @@ Doc-vs-code consistency risks (check these first in any behavior change):
    `release.yml`.
 5. **Wire-vs-crate versioning** (PROTOCOL + API + roadmap §13): the "no 1.x
    guarantee" disclaimer must survive any copy-edit; deleting it would imply a
-   stability promise the code does not keep. Wire stays `1.0` while the crate
+   stability promise the code does not keep. Wire stays `1.1` (with `1.0` fallback) while the crate
    line is `0.2.0` — never conflate the two numbers.
 6. **Published language** (`docs/DISTRIBUTION.md:5-9`, `docs/SUPPORT.md:48-51`,
    `CHANGELOG.md:3-43`, `plans/closure/reverse-session/012-status.md:5-22`):
@@ -458,7 +458,7 @@ suffices without the CLI, default features, or a library-owned runtime**
   the local loopback suite — verify the suite actually ran for the head under
   review (historical `006-status.md:56`: 39 lib + 8 proto tests; candidate
   `012-status.md:36-37`: 91 passed, 3 ignored workspace-wide plus the
-  seven-slice matrix counts).
+  14-slice matrix counts).
 - [ ] Checksums detect corruption against a trusted manifest; they are not
   signatures or authenticity proofs (`docs/DISTRIBUTION.md:41-45`).
   Attestations are build provenance, not independent code review.
@@ -546,13 +546,13 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [ ] Published-vs-previous sweep (run before any release): `docs/DISTRIBUTION.md:5-9`
   (current published `0.2.0` vs `0.1.0` historical line + Eggpack no-interface line),
   `docs/SUPPORT.md:48-51` (crates published at `0.2.0`),
-  `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.0`),
+  `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.1` with `1.0` fallback),
   `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.2`),
   `CHANGELOG.md:3-43` (released entry), and
   `plans/closure/reverse-session/013-status.md` (tag, GitHub release,
   crates.io publication, clean registry consumer) must all agree on the
   current published line. Re-flip them together plus rerun CI if any future
-  release rewinds state. Never write crate `0.2.0` where wire `1.0` is
+  release rewinds state. Never write crate `0.2.0` where wire `1.1` is
   meant (see §5 sync-point #5).
 - [ ] Eggpack re-validation (`plans/registry.md:116`, `012-status.md:32`):
   Eggpack `main` at `4d673b90` has manifest/ReleasePlan/bootstrap foundations

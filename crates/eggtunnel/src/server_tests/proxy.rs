@@ -233,16 +233,10 @@ use super::*;
         })
         .await
         .unwrap();
-        assert!(
-            snapshot.rejected_connections > 0
-                || matches!(
-                    snapshot.last_termination,
-                    Some(TerminationCategory::Transport)
-                        | Some(TerminationCategory::Authorization)
-                        | Some(TerminationCategory::Authentication)
-                        | Some(TerminationCategory::Timeout)
-                ),
-            "refused proxy must produce a bounded termination, got {snapshot:?}"
+        assert_eq!(
+            snapshot.last_termination,
+            Some(TerminationCategory::Transport),
+            "refused proxy must report a transport termination, got {snapshot:?}"
         );
         client.shutdown().await;
         server.shutdown().await;

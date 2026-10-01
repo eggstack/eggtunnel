@@ -27,7 +27,10 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
         };
         let target = tokio::select! {
             _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
-            result = timeout(counters.policy.timeouts.connect, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Target)?,
+            result = timeout(counters.policy.timeouts.connect, connector.connect(service.clone(), target_context)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|error| match error {
+                super::TargetError::Refused => TunnelError::Target,
+                super::TargetError::Failed => TunnelError::Io(std::io::Error::other("application target failed")),
+            })?,
         };
         let mut data = match transport {
             ClientDataTransport::TcpTls { endpoint, server_name, tls, websocket, #[cfg(feature = "outbound-proxy")] outbound } => {
@@ -42,11 +45,11 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
                 };
                 #[cfg(feature = "websocket-client")]
                 if websocket {
-                    let url = format!("wss://{}", endpoint.as_str());
-                    let ws_client = eggress_protocol_websocket::WebSocketTunnelClient::new(1024 * 1024);
+                    let url = endpoint.websocket_url();
+                    let ws_client = eggress_protocol_websocket::WebSocketTunnelClient::new(crate::common::MAX_WEBSOCKET_FRAME_SIZE);
                     let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-                        .max_message_size(Some(1024 * 1024))
-                        .max_frame_size(Some(1024 * 1024));
+                        .max_message_size(Some(crate::common::MAX_WEBSOCKET_FRAME_SIZE))
+                        .max_frame_size(Some(crate::common::MAX_WEBSOCKET_FRAME_SIZE));
                     stream = tokio::select! {
                         _ = cancel.cancelled() => return Err(TunnelError::Cancelled),
                         result = timeout(counters.policy.timeouts.handshake, ws_client.connect_over_stream_with_config(&url, stream, ws_config)) => result.map_err(|_| TunnelError::Timeout)?.map_err(|_| TunnelError::Tls)?,
@@ -64,7 +67,8 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
                 }
             }
         };
-        write_boxed(&mut data, &Message::DataHello(DataHello { session_id, service_id: service.id, connection_id: open.connection_id })).await?;
+        timeout(counters.policy.timeouts.handshake, write_boxed(&mut data, &Message::DataHello(DataHello { session_id, service_id: service.id, connection_id: open.connection_id })))
+            .await.map_err(|_| TunnelError::Timeout)??;
         match relay_with_options(target, data, RelayOptions::bounded(std::num::NonZeroUsize::new(16 * 1024).unwrap(), counters.policy.timeouts.relay_drain)).await {
             Ok(report) => {
                 counters.bytes_upstream.fetch_add(report.bytes_upstream, std::sync::atomic::Ordering::Relaxed);
@@ -78,7 +82,6 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
         Ok::<(), TunnelError>(())
     }.await;
     if let Err(error) = result {
-        counters.record_termination(error.termination_category());
         tracing::debug!(service_id = service.id.0, termination = ?error.termination_category(), "client data Open ended");
         if !cancel.is_cancelled() {
             let _ = out.try_send(Message::OpenReject(OpenReject {

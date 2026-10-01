@@ -208,6 +208,80 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         );
     }
 
+    /// Concurrent dynamic registrations over QUIC exercise the
+    /// negotiated correlated path (capability 1) on a non-TCP transport:
+    /// both transactions are in flight at once and correlate out of order.
+    #[cfg(all(feature = "quic-client", feature = "quic-server"))]
+    #[tokio::test]
+    async fn quic_concurrent_dynamic_registrations_correlate() {
+        let (cert, key) = certificate();
+        let server = Server::bind_quic(ServerConfig {
+            listen_addr: "127.0.0.1:0".parse().unwrap(),
+            certificate_pem: cert.as_bytes().to_vec(),
+            private_key_pem: key.as_bytes().to_vec(),
+            token: SecretToken::new(b"quic-concurrent-secret".to_vec()).unwrap(),
+            allow_public_service_binds: false,
+        })
+        .await
+        .unwrap();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
+        let target = |host: String, port: u16| TcpTarget::new(host, port).unwrap();
+        let client = Client::start_quic_insecure_for_test(ClientConfig {
+            server_addr: server.local_addr().to_string(),
+            tls_server_name: "localhost".into(),
+            ca_pem: None,
+            token: SecretToken::new(b"quic-concurrent-secret".to_vec()).unwrap(),
+            services: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let client_handle = client.handle();
+        // Wait for the authenticated Session before registering.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if client_handle.snapshot().connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let dynamic = |id: u64, name: &str| {
+            ClientService::new(
+                ServiceId(id),
+                ServiceName::new(name.to_owned()).unwrap(),
+                RequestedBind::Loopback { port: 0 },
+                target(echo_addr.ip().to_string(), echo_addr.port()),
+            )
+        };
+        let first_handle = client_handle.clone();
+        let second_handle = client_handle.clone();
+        let (first, second) = tokio::join!(
+            first_handle.register_service(dynamic(11, "quic-dyn-one")),
+            second_handle.register_service(dynamic(12, "quic-dyn-two"))
+        );
+        let first_bind = first.unwrap();
+        let second_bind = second.unwrap();
+        assert_ne!(first_bind.port, 0);
+        assert_ne!(second_bind.port, 0);
+        assert_eq!(server.handle().snapshot().registered_services, 2);
+        assert_eq!(client_handle.snapshot().registered_services, 2);
+        client.shutdown().await;
+        server.shutdown().await;
+        echo_task.abort();
+    }
+
     #[cfg(all(feature = "quic-client", feature = "quic-server"))]
     #[tokio::test]
     async fn quic_connection_replacement_creates_new_session_and_reregisters_services() {
@@ -383,7 +457,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         )
         .await;
         assert!(
-            read_result.is_err() || matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
+            matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
             "wrong-session DataHello should not produce server-side data, got {read_result:?}"
         );
         assert_eq!(
@@ -513,7 +587,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         )
         .await;
         assert!(
-            read_result.is_err() || matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
+            matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
             "replay DataHello should not produce server-side data, got {read_result:?}"
         );
         assert!(
@@ -625,7 +699,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         )
         .await;
         assert!(
-            read_result.is_err() || matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
+            matches!(read_result, Ok(Ok(0)) | Ok(Err(_))),
             "stale DataHello should not produce server-side data, got {read_result:?}"
         );
         assert!(
@@ -654,6 +728,17 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         .await
         .unwrap();
         let server_handle = server.handle();
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        let echo_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = echo.accept().await {
+                tokio::spawn(async move {
+                    let (mut read, mut write) = tokio::io::split(stream);
+                    let _ = tokio::io::copy(&mut read, &mut write).await;
+                    let _ = write.shutdown().await;
+                });
+            }
+        });
         let client = Client::start_quic_insecure_for_test(ClientConfig {
             server_addr: server.local_addr().to_string(),
             tls_server_name: "localhost".into(),
@@ -663,7 +748,7 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
                 ServiceId(1),
                 ServiceName::new("quic-saturation-svc").unwrap(),
                 RequestedBind::Loopback { port: 0 },
-                TcpTarget::new("127.0.0.1", 9).unwrap(),
+                TcpTarget::new(echo_addr.ip().to_string(), echo_addr.port()).unwrap(),
             )],
         })
         .await
@@ -682,41 +767,17 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         let quic = client_handle
             .quic_client_for_test()
             .expect("client must have an established QUIC client");
-        // Open `ceiling` streams that occupy the stream_admission semaphore. Each
-        // stream's DataHello will fail because there are no pending entries, but the
-        // permit is held until the server closes the stream.
+        // Hold incomplete DataHello streams open so each keeps its admission permit.
         let mut admitted = Vec::new();
         for _ in 0..ceiling {
-            let mut stream = quic.open_stream().await.unwrap();
-            write_quic_data_hello(
-                &mut stream,
-                eggtunnel_proto::DataHello {
-                    session_id: SessionId([0; 16]),
-                    service_id: ServiceId(1),
-                    connection_id: eggtunnel_proto::ConnectionId([0; 16]),
-                },
-            )
-            .await;
-            admitted.push(stream);
+            admitted.push(quic.open_stream().await.unwrap());
         }
-        // Allow the server to drain the admitted streams so it observes the permits as
-        // held. The DataHello with a wrong SessionId is rejected quickly; wait for the
-        // rejection counter to reach `ceiling`.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if server_handle.snapshot().rejected_connections >= ceiling as u64 {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
         // With the ceiling saturated by admitted permits, an additional QUIC stream
         // open is still possible at the Quinn level (we doubled max_concurrent_streams
         // to permit this in the test helper), but the Eggtunnel-level stream_admission
         // semaphore must reject it before reading DataHello. Submitting a stream and
-        // observing its server-side termination gives us that signal.
+        // observing its admission rejection gives us that signal.
         let mut extra = quic.open_stream().await.unwrap();
         write_quic_data_hello(
             &mut extra,
@@ -727,13 +788,12 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
             },
         )
         .await;
-        // Wait for the server to record the extra rejection. We expect the rejected
-        // counter to advance beyond `ceiling` because the stream_admission semaphore
-        // refused a permit before any DataHello read.
+        // The admitted streams haven't sent DataHello, so only this refused stream
+        // contributes a rejection.
         let rejected_after_extra = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let snapshot = server_handle.snapshot();
-                if snapshot.rejected_connections > ceiling as u64 {
+                if snapshot.rejected_connections > 0 {
                     break snapshot.rejected_connections;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -742,45 +802,32 @@ use super::tcp::{CapturingBlockingConnector, wait_for_quic_pending, write_quic_d
         .await
         .unwrap();
         assert!(
-            rejected_after_extra > ceiling as u64,
-            "extra QUIC stream must be rejected once the ceiling is full, got {rejected_after_extra}"
+            rejected_after_extra == 1,
+            "only the extra QUIC stream should be rejected at the full ceiling, got {rejected_after_extra}"
         );
         // Release one admitted permit by dropping the corresponding stream; the
         // server's handler should observe the dropped stream and free its permit.
         admitted.remove(0);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        // A new stream should be admitted again. We don't need it to complete a
-        // successful DataHello (no pending entry exists); we only need the rejection
-        // counter to NOT advance further as a result of an admission-cap denial,
-        // proving capacity returned. We assert it does not hit the same rejected
-        // boundary again with the new attempt.
-        let rejected_after_release = server_handle.snapshot().rejected_connections;
-        let mut follow_up = quic.open_stream().await.unwrap();
-        write_quic_data_hello(
-            &mut follow_up,
-            eggtunnel_proto::DataHello {
-                session_id: SessionId([0; 16]),
-                service_id: ServiceId(1),
-                connection_id: eggtunnel_proto::ConnectionId([0; 16]),
-            },
-        )
-        .await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        // The follow-up stream is admitted (it isn't rejected by stream_admission);
-        // its DataHello is rejected at the authorization stage because there is no
-        // pending entry. We verify the server still operates by checking that the
-        // registered service count remains at 1 throughout.
+        let bind = server_handle.snapshot().effective_binds[0].2.clone();
+        let address = std::net::Ipv6Addr::from(bind.address)
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::from(bind.address)));
+        let relayed = tokio::time::timeout(
+            Duration::from_secs(5),
+            roundtrip(std::net::SocketAddr::new(address, bind.port), b"capacity-recovered"),
+        ).await.unwrap();
+        assert_eq!(relayed, b"capacity-recovered");
         assert_eq!(
             server_handle.snapshot().registered_services,
             1,
             "unrelated admitted stream path must remain operational"
         );
-        assert!(
-            server_handle.snapshot().rejected_connections >= rejected_after_release,
-            "follow-up stream must not stall"
-        );
+        assert_eq!(server_handle.snapshot().rejected_connections, rejected_after_extra);
+        drop(admitted);
         client.shutdown().await;
         server.shutdown().await;
+        echo_task.abort();
     }
 
     #[cfg(all(feature = "quic-client", feature = "quic-server"))]

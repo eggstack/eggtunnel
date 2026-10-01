@@ -5,14 +5,13 @@
 //! Connection. The pending table is bounded per Session and every removal
 //! path returns the `pending_connections` counter to zero.
 
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
-use eggtunnel_proto::{DataHello, ServiceId, SessionId};
-use tokio::sync::Mutex;
+use eggtunnel_proto::{DataHello, ServiceId};
 
 use crate::common::{Counters, TunnelError};
 
-use super::session::SessionContext;
+use super::session::{SessionContext, SessionRegistry};
 
 /// A service-side Open awaiting the matching client DataHello.
 pub(super) struct PendingEntry {
@@ -31,12 +30,12 @@ pub(super) async fn accept_data_hello(
     stream: eggress_core::BoxStream,
     hello: DataHello,
     principal: Option<[u8; 32]>,
-    sessions: &Arc<Mutex<std::collections::HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+    sessions: &SessionRegistry,
     counters: &Counters,
 ) -> Result<(), TunnelError> {
     let session = sessions
         .lock()
-        .await
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&hello.session_id)
         .and_then(std::sync::Weak::upgrade);
     let Some(session) = session else {
@@ -59,7 +58,17 @@ pub(super) async fn accept_data_hello(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authentication);
     }
-    let pending = session.pending.lock().await.remove(&hello.connection_id);
+    let pending = {
+        let mut entries = session.pending.lock().await;
+        let entry = entries.remove(&hello.connection_id);
+        if entry.is_some() {
+            session
+                .counters
+                .pending
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        entry
+    };
     let Some(pending) = pending else {
         tracing::warn!(
             category = "data_hello_unknown_connection",
@@ -70,10 +79,6 @@ pub(super) async fn accept_data_hello(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Err(TunnelError::Authorization);
     };
-    session
-        .counters
-        .pending
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     if pending.service_id != hello.service_id || pending.expires <= Instant::now() {
         tracing::warn!(
             category = "data_hello_service_or_expiry_mismatch",
@@ -109,14 +114,13 @@ pub(super) async fn remove_service_pending(session: &SessionContext, service: Se
 
 /// Drop every pending entry for the Session (Session teardown).
 pub(super) async fn remove_all_pending(session: &SessionContext) {
-    let removed = {
+    {
         let mut pending = session.pending.lock().await;
         let len = pending.len();
         pending.clear();
-        len
-    };
-    session
-        .counters
-        .pending
-        .fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
+        session
+            .counters
+            .pending
+            .fetch_sub(len, std::sync::atomic::Ordering::Relaxed);
+    }
 }

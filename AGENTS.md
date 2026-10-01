@@ -5,7 +5,7 @@ Rust workspace (resolver 2, edition 2024, rust-version 1.89, `--locked` builds):
 ## Layout / entrypoints
 
 - `crates/eggtunnel-proto/src/lib.rs` — runtime-neutral wire DTOs + framing only. No socket, runtime, timer, or task deps.
-- `crates/eggtunnel/src/lib.rs` — embeddable library; uses caller's Tokio runtime, installs no runtime/tracing state. Modules: `client.rs`, `server.rs`, `common.rs`, `wire_io.rs`.
+- `crates/eggtunnel/src/lib.rs` — embeddable library; uses caller's Tokio runtime, installs no runtime/tracing state. Modules: `client.rs` + `client/`, `server.rs` + `server/`, `common.rs`, `endpoint.rs`, `pem.rs` (`mtls`), `wire_io.rs`.
 - `crates/eggtunnel-cli/src/main.rs` — binary `eggtunnel` (`publish = false` crate): `eggtunnel check|client|server <config>` plus `version`.
 - `examples/*.toml`, `docs/CONFIGURATION.md` — canonical TOML shapes. `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/SUPPORT.md`, `docs/OPERATIONS.md`, `docs/EMBEDDING.md` are authoritative for behavior.
 - Dependency direction: proto <- eggtunnel library <- CLI / embedders; generic relay/transport comes from `eggress-* =1.0.8` adapters.
@@ -24,7 +24,7 @@ cargo deny check licenses
 ```
 
 - Single test: `cargo test --locked -p eggtunnel --all-features <filter>` (tests live in `crates/eggtunnel/src/server_tests.rs` + `server_tests/{tcp,mtls,quic,websocket,proxy}.rs` and `client/` modules, not inline in `server.rs`). `--all-features` is required to cover `quic`/`websocket`/`mtls`/`outbound-proxy` paths.
-- CI beyond the gate above: 7 `feature-slices` combos via `--no-default-features` (see `ci.yml` matrix), MSRV `1.89` check, and `minimal-dependencies` check that `client,tls` pulls no quic/websocket/outbound deps. Keep feature gates additive; never let a default-path import leak an optional dep.
+- CI beyond the gate above: `feature-slices` matrix via `--no-default-features` (see `ci.yml` matrix — includes role-specific `quic-client`/`quic-server`/`websocket-client`/`websocket-server` slices), MSRV `1.89` check, and `minimal-dependencies` check that minimal slices pull no unrequested quic/websocket/outbound deps. Keep feature gates additive; never let a default-path import leak an optional dep.
 - Sustained qualification is opt-in: see `docs/OPERATIONS.md` for the `cargo +nightly fuzz` decoder target, deterministic Service-state sequence, and ignored TCP/TLS lifecycle/churn soak commands. These long runs are not part of every-push CI.
 - Never run workspace commands inside `fixtures/embedder`; always use `--manifest-path fixtures/embedder/Cargo.toml`.
 
@@ -42,6 +42,6 @@ cargo deny check licenses
 - Server owns listeners: binds are loopback-only unless `allow_public_service_binds = true`. Client `target_host/port` is client-authoritative; server never rewrites it.
 - `ClientBuilder` / `ServerBuilder` are the canonical transport/profile validators used by library startup and CLI `check`; keep the typed rejection matrix in sync with docs. `RuntimePolicy` owns finite runtime ceilings and lifecycle timeouts; wire/name/token bounds stay fixed.
 - Dynamic client Services enter reconnect desired state only after a matching RegisterAck from the current Session generation. Error has no ServiceId, so only one dynamic registration may be in flight; keep that invariant unless the wire protocol changes. Heartbeat stores one outstanding Ping and bounded Snapshot health only.
-- Features are additive on `eggtunnel` (`default = ["client", "tls"]`): `server`, `quic`, `websocket`, `outbound-proxy`, `mtls`. CLI enables all of them. Embedders use `default-features = false` + only what they need (see `docs/EMBEDDING.md`).
+- Features are additive on `eggtunnel` (`default = ["client", "tls"]`): `server`, `quic` (+ role slices `quic-client`/`quic-server`), `websocket` (+ `websocket-client`/`websocket-server`), `outbound-proxy`, `mtls`. CLI enables all of them. Embedders use `default-features = false` + only what they need (see `docs/EMBEDDING.md`).
 - Hard constraints: `#![forbid(unsafe_code)]` in all crates (proto, library, CLI); `cargo-deny` allows permissive licenses only (GPL/AGPL/LGPL denied — check `deny.toml`); release tag `vX.Y.Z` must equal workspace `version` in root `Cargo.toml` (see `.github/workflows/release.yml`); release builds only `-p eggtunnel-cli` and regenerate notices via `python3 scripts/generate-third-party-notices.py`.
-- Version lines: workspace manifest is `0.2.0`; published crates.io line / tag / GitHub release are `0.2.0` (see `docs/DISTRIBUTION.md` + `plans/closure/reverse-session/012-status.md`). Dependency snippets in `docs/API.md` + `docs/EMBEDDING.md` must match the published line (`version = "0.2"`). Wire protocol stays v1.0 independent of crate version.
+- Version lines: workspace manifest is `0.2.0`; published crates.io line / tag / GitHub release are `0.2.0` (see `docs/DISTRIBUTION.md` + `plans/closure/reverse-session/012-status.md`). Dependency snippets in `docs/API.md` + `docs/EMBEDDING.md` must match the published line (`version = "0.2"`). Wire protocol is v1.1 with 1.0 fallback, independent of crate version.

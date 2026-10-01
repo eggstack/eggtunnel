@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M014 and C001 closed; M015/M016 ready
+Status: active — M001-M016 and C001 closed; no executable milestone pending
 
 Canonical references:
 
@@ -172,7 +172,7 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is strictly closed and M009 is now closed under ADR-0001 with existing RegisterService/UnregisterService and Ping/Pong semantics preserved.
 
-ADR-0002 now defines the first concrete negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 is registered but remains blocked on M014 structural closure. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
+ADR-0002 defined the first negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 implemented and closed that extension after M014 structural closure, with mixed-version and hosted-CI evidence recorded in `plans/closure/reverse-session/016-status.md`. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
@@ -558,7 +558,7 @@ Exit conditions:
 
 ### Milestone M015 — CLI configuration resolution and operational surface
 
-Status: ready — unblocked by M014 strict closure
+Status: closed — closure recorded at `plans/closure/reverse-session/015-status.md`
 
 Implementation plan:
 
@@ -579,7 +579,7 @@ Exit conditions:
 
 ### Milestone M016 — Capability-negotiated protocol evolution
 
-Status: ready — unblocked by M014 strict closure
+Status: closed — closure recorded at `plans/closure/reverse-session/016-status.md`
 
 Implementation plan:
 
@@ -767,5 +767,5 @@ Explicitly deferred until after M006 or a new ADR:
 | M012 0.2.0 release qualification/publication gate | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/012-status.md | Candidate qualification and exact-head hosted CI passed; publication captured separately by M013. |
 | M013 0.2.0 publication event | closed | plans/implementation/reverse-session/012-0.2.0-release-qualification-and-publication-gate.md | plans/closure/reverse-session/013-status.md | Tag/release/crates publication and clean registry consumer complete. |
 | M014 post-0.2 runtime topology/maintenance | closed | plans/implementation/reverse-session/014-post-0.2-runtime-topology-and-maintenance-consolidation.md | plans/closure/reverse-session/014-status.md | M013 closed; M015/M016 unblocked. |
-| M015 CLI config/operations | ready | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | — | M014 closed. |
-| M016 capability-negotiated protocol evolution | ready | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | — | M014 closed; ADR-0002 accepted. |
+| M015 CLI config/operations | closed | plans/implementation/reverse-session/015-cli-configuration-resolution-and-operational-surface.md | plans/closure/reverse-session/015-status.md | M014 closed. |
+| M016 capability-negotiated protocol evolution | closed | plans/implementation/reverse-session/016-capability-negotiated-protocol-evolution.md | plans/closure/reverse-session/016-status.md | M014 closed; ADR-0002 accepted. |
