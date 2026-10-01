@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.89.0
       - run: cargo check --locked -p eggtunnel-proto
       - run: cargo check --locked -p eggtunnel --no-default-features --features client,tls
       - run: cargo check --locked -p eggtunnel --no-default-features --features client,server,tls
