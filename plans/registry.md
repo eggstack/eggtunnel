@@ -30,11 +30,13 @@ Accepted architectural decisions:
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies / blockers |
 |---|---|---|---|---|
-| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | none pending | M001-M016 and C001 are closed; no executable reverse-session milestone is currently registered. |
+| Reverse session | active | plans/subsystems/reverse-session-roadmap.md | M017 post-M016 authority/observability/maintenance consolidation | M001-M016 and C001 are closed; M017 is dependency-ready. M018 is gated on M017; M019 is gated on M018 plus a published Eggress bounded-WebSocket seam. |
 
 ## Active and ready implementation plans
 
-No implementation plan is currently active or dependency-ready.
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff |
+|---|---|---|---|---|
+| Reverse session | M017 post-M016 authority/observability/maintenance consolidation | ready | plans/implementation/reverse-session/017-post-m016-authority-observability-and-maintenance-consolidation.md | M016 + C001 closed; no protocol/public-breaking dependency. |
 
 ## Recently closed or conditionally closed implementation plans
 
@@ -113,6 +115,8 @@ The following are not optional implementation preferences:
 
 ## Blocked / future work
 
+- M018 Eggress 1.0.11 adoption/TLS ownership reconciliation is planned at `plans/implementation/reverse-session/018-eggress-1.0.11-adoption-and-tls-ownership-reconciliation.md` and is blocked on M017 strict closure.
+- M019 WebSocket adapter dependency closure is planned at `plans/implementation/reverse-session/019-websocket-adapter-dependency-closure.md`; it is blocked on M018 plus publication of the Eggress Transports M003 bounded WebSocket API from `eggstack/eggress`. Do not use a git/path Eggress dependency to bypass that publication gate.
 - Multi-tenant Principal/auth-provider and per-Principal/per-Service policy remain gated on a concrete shared-server requirement plus an authentication/authorization ADR; no executable milestone is registered yet.
 - Eggpack release/bootstrap/CI cutover remains a separate future migration. M012 re-evaluated Eggpack `main` at `4d673b901b51a1ab4d280748c014816ce156dbc4`: manifest/ReleasePlan/bootstrap foundations are implemented, but CI orchestration is only ready to plan and ecosystem adoption remains blocked; no end-to-end interface has been adopted for Eggtunnel.
 - Eggup consumer-side self-update integration remains deferred; do not copy Eggup transaction machinery into Eggtunnel.
