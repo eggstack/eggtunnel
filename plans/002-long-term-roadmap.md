@@ -593,6 +593,32 @@ Phase 16 closed plus an operational dependency on publication of Eggress Transpo
 - oversize/backpressure/close behavior remains qualified;
 - optional dependency isolation and exact-head hosted gates pass.
 
+## Phase 18 — Standalone runtime and bind policy configuration surface
+
+### Objective
+
+Expose the existing validated RuntimePolicy and BindPolicy to standalone operators without creating a second policy engine or changing secure defaults.
+
+### Deliverables
+
+- optional TOML resource-limit and timeout policy sections mapping to the existing library types;
+- optional server bind-policy section for public-address permission, address allowlists, port ranges, ephemeral-port policy and authorization Service ceiling;
+- explicit compatibility semantics for the legacy coarse public-bind field;
+- single-pass typed lowering into library builders and canonical validation;
+- fail-closed configuration tests and operator documentation.
+
+### Dependencies
+
+Phase 15 closed. This phase may proceed in parallel with Phases 16–17 afterward.
+
+### Exit criteria
+
+- absence of new policy fields is behavior-identical to current standalone defaults;
+- non-default finite policy is configurable and validated through the library;
+- legacy/new public-bind inputs cannot create ambiguous exposure;
+- no hot reload, remote admin or authentication-provider scope;
+- exact-head hosted gates pass.
+
 ## Future gated continuation
 
 ADR-0002 now supplies concrete capability/minor-version compatibility semantics for Phase 14. Further protocol capabilities require concrete extensions; a new ADR is required only when compatibility meaning or another ADR-governed boundary changes.
@@ -670,13 +696,14 @@ Phase 3 QUIC     Phase 4 WSS/proxy
                      |
                      v
         Phase 15 authority/observability maintenance
-                     |
-                     v
-        Phase 16 Eggress 1.0.11/TLS ownership
-                     |
-                     v
-        Phase 17 WebSocket dependency closure
-              (+ published Eggress seam)
+              /                    \
+             v                      v
+ Phase 16 Eggress 1.0.11/TLS   Phase 18 standalone
+          ownership               policy config
+             |
+             v
+ Phase 17 WebSocket dependency closure
+       (+ published Eggress seam)
 
 ## Initial planning decomposition
 
