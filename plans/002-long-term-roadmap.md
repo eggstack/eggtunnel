@@ -519,6 +519,80 @@ Phase 12 closed. Phase 13 may proceed independently after Phase 12.
 - peer Drain can shorten but never extend local shutdown ceilings;
 - hostile-input, state-stress, transport-equivalence, and exact-head hosted gates pass.
 
+## Phase 15 — Post-M016 authority, observability, and maintenance consolidation
+
+### Objective
+
+Remove duplicated runtime policy authority and operational representation drift before adding more product breadth.
+
+### Deliverables
+
+- BindPolicy becomes the singular runtime bind-authorization authority after builder construction while legacy ServerConfig input remains compatible;
+- authorization-vs-resource Service ceilings have explicit semantics and a centralized effective admission path;
+- CLI events/v1 snapshot DTO faithfully projects the intended bounded Snapshot state;
+- authentication and authorization stay distinct in machine-readable diagnostics;
+- CLI/shared/control maintenance concentration and invariant-panic/relay-option duplication are reduced without semantic change.
+
+### Dependencies
+
+Phase 14 closed.
+
+### Exit criteria
+
+- no mirrored bind policy is required at runtime;
+- operational JSON and library Snapshot contracts no longer drift;
+- no wire/public/TOML breaking change;
+- exact-head full/MSRV/feature/security/license/hosted qualification passes.
+
+## Phase 16 — Eggress 1.0.11 adoption and TLS ownership reconciliation
+
+### Objective
+
+Adopt the published Eggress 1.0.11 family coherently and move mTLS configuration construction to the upstream TLS builder surface without weakening Eggtunnel Principal semantics.
+
+### Deliverables
+
+- all direct Eggress exact pins move together from 1.0.8 to 1.0.11;
+- client/server mTLS configuration uses Eggress TLS builders;
+- redundant local PEM/root construction is removed;
+- direct rustls/tokio-rustls dependencies are retained only where Eggtunnel-specific verified-peer Principal extraction requires them;
+- every optional transport and minimal feature slice is requalified.
+
+### Dependencies
+
+Phase 15 closed.
+
+### Exit criteria
+
+- transport behavior/support matrix unchanged;
+- verified leaf Principal binding preserved;
+- minimal dependency isolation preserved;
+- no native Eggress reverse-protocol dependency;
+- exact-head hosted gates pass.
+
+## Phase 17 — WebSocket adapter dependency closure
+
+### Objective
+
+Finish the WebSocket ownership boundary after Eggress publishes an implementation-independent bounded configuration API.
+
+### Deliverables
+
+- consume the published Eggress bounded message/frame configuration seam;
+- preserve Eggtunnel's 1 MiB WSS message/frame ceiling;
+- remove direct tokio-tungstenite ownership from Eggtunnel;
+- strengthen dependency guards around client/server WebSocket role slices.
+
+### Dependencies
+
+Phase 16 closed plus an operational dependency on publication of Eggress Transports M003.
+
+### Exit criteria
+
+- no direct Tungstenite dependency/import in Eggtunnel;
+- oversize/backpressure/close behavior remains qualified;
+- optional dependency isolation and exact-head hosted gates pass.
+
 ## Future gated continuation
 
 ADR-0002 now supplies concrete capability/minor-version compatibility semantics for Phase 14. Further protocol capabilities require concrete extensions; a new ADR is required only when compatibility meaning or another ADR-governed boundary changes.
@@ -590,6 +664,19 @@ Phase 3 QUIC     Phase 4 WSS/proxy
           |                   |
           v                   v
  Phase 13 CLI/ops      Phase 14 protocol 1.1
+          \                   /
+           \                 /
+            +--------+--------+
+                     |
+                     v
+        Phase 15 authority/observability maintenance
+                     |
+                     v
+        Phase 16 Eggress 1.0.11/TLS ownership
+                     |
+                     v
+        Phase 17 WebSocket dependency closure
+              (+ published Eggress seam)
 
 ## Initial planning decomposition
 
