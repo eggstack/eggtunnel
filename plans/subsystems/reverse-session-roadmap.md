@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M016 and C001 closed; no executable milestone pending
+Status: active — M001-M016 and C001 closed; M017 ready; M018/M019 dependency-gated
 
 Canonical references:
 
@@ -165,6 +165,40 @@ M004 QUIC transport     M005 WSS/outbound-proxy
                     |
                     v
        M009 dynamic Service lifecycle/observability
+                    |
+                    v
+       M010 client runtime modularization/state hardening
+                    |
+                    v
+       M011 sustained robustness/performance qualification
+                    |
+                    v
+       M012 0.2.0 release qualification
+                    |
+                    v
+       M013 0.2.0 publication event
+                    |
+                    v
+       M014 runtime topology/maintenance
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+       M015 CLI/ops       M016 protocol 1.1
+          \                   /
+           \                 /
+            +--------+--------+
+                     |
+                     v
+       M017 authority/observability consolidation
+                     |
+                     v
+       M018 Eggress 1.0.11/TLS ownership
+                     |
+                     v
+       M019 WebSocket dependency closure
+             (also needs published
+              Eggress Transports M003)
 
 M004 and M005 have a hard dependency on M003 but only soft/interface dependencies on each other.
 
@@ -172,7 +206,11 @@ M006 depends on M003 plus whichever optional transport profiles are declared par
 
 M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so public/configuration refactoring was not mixed with structural/test movement. M009 had a hard dependency on M008 so dynamic Service state and heartbeat/tracing policy are built on the canonical composition/configuration surface. M008 is strictly closed and M009 is now closed under ADR-0001 with existing RegisterService/UnregisterService and Ping/Pong semantics preserved.
 
-ADR-0002 defined the first negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 implemented and closed that extension after M014 structural closure, with mixed-version and hosted-CI evidence recorded in `plans/closure/reverse-session/016-status.md`. A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
+ADR-0002 defined the first negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 implemented and closed that extension after M014 structural closure, with mixed-version and hosted-CI evidence recorded in `plans/closure/reverse-session/016-status.md`.
+
+A post-M016 audit at `ece46fd223265b7b0609e3640b0caa9efadd1535` found no need to redesign the reverse-session architecture, but did find three bounded maintenance lines: duplicated/mirrored server policy authority plus incomplete operational Snapshot projection (M017); lag from the published Eggress 1.0.11 TLS builder surface (M018); and a remaining direct Tungstenite configuration dependency that cannot be removed without a bounded implementation-independent Eggress WebSocket seam (M019, cross-repo gated).
+
+A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
 
 ## 6. Milestone M001 — Repository and protocol foundation
 
@@ -604,6 +642,85 @@ Exit conditions:
 - extension-only behavior occurs only after bilateral negotiation;
 - new registration transaction state remains bounded/generation-scoped;
 - peer Drain cannot extend local shutdown policy.
+
+### Milestone M017 — Post-M016 authority, observability, and maintenance consolidation
+
+Status: ready
+
+Implementation plan:
+
+- plans/implementation/reverse-session/017-post-m016-authority-observability-and-maintenance-consolidation.md
+
+Primary class: polish / invariant
+
+Objective:
+
+- make BindPolicy the singular runtime bind-authorization authority after builder construction while preserving the legacy ServerConfig coarse flag as compatibility input;
+- explicitly separate authorization Service ceilings from RuntimePolicy resource ceilings and centralize their effective admission rule;
+- make the versioned CLI snapshot event a faithful bounded projection of Snapshot and preserve authentication-vs-authorization categories;
+- reduce CLI/control/shared maintenance concentration and remove small production invariant traps without changing behavior.
+
+Hard dependency: M016 and C001 closed.
+
+Exit conditions:
+
+- no mirrored bind-policy state is required after builder construction;
+- dual Service ceilings have explicit semantics and one effective-admission path;
+- events/v1 snapshot output includes the intended bounded Snapshot state and remains secret-free;
+- public/wire/TOML behavior remains compatible;
+- exact-head full/MSRV/feature/security/license/hosted gates pass.
+
+### Milestone M018 — Eggress 1.0.11 adoption and TLS ownership reconciliation
+
+Status: blocked — hard dependency M017 not yet closed
+
+Implementation plan:
+
+- plans/implementation/reverse-session/018-eggress-1.0.11-adoption-and-tls-ownership-reconciliation.md
+
+Primary class: polish / infrastructure
+
+Objective:
+
+- move the complete Eggress dependency family from exact 1.0.8 pins to published 1.0.11;
+- use Eggress TLS builders for client/server mTLS policy construction;
+- delete redundant local PEM/root construction while preserving Eggtunnel's verified-leaf Principal extraction and support matrix.
+
+Hard dependency: M017 strict closure.
+
+Exit conditions:
+
+- all Eggress direct pins are coherent at 1.0.11;
+- mTLS configuration construction is upstream-owned where the published API supports it;
+- Principal binding, optional transport behavior and minimal dependency isolation remain qualified;
+- no `eggress-protocol-reverse` dependency enters the native Session graph.
+
+### Milestone M019 — WebSocket adapter dependency closure
+
+Status: blocked — M018 plus published upstream bounded-WebSocket seam required
+
+Implementation plan:
+
+- plans/implementation/reverse-session/019-websocket-adapter-dependency-closure.md
+
+Primary class: polish / invariant
+
+Objective:
+
+- consume the Eggress Transports M003 implementation-independent bounded WebSocket API;
+- preserve Eggtunnel's explicit 1 MiB message/frame ceiling;
+- remove Eggtunnel's direct `tokio-tungstenite` dependency while retaining it only transitively behind the Eggress adapter.
+
+Dependencies:
+
+- hard: M018 strict closure;
+- interface/operational: Eggress Transports M003 closed and published in a crates.io version.
+
+Exit conditions:
+
+- no direct Tungstenite import/dependency remains in Eggtunnel;
+- current WSS oversize/backpressure/close behavior remains qualified;
+- client/server role feature isolation and full hosted gates pass.
 
 ### Later gated work
 
