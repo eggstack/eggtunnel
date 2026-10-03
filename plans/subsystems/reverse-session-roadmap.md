@@ -1,6 +1,6 @@
 # Reverse Session Subsystem Roadmap
 
-Status: active — M001-M016 and C001 closed; M017 ready; M018/M019 dependency-gated
+Status: active — M001-M016 and C001 closed; M017 ready; M018/M019/M020 dependency-gated
 
 Canonical references:
 
@@ -191,14 +191,15 @@ M004 QUIC transport     M005 WSS/outbound-proxy
                      |
                      v
        M017 authority/observability consolidation
-                     |
-                     v
-       M018 Eggress 1.0.11/TLS ownership
-                     |
-                     v
-       M019 WebSocket dependency closure
-             (also needs published
-              Eggress Transports M003)
+             /                 \
+            v                   v
+ M018 Eggress 1.0.11/TLS     M020 standalone
+        ownership             policy config
+            |
+            v
+ M019 WebSocket dependency closure
+   (also needs published Eggress
+        Transports M003)
 
 M004 and M005 have a hard dependency on M003 but only soft/interface dependencies on each other.
 
@@ -208,7 +209,7 @@ M007 starts the post-0.1 maintenance line. M008 had a hard dependency on M007 so
 
 ADR-0002 defined the first negotiated-protocol extension: correlated registration rejection plus bounded Drain deadline semantics. M016 implemented and closed that extension after M014 structural closure, with mixed-version and hosted-CI evidence recorded in `plans/closure/reverse-session/016-status.md`.
 
-A post-M016 audit at `ece46fd223265b7b0609e3640b0caa9efadd1535` found no need to redesign the reverse-session architecture, but did find three bounded maintenance lines: duplicated/mirrored server policy authority plus incomplete operational Snapshot projection (M017); lag from the published Eggress 1.0.11 TLS builder surface (M018); and a remaining direct Tungstenite configuration dependency that cannot be removed without a bounded implementation-independent Eggress WebSocket seam (M019, cross-repo gated).
+A post-M016 audit at `ece46fd223265b7b0609e3640b0caa9efadd1535` found no need to redesign the reverse-session architecture, but did find three bounded maintenance lines: duplicated/mirrored server policy authority plus incomplete operational Snapshot projection (M017); lag from the published Eggress 1.0.11 TLS builder surface (M018); a remaining direct Tungstenite configuration dependency that cannot be removed without a bounded implementation-independent Eggress WebSocket seam (M019, cross-repo gated); and a useful standalone operations gap where the CLI cannot yet express the existing finite RuntimePolicy/BindPolicy surface (M020, gated on M017 authority cleanup).
 
 A future Eggpack distribution cutover still requires stable Eggpack build/qualification, bootstrap-installer, and generated-CI interfaces.
 
@@ -722,6 +723,36 @@ Exit conditions:
 - current WSS oversize/backpressure/close behavior remains qualified;
 - client/server role feature isolation and full hosted gates pass.
 
+### Milestone M020 — Standalone runtime and bind policy configuration surface
+
+Status: blocked — hard dependency M017 not yet closed
+
+Implementation plan:
+
+- plans/implementation/reverse-session/020-standalone-runtime-and-bind-policy-configuration-surface.md
+
+Primary class: capability / polish
+
+Objective:
+
+- expose the existing finite RuntimePolicy and BindPolicy through optional standalone TOML configuration;
+- preserve exact current defaults when new sections are absent;
+- retain one unambiguous compatibility rule for the legacy public-bind switch;
+- lower directly into library builders/validators without adding hot reload or a second policy engine.
+
+Dependencies:
+
+- hard: M017 strict closure;
+- soft: independent of M018/M019 after M017 unless implementation evidence changes.
+
+Exit conditions:
+
+- standalone operators can configure existing resource/time/bind policy safely;
+- invalid or ambiguous public-bind policy fails before network startup;
+- existing TOML remains valid and behavior-equivalent by default;
+- no remote admin, dynamic policy mutation or Principal-provider scope is introduced;
+- exact-head full/MSRV/feature/security/license/hosted gates pass.
+
 ### Later gated work
 
 Multi-tenant Principal/auth-provider and per-Principal/per-Service authorization are intentionally not assigned an executable milestone yet. A concrete shared-server requirement and a new authentication/authorization ADR are required before that trust-model expansion is registered.
@@ -889,3 +920,4 @@ Explicitly deferred until after M006 or a new ADR:
 | M017 authority/observability/maintenance consolidation | ready | plans/implementation/reverse-session/017-post-m016-authority-observability-and-maintenance-consolidation.md | pending | M016 + C001 closed; dependency-ready. |
 | M018 Eggress 1.0.11/TLS ownership reconciliation | blocked | plans/implementation/reverse-session/018-eggress-1.0.11-adoption-and-tls-ownership-reconciliation.md | pending | Hard dependency M017 strict closure. |
 | M019 WebSocket adapter dependency closure | blocked | plans/implementation/reverse-session/019-websocket-adapter-dependency-closure.md | pending | Hard dependency M018 plus Eggress Transports M003 closed and published. |
+| M020 standalone runtime/bind policy configuration | blocked | plans/implementation/reverse-session/020-standalone-runtime-and-bind-policy-configuration-surface.md | pending | Hard dependency M017; may proceed independently of M018/M019 after closure. |
