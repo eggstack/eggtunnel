@@ -1,22 +1,22 @@
-# Reverse-session server — `crates/eggtunnel/src/server.rs` (324) + `server/`
+# Reverse-session server — `crates/eggtunnel/src/server.rs` (353) + `server/`
 
 > Runtime is the `server.rs` coordinator (bind orchestration, `Server`/`ServerHandle`,
 > `bind_profile` / `bind_quic_profile` / `bind_with_tls_profile`)
 > plus private responsibility modules `server/{config,tls,accept,auth,session,control,pending,service}.rs`;
 > transport and lifecycle tests live in
-> `server_tests.rs` (255 lines harness + `ServerBuilder::validate` tests) plus
-> `server_tests/{tcp (1920),mtls (187),quic (967),websocket (405),proxy (905)}.rs`.
+> `server_tests.rs` (329 lines harness + `ServerBuilder::validate` tests) plus
+> `server_tests/{tcp (1952),mtls (187),quic (940),websocket (405),proxy (899)}.rs`.
 > `MAX_SESSIONS`/`MAX_HANDSHAKES` are `cfg(test)`-only aliases in
 > `server_tests.rs`, not production constants.
 > All `server/*.rs:NNN` anchors below track the current module layout;
 > test anchors use `server_tests.rs` / `server_tests/<file>.rs` paths.
 >
-> M008 note: `ServerBuilder` (`server/config.rs:61-130`) is the canonical surface
+> M008 note: `ServerBuilder` (`server/config.rs:61-131`) is the canonical surface
 > (`ServerTransportProfile` + `BindPolicy` + `RuntimePolicy` + optional
 > client CA); legacy `Server::bind*` helpers delegate through it. Finite
 > ceilings/timeouts come from validated `RuntimePolicy`
-> (`common.rs:196-316`); `MAX_SESSIONS`/`MAX_HANDSHAKES`
-> (`server_tests.rs:35-37`) are `cfg(test)`-only aliases.
+> (`common.rs:213-333`); `MAX_SESSIONS`/`MAX_HANDSHAKES`
+> (`server_tests.rs:35-36`) are `cfg(test)`-only aliases.
 > See [Architecture Overview](overview.md) §4 for the birds-eye map and
 > component index. Companion dives: `common-core.md` (shared vocabulary),
 > `client.md`, `proto-wire-protocol.md`, `transports-wire-io.md`.
@@ -38,22 +38,22 @@ The server is the only reachable party. It owns:
 
 - **Listeners**: one control+data ingress socket (`listen_addr`; TCP+TLS,
   or UDP for QUIC) plus one server-owned `TcpListener` per registered
-  service (bound in `register_service`, `server/control.rs:235-343`,
-  invoked from the registration arm at `server/control.rs:164-177`).
+  service (bound in `register_service`, `server/control.rs:295-448`,
+  invoked from the registration arm at `server/control.rs:192-207`).
 - **Sessions**: exactly one authenticated control stream per session
-  (`serve_control`, `server/control.rs:67-234`). Session table is
+  (`serve_control`, `server/control.rs:82-286`). Session table is
   `Arc<Mutex<HashMap<SessionId, Weak<SessionContext>>>>`
-  (`SessionRegistry`, `server/session.rs:24-33`).
+  (`SessionRegistry`, `server/session.rs:31`).
 - **Pending correlation**: single-use `ConnectionId → PendingEntry`
-  (`server/pending.rs:18-22`) per session (`SessionContext.pending`,
-  `server/session.rs:35-44`). External accept inserts; client data-dial consumes.
+  (`server/pending.rs:17-21`) per session (`SessionContext.pending`,
+  `server/session.rs:43`). External accept inserts; client data-dial consumes.
 - **Data accept + relay**: accepts both `ClientHello` (control) and
   `DataHello` (data) on the same ingress port, validates the latter
   against session/service/connection binding, then relays opaque bytes
-  via `eggress-relay` (`server/accept.rs:249-275`, `server/pending.rs:30-97`,
-  `server/service.rs:121-136`).
+  via `eggress-relay` (`server/accept.rs:267-313`, `server/pending.rs:29-100`,
+  `server/service.rs:123-135`).
 
-What the server explicitly does **not** do (cf. `docs/SECURITY.md:9-12`):
+What the server explicitly does **not** do (cf. `docs/SECURITY.md:12-15`):
 
 - receives the client-local `TcpTarget` as non-authoritative bounded metadata but never trusts it as authority; only the client uses
   it after a valid `Open`;
@@ -78,7 +78,7 @@ What the server explicitly does **not** do (cf. `docs/SECURITY.md:9-12`):
 
 ### 2.1 `ServerConfig` + `Drop` zeroization
 
-Defined `server/config.rs:20-28`:
+Defined `server/config.rs:20-27`:
 
 ```rust
 pub struct ServerConfig {
@@ -91,17 +91,17 @@ pub struct ServerConfig {
 ```
 
 - `listen_addr` accepts both control sessions and reverse data connections
-  (`docs/OPERATIONS.md:7-12`). For QUIC it is the UDP control endpoint;
-  service listeners remain TCP (`docs/OPERATIONS.md:11-12`).
+  (`docs/OPERATIONS.md:11-12`). For QUIC it is the UDP control endpoint;
+  service listeners remain TCP (`docs/OPERATIONS.md:18-19`).
 - `allow_public_service_binds` is the coarse master switch. `ServerBuilder::new`
   maps it to `BindPolicy { allow_public_addresses, ..default() }`
   (`server/config.rs:71-84`). Finer policy uses `bind_policy(...)` /
   `bind_with_policy` / `bind_mtls_with_policy` / `bind_quic_with_policy`.
 - `Drop` zeroizes `private_key_pem` (`server/config.rs:29-34`); `Debug` redacts
-  cert/key/token (`server/config.rs:36-50`). `SecretToken` itself redacts and
-  zeroizes on drop (`common.rs:38-48`). mTLS client keys get the same
-  treatment (`docs/SECURITY.md:38-39`).
-- `validate_config` (`server/config.rs:132-146`) rejects empty cert/key and
+  cert/key/token (`server/config.rs:36-49`). `SecretToken` itself redacts and
+  zeroizes on drop (`common.rs:43-53`). mTLS client keys get the same
+  treatment (`docs/SECURITY.md:58-59`).
+- `validate_config` (`server/config.rs:133-147`) rejects empty cert/key and
   TLS material larger than `MAX_FRAME_BYTES` (1 MiB).
 
 ### 2.2 `ServerBuilder` + `Server::bind*` delegates
@@ -109,37 +109,38 @@ pub struct ServerConfig {
 `ServerTransportProfile` (`server/config.rs:51-58`): `TcpTls`, plus
 `Quic` (`quic`) and `WebSocket` (`websocket`).
 
-`ServerBuilder` (`server/config.rs:61-130`): `new` (`server/config.rs:71-84`),
-`bind_policy` (`server/config.rs:86-89`), `transport` (`server/config.rs:91-94`),
-`runtime_policy` (`server/config.rs:96-100`), `client_ca_pem` (`mtls`,
-`server/config.rs:102-105`), `validate` (`server/config.rs:107-116`), `bind`
-(`server/config.rs:118-130`).
+`ServerBuilder` (`server/config.rs:61-131`): `new` (`server/config.rs:71-84`),
+`bind_policy` (`server/config.rs:86-90`), `transport` (`server/config.rs:92-95`),
+`runtime_policy` (`server/config.rs:97-100`), `client_ca_pem` (`mtls`,
+`server/config.rs:103-106`), `validate` (`server/config.rs:108-117`), `bind`
+(`server/config.rs:119-130`).
 
 | Method | Gate | What it does | Anchors |
 |---|---|---|---|
 | `bind` | always | `ServerBuilder::new(config).bind()` | `server.rs:64-66` |
 | `bind_with_policy` | always | builder + `bind_policy(policy)` + `bind()` | `server.rs:68-76` |
-| `bind_websocket` | `websocket` | builder + `transport(WebSocket)` + `bind()`; upgrade happens per-connection in `handle_connection` | `server.rs:79-84`, `server/accept.rs:336-357` |
-| `bind_quic` | `quic` | builder + `transport(Quic)` + `bind()` | `server.rs:87-93` |
-| `bind_quic_with_policy` | `quic` | builder + policy + `transport(Quic)` + `bind()` | `server.rs:95-104` |
-| `bind_mtls` | `mtls` | builder + `client_ca_pem` + `bind()` | `server.rs:152-166` |
-| `bind_mtls_with_policy` | `mtls` | builder + policy + `client_ca_pem` + `bind()` | `server.rs:168-178` |
-| `bind_profile` (private) | always | dispatches TCP-TLS / WebSocket / QUIC; mTLS CA selects `Mutual` TLS | `server.rs:180-213` |
-| `bind_quic_profile` (private) | `quic` | binds `QuicListener` (idle from `RuntimePolicy`, streams = active-per-session + 1), spawns `quic_server_loop` | `server.rs:216-257` |
-| `bind_with_tls_profile` (private) | always | requires caller runtime, validates config+policy, `TcpListener::bind`, captures `local_addr`, creates `CancellationToken` + policy `Counters`, spawns `server_loop` | `server.rs:260-294` |
+| `bind_websocket` | `websocket-server` | builder + `transport(WebSocket)` + `bind()`; upgrade happens per-connection in `handle_connection` | `server.rs:78-84`, `server/accept.rs:266,368-387` |
+| `bind_quic` | `quic-server` | builder + `transport(Quic)` + `bind()` | `server.rs:86-92` |
+| `bind_quic_with_policy` | `quic-server` | builder + policy + `transport(Quic)` + `bind()` | `server.rs:94-104` |
+| `bind_mtls` | `mtls` | builder + `client_ca_pem` + `bind()` | `server.rs:175-189` |
+| `bind_mtls_with_policy` | `mtls` | builder + policy + `client_ca_pem` + `bind()` | `server.rs:191-202` |
+| `bind_profile` (private) | always | dispatches TCP-TLS / WebSocket / QUIC; mTLS CA selects `Mutual` TLS | `server.rs:204-237` |
+| `bind_quic_profile` (private) | `quic-server` | binds `QuicListener` (idle from `RuntimePolicy`, streams = active-per-session + 1), spawns `quic_server_loop` | `server.rs:239-287` |
+| `bind_with_tls_profile` (private) | always | requires caller runtime, validates config+policy, `TcpListener::bind`, captures `local_addr`, creates `CancellationToken` + policy `Counters`, spawns `server_loop` | `server.rs:289-323` |
 
 All public binders require a caller-owned Tokio runtime (checked in
-`bind_with_tls_profile`, `server.rs:260-263`, and in
-`bind_quic_with_admission_for_test`, `server.rs:107-112`); they never install
-a global runtime or tracing subscriber (cf. `docs/SECURITY.md:41-43`).
-`bind_quic_with_admission_for_test` (`server.rs:107-149`, `cfg(test)`)
+`bind_with_tls_profile`, `server.rs:296`, and in
+`bind_quic_with_admission_for_test`, `server.rs:113`; the guard itself is
+`require_caller_runtime`, `server.rs:349-353`); they never install
+a global runtime or tracing subscriber (cf. `docs/SECURITY.md:61-63`).
+`bind_quic_with_admission_for_test` (`server.rs:106-173`, `cfg(test)`)
 additionally parameterises `max_concurrent_streams` / stream admission for
 the saturation test.
 
-`build_server_tls` (`server/tls.rs:23-35`): Eggress `TlsServerConfigBuilder`
+`build_server_tls` (`server/tls.rs:23-33`): Eggress `TlsServerConfigBuilder`
 from the configured cert/key PEMs.
 
-`build_mtls_server_config` (`mtls`, `server/tls.rs:36-62`): parses server
+`build_mtls_server_config` (`mtls`, `server/tls.rs:36-58`): parses server
 cert/key + client CA via `crate::pem`, builds an empty-roots
 `RootCertStore` + `WebPkiClientVerifier` + single-cert `ServerConfig`.
 
@@ -148,24 +149,30 @@ leaf, used as the mTLS identity (see §7).
 
 ### 2.3 `Server` / `ServerHandle`
 
+The embeddable surface is re-exported from the crate root under the `server`
+feature: `Server`, `ServerBuilder`, `ServerConfig`, `ServerHandle`,
+`ServerTransportProfile` (`lib.rs:34-35`).
+
 ```rust
 pub struct Server { cancel, task: Option<JoinHandle<()>>, handle: ServerHandle, local_addr }
 pub struct ServerHandle { cancel: CancellationToken, counters: Counters }
 ```
 
-- `Server::local_addr()` (`server.rs:296-298`): bound ingress address.
-- `Server::handle()` (`server.rs:300-302`) → cloneable `ServerHandle`.
-- `ServerHandle::snapshot()` (`server.rs:54-56`) → `Counters::snapshot()`
+- `Server::local_addr()` (`server.rs:325-327`): bound ingress address.
+- `Server::handle()` (`server.rs:329-331`) → cloneable `ServerHandle`.
+- `ServerHandle::snapshot()` (`server.rs:55-57`) → `Counters::snapshot()`
   (see §8).
 - `ServerHandle::shutdown()` (`server.rs:58-60`) cancels the token;
-  `Server::shutdown(mut self)` (`server.rs:304-310`) cancels then awaits
-  the server-loop task. `Drop for Server` (`server.rs:313-318`) cancels as
+  `Server::shutdown(mut self)` (`server.rs:333-339`) cancels then awaits
+  the server-loop task. `Drop for Server` (`server.rs:342-346`) cancels as
   a backstop.
 
-`validate_server_profile` (`server/config.rs:148-173`): validates
-`RuntimePolicy` + `BindPolicy` + `validate_config`, rejects empty client CA,
+`validate_server_profile` (`server/config.rs:149-179`): validates
+`RuntimePolicy` + `BindPolicy` + `validate_config`, requires
+`bind_policy.allow_public_addresses == config.allow_public_service_binds`
+(`server/config.rs:158-162`), rejects empty client CA,
 and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
-(`server/config.rs:165-169`) — the mTLS-only-TCP gate.
+(`server/config.rs:165-176`) — the mTLS-only-TCP gate.
 
 ---
 
@@ -211,12 +218,13 @@ and rejects mTLS (`trusted_client_ca.is_some()`) on any non-TCP profile
               cancel services, abort children, remove_all_pending, return
 ```
 
-Key code: first-frame dispatch `server/accept.rs:248-265`;
-`serve_control` auth gate + version + capability intersection + `ServerHello` `server/control.rs:83-101`;
-`Auth` read + `verify_token` failure path `server/control.rs:103-125`;
-session allocation + `policy.limits.sessions` check `server/control.rs:119-144`;
-`AuthOk` + split + policy-sized control channel `server/control.rs:143-146`;
-main `select!` loop `server/control.rs:154-237`; teardown `server/control.rs:215-225`.
+Key code: first-frame dispatch `server/accept.rs:267-313`;
+`serve_control` version gate + capability intersection + `ServerHello` `server/control.rs:98-120`;
+`Auth` read + `verify_token`/`is_blocked` failure path `server/control.rs:121-137`;
+session allocation + `policy.limits.sessions` check `server/control.rs:138-162`;
+`AuthOk` + split + policy-sized control channel `server/control.rs:164-172`;
+main `select!` loop `server/control.rs:182-258`; negotiated drain wait
+`server/control.rs:259-274`; teardown `server/control.rs:275-285`.
 
 `SessionGuard` (`server/session.rs`) cancels the session, decrements
 `sessions`, removes the session's `effective_binds`, reconciles `services`
@@ -224,7 +232,7 @@ from the binds delta, and removes the weak map entry on drop. The registry is
 guarded by a standard mutex (`SessionRegistry`) rather than a Tokio one so that
 removal on the non-async drop path is deterministic: a contended `try_lock`
 would silently leave the entry behind.
-`SessionContext::drop` (`server/session.rs:45-52`) subtracts any leaked pending
+`SessionContext::drop` (`server/session.rs:49-56`) subtracts any leaked pending
 count so `pending` never sticks after session teardown.
 
 ### 3.2 Message-by-message sequence (happy path)
@@ -232,15 +240,15 @@ count so `pending` never sticks after session teardown.
 ```text
 client                                   server
   │── ClientHello{version,caps} ──────────►│  serve_control: version check
-  │◄─ ServerHello{CURRENT,intersected caps} │  server/control.rs:94-101
+  │◄─ ServerHello{CURRENT,intersected caps} │  server/control.rs:110-120
   │── Auth{token} ──────────────────────►│  verify_token (constant-time)
-  │◄─ AuthOk{session_id} ─────────────────│  server/control.rs:143
+  │◄─ AuthOk{session_id} ─────────────────│  server/control.rs:164-169
   │── RegisterService{id,name,bind,target}►│  policy → bind → listener
-  │◄─ RegisterAck{id,effective_bind} ─────│  server/control.rs:191
+  │◄─ RegisterAck{id,effective_bind} ─────│  server/control.rs:438-446
   │◄─ Open{service_id,connection_id} ─────│  per external accept (§4)
   │── OpenReject{connection_id,code} ────►│  only on client refusal (§4)
   │── Ping{nonce} ──────────────────────►│
-  │◄─ Pong{nonce} ────────────────────────│  server/control.rs:196-199
+  │◄─ Pong{nonce} ────────────────────────│  server/control.rs:231-239
   │◄─ Drain{deadline_ms} ─────────────────│  shutdown only, §5
   │── Drain{deadline_ms} ───────────────►│  capture deadline → break → bounded drain wait (cap 2)
   │── UnregisterService{id} ────────────►│  cancel + GC, §4
@@ -248,61 +256,78 @@ client                                   server
 ```
 
 - Version: major mismatch → `UnsupportedVersion(major,minor)`
-  (`server/control.rs:86-93`). Minor is informational.
-- Auth failure: `Error{code:4, "authentication failed"}` then `Authentication`
-  (`server/control.rs:110-116`). No session is created.
-- Registration errors use `write_registration_response` (`server/control.rs:378-399`,
-  always `"service registration rejected"` + numeric code):
+  (`server/control.rs:98-106`). Minor is informational. The refusal reuses
+  `reject_authentication` (100 ms delay, `Error{code:4}`) before returning the
+  protocol error, so a version prober cannot skip the throttle.
+- Auth failure: `Error{code:4, "authentication failed"}` then
+  `Authentication` (`server/control.rs:130-137` →
+  `server/auth.rs:115-133`; code constant `server/auth.rs:28`). No session is
+  created.
+- Registration errors use `write_registration_response` (`server/control.rs:454-482`,
+  always `"service registration rejected"` + numeric code, constants at
+  `server/control.rs:54-57`):
   `1` duplicate id/name, `2` policy denial, `3` bind failure,
-  `5` per-session service ceiling (`server/control.rs:235-343`; ceiling check at
-  `server/control.rs:250-259`). With capability 1 negotiated the response is
+  `5` per-session service ceiling (`server/control.rs:295-448`; ceiling check at
+  `server/control.rs:312-329`). With capability 1 negotiated the response is
   the correlated `RegisterReject{service_id, code}`; otherwise the legacy
   generic `Error` with the same codes. Success is
-  `RegisterAck{service_id, effective_bind}` (`server/control.rs:333-339`).
+  `RegisterAck{service_id, effective_bind}` (`server/control.rs:438-446`).
+  The three capability shapes are unit-proven in `server_tests/tcp.rs`
+  (`v10_client_receives_generic_error_and_never_register_reject` 1770-1792,
+  `capability1_client_receives_correlated_register_reject` 1795-1819,
+  `capability2_only_client_keeps_generic_error` 1822-1841,
+  `unknown_capabilities_are_ignored_by_negotiation` 1923-1940).
 - `OpenReject` flows **client→server only**. The server never emits it; it
-  consumes it to free the pending slot (`server/control.rs:189-195`). Client codes
+  consumes it to free the pending slot (`server/control.rs:219-230`). Client codes
   (`1` target refused, `2` open-task exhausted) are opaque to the server.
 - `Drain` flows both ways but with different meaning: server→client carries
-  `shutdown_grace` (default 1 s, `common.rs:296`) during shutdown
-  (`server/accept.rs:77-95`); client→server `Drain` breaks the control
-  loop (`server/control.rs:200-203`, capturing the peer deadline) and then,
+  `shutdown_grace` (default 1 s, `common.rs:313`) during shutdown
+  (`server/accept.rs:90-99`); client→server `Drain` breaks the control
+  loop (`server/control.rs:240-243`, capturing the peer deadline) and then,
   with capability 2 negotiated, lets owned tasks drain up to
   `min(peer deadline, shutdown_grace)` before forced cancellation
-  (`server/control.rs:226-248`); without it teardown stays immediate (1.0).
-  Outbound `Open`/`Drain` share the same
-  `open_rx` channel; a `Drain` write breaks after flushing
-  (`server/control.rs:205-210`).
+  (`server/control.rs:259-274`); without it teardown stays immediate (1.0).
+  A zero peer deadline means immediate teardown. Outbound `Open`/`Drain` share
+  the same `open_rx` channel; a `Drain` write breaks after flushing
+  (`server/control.rs:248-253`). Covered by
+  `negotiated_drain_deadline_waits_before_forced_teardown`
+  (`server_tests/tcp.rs:1844-1920`).
 
 ### 3.3 Effective-bind selection via `BindPolicy`
 
-`BindPolicy` (`common.rs:85-124`): `allow_public_addresses`,
+`BindPolicy` (`common.rs:101-141`): `allow_public_addresses`,
 `allowed_addresses` (empty = any allowed by the master switch),
 `allowed_port_ranges` (empty = any nonzero), `allow_ephemeral_ports`,
-`max_services_per_session` (default 64, validated in
-`common.rs:100-111`).
+`max_services_per_session` (default 64, `common.rs:138`; validated in
+`common.rs:116-128`).
 
-Selection (`register_service`, `server/control.rs:250-307`):
+Selection (`register_service`, `server/control.rs:295-448`):
 
-1. `bind_to_socket(&requested_bind, &policy)` (`common.rs`):
+1. `bind_to_socket(&register.requested_bind, &bind_policy)`
+   (`common.rs:560-587`):
    `Loopback{port}` → `[::1]:port` iff `permits_address(::1, true) &&
    permits_port` — the loopback request runs the same address gate, so a pinned
    allowlist is not an escape hatch; `Ip{address,port}` → `SocketAddrV6` iff
    `permits_address && permits_port`.
-2. `permits_address` (`common.rs:516-519`):
+2. `permits_address` (`common.rs:591-594`):
    `(is_loopback || allow_public_addresses) && (allowlist empty || contains)`.
-   `permits_port` (`common.rs:522-531`): port 0 gated by
+   `permits_port` (`common.rs:597-606`): port 0 gated by
    `allow_ephemeral_ports`; otherwise allowlist empty or in-range.
-3. `TcpListener::bind(bind_addr)` — OS assigns the ephemeral port when 0.
-4. `socket_to_effective` (`server/service.rs:148-154`) normalises V4→V6-mapped and
+3. `TcpListener::bind(bind_addr)` (`server/control.rs:370-390`) — OS assigns
+   the ephemeral port when 0.
+4. `socket_to_effective` (`server/service.rs:151-157`) normalises V4→V6-mapped and
    builds `EffectiveBind{address:[u8;16], port}`.
 5. Push `(session_id, service_id, effective)` to `counters.binds`
-   (`server/control.rs:307`), spawn `run_service` (`server/control.rs:310`), record
-   `services` + high-water (`server/control.rs:326-327`), reply `RegisterAck`.
+   (`server/control.rs:408-412`), spawn `run_service`
+   (`server/control.rs:415-422`), record `services` + high-water
+   (`server/control.rs:431-437`), reply `RegisterAck`
+   (`server/control.rs:438-446`).
 
 Auth success never grants bind permission by itself
-(`docs/SECURITY.md:14-17`); every registration re-evaluates the policy.
-The client `TcpTarget` in the register frame is treated as bounded metadata
-only (`server/control.rs:175` comment).
+(`docs/SECURITY.md:21-22`); every registration re-evaluates the policy.
+The client `TcpTarget` in the register frame is never read by the server: the
+only mention is the comment marking it as client-owned bounded metadata
+(`server/control.rs:291-293,348`).
 
 ---
 
@@ -310,7 +335,7 @@ only (`server/control.rs:175` comment).
 
 ### 4.1 External accept → `Open`
 
-`run_service` (`server/service.rs:66-144`) owns one service listener:
+`run_service` (`server/service.rs:66-147`) owns one service listener:
 
 ```text
 listener.accept → try_acquire connection_admission ──fail──► rejected++, ResourceExhausted
@@ -325,24 +350,25 @@ listener.accept → try_acquire connection_admission ──fail──► rejecte
   │     └── Some(data stream) → pending already consumed → relay_with_options
 ```
 
-- `ConnectionId` is 128-bit random (`server/service.rs:87-90`), bound to the
+- `ConnectionId` is 128-bit random (`server/service.rs:86-89`; proto
+  `ConnectionId([u8; 16])` via `getrandom`), bound to the
   current session + service, 30 s lifetime by default
-  (`TimeoutPolicy::pending_connection`, `common.rs:294`; used at
-  `server/service.rs:93,115`), single-use (`docs/SECURITY.md:19-23`).
+  (`TimeoutPolicy::pending_connection`, `common.rs:311`; used at
+  `server/service.rs:92,116`), single-use (`docs/SECURITY.md:24-26`).
 - `connection_admission = Semaphore(policy.limits.active_connections_per_session)`
-  per session (`server/control.rs:130-132`, `1330`). The permit is moved into the
-  relay task via `ActiveConnectionGuard` (`server/service.rs:86,112`), so
+  per session (`server/control.rs:151-153`). The permit is moved into the
+  relay task via `ActiveConnectionGuard` (`server/service.rs:111,113`), so
   `active_connections` covers pending-wait + relay.
 - `opens: mpsc::Sender<Message>` is the session's policy-sized control
-  channel (`server/control.rs:145`). `try_send` failure means a slow/dead control
-  writer; the pending entry is removed immediately (`server/service.rs:103-107`).
+  channel (`server/control.rs:171`). `try_send` failure means a slow/dead control
+  writer; the pending entry is removed immediately (`server/service.rs:102-107`).
 - Relay uses `RelayOptions::bounded(16 KiB, timeouts.relay_drain)`
-  (`server/service.rs:121`; default drain 15 s, `common.rs:295`); both `Ok(report)`
+  (`server/service.rs:124`; default drain 15 s, `common.rs:312`); both `Ok(report)`
   and `Err(failure)` byte counts are added to
-  `bytes_upstream/downstream` (`server/service.rs:122-131`).
+  `bytes_upstream/downstream` (`server/service.rs:125-134`).
 - Service teardown (`UnregisterService`, session end, `run_service` exit)
   calls `remove_service_pending` / `remove_all_pending`
-  (`server/pending.rs:99-121`), which `retain`/`clear` and subtract the exact
+  (`server/pending.rs:104-126`), which `retain`/`clear` and subtract the exact
   removed count. `SessionContext::drop` is the final backstop.
 
 ### 4.2 Client `DataHello` → `DataHello` validation → relay
@@ -350,11 +376,11 @@ listener.accept → try_acquire connection_admission ──fail──► rejecte
 Data connections arrive on the **same ingress port** as control. `handle_connection`
 peeks the first frame after TLS (+WSS upgrade): `DataHello` → `accept_data_hello`,
 `ClientHello` → `serve_control`, anything else → `Protocol/UnexpectedMessage`
-(`server/accept.rs:248-265`). Data paths drop both the handshake guard and the
-accept-loop admission permit immediately (`server/accept.rs:251-252`); control
-paths hold them until auth completes (`server/control.rs:112-126`).
+(`server/accept.rs:267-313`). Data paths drop both the handshake guard and the
+accept-loop admission permit immediately (`server/accept.rs:276-277`); control
+paths hold them until auth completes (`server/control.rs:138-139`).
 
-`accept_data_hello` (`server/pending.rs:30-95`):
+`accept_data_hello` (`server/pending.rs:29-100`):
 
 | Check (in order) | On failure | Counter | Rationale |
 |---|---|---|---|
@@ -367,28 +393,28 @@ paths hold them until auth completes (`server/control.rs:112-126`).
 Notes for reviewers:
 
 - Wrong-session misses leave the pending entry alive (unit-tested,
-  `server_tests/tcp.rs:1248-1308`); wrong-service/expired **consume** it
-  (`server_tests/tcp.rs:1309-1376`). This is deliberate: the id is single-use
+  `server_tests/tcp.rs:1248-1306`); wrong-service/expired **consume** it
+  (`server_tests/tcp.rs:1309-1374`). This is deliberate: the id is single-use
   once the session is proven, preventing probe-reuse of a live slot.
 - Bearer-token comparison is constant-time via `subtle`
-  (`common.rs:485-488`, used `server/control.rs:110`). `ConnectionId` equality is
+  (`common.rs:520-540`, used `server/control.rs:133`). `ConnectionId` equality is
   the proto type's constant-time eq (see `proto-wire-protocol.md`); session
   lookup is a hash hit, not a secret compare — the secrecy sits in the
   128-bit id + 30 s window.
 - `DataHello` is the final Eggtunnel message on a data stream; subsequent
-  bytes are opaque relay (`docs/SECURITY.md:23`).
+  bytes are opaque relay (`docs/SECURITY.md:33-34`).
 - QUIC data streams use the same validator: `handle_quic_data_stream`
-  (`server/accept.rs:458-474`) reads one `DataHello` then calls `accept_data_hello`
+  (`server/accept.rs:496-516`) reads one `DataHello` then calls `accept_data_hello`
   with `principal: None` (QUIC has no mTLS — §7).
 
 ### 4.3 `OpenReject` codes
 
 The server is a pure consumer: `OpenReject{connection_id}` removes the
-pending entry and decrements `pending` (`server/control.rs:189-195`). Codes are
+pending entry and decrements `pending` (`server/control.rs:219-230`). Codes are
 not inspected. For the producer side (client `1` = target refused,
 `2` = open-task ceiling) see `client.md`; the
 `refused_target_rejects_external_connection_and_releases_pending_capacity`
-test (`server_tests/tcp.rs:1112-1179`) proves the end-to-end effect (external sees EOF,
+test (`server_tests/tcp.rs:1112-1177`) proves the end-to-end effect (external sees EOF,
 `pending` returns to 0).
 
 ---
@@ -397,95 +423,100 @@ test (`server_tests/tcp.rs:1112-1179`) proves the end-to-end effect (external se
 
 ### 5.1 Accept loops
 
-**TCP** `server_loop` (`server/accept.rs:96-178`):
+**TCP** `server_loop` (`server/accept.rs:117-165`):
 
 - Shared: `sessions` weak map, `admission = Semaphore(policy.limits.accepted_handshakes)`,
-  `auth_failures` limiter, `handlers: JoinSet`.
-- `select!`: `cancel` → break; `listener.accept()` → `try_acquire_owned`
-  admission (fail → `rejected++`, `ResourceExhausted`, keep looping);
-  else spawn `handle_connection` with `child_token`, `HandshakeGuard`,
-  `ConnectionContext`; `handlers.join_next()` → `record_join_result`
+  `auth_failures` limiter (`AcceptContext::new`, `server/accept.rs:48-62`),
+  `handlers: JoinSet`.
+- `select!`: `cancel` → break; `listener.accept()` → `context.admit()`
+  (`try_acquire_owned`; fail → `rejected++`, `ResourceExhausted`, keep looping);
+  else spawn `handle_connection` with `child_token`, `HandshakeGuard`, and the
+  admission permit; `handlers.join_next()` → `record_join_result`
   (panic accounting).
 - No `.await` holds the sessions lock across I/O; the map is only locked for
   insert/retain/upgrade.
 
-**QUIC** `quic_server_loop[_with_admission]` (`server/accept.rs:96-146`): same
+**QUIC** `quic_server_loop[_with_admission]` (`server/accept.rs:169-237`): same
 shape over `listener.accept_connection(&cancel)`. `Ok(None)` breaks (listener
 closed); `Err` → `rejected++` and continues; admission-full closes the QUIC
-connection with `"handshake limit reached"` (`server/accept.rs:112-117`).
+connection with `"handshake limit reached"` (`server/accept.rs:204-207`).
 
-**Per-QUIC-connection** `handle_quic_connection` (`server/accept.rs:159-222`):
+**Per-QUIC-connection** `handle_quic_connection` (`server/accept.rs:401-493`):
 accepts the first bidi stream as control (`handshake` timeout), spawns
 `serve_control` on it, then loops `accept_stream` for data. Data streams are
 gated by a per-connection `stream_admission` semaphore
 (`max_active_data_streams`, default = `policy.limits.active_connections_per_session`)
 via `try_acquire_owned`
-(`server/accept.rs:388-396`, `762-766`); each spawns `handle_quic_data_stream` in a
-`streams: JoinSet`. Control completion, cancel, or error breaks the loop,
-then: cancel, `connection.close("session ended")`, `abort_all` streams,
-abort a still-running control task, await it (`server/accept.rs:446-454`).
+(`server/accept.rs:430,464-468`); each spawns `handle_quic_data_stream` in a
+`streams: JoinSet`. Control completion, cancel, or a stream-accept error breaks
+the loop, then: cancel, `connection.close("session ended")`, `abort_all` streams,
+abort a still-running control task, await it (`server/accept.rs:482-491`).
 
 ### 5.2 Per-session tasks
 
 `serve_control` splits the control stream (`tokio::io::split`,
-`server/control.rs:144`), creates `(open_tx, open_rx) = mpsc::channel(policy.limits.control_queue)`
-(`server/control.rs:145`), stores a clone in `control_tx` for shutdown `Drain`
-(`server/control.rs:146`), and multiplexes in one `select!`:
+`server/control.rs:170`), creates `(open_tx, open_rx) = mpsc::channel(policy.limits.control_queue)`
+(`server/control.rs:171`), stores a clone in `control_tx` for shutdown `Drain`
+(`server/control.rs:172`), and multiplexes in one `select!`:
 
 - control reader (`read_message`), `open_rx` forwarder, `children.join_next`
   (`run_service` tasks), `context.cancel`, and a pinned `control_idle` sleep
-  reset on `Register`/`Unregister`/`OpenReject`/`Ping`
-  (`server/control.rs:165,165,165,165`; idle budget `server/control.rs:150-153`).
+  reset on `Register`/`Unregister`/`OpenReject`/`Ping` and on every outbound
+  `open_rx` write (`server/control.rs:176-178,193,209,220,232,251`).
 - Each registered service spawns `run_service` in `children: JoinSet`
-  (`server/control.rs:310`); each external accept spawns a relay task in
-  `run_service`'s `relays: JoinSet` (`server/service.rs:111-134`).
+  (`server/control.rs:415-422`); each external accept spawns a relay task in
+  `run_service`'s `relays: JoinSet` (`server/service.rs:112-137`).
 
 ### 5.3 Semaphores and guards
 
 | Primitive | Ceiling (default) | Scope | Where |
 |---|---|---|---|
-| `admission` | `policy.limits.accepted_handshakes` (64) | whole server, unauthenticated conns | `server/accept.rs:102`, `635`, `550`, `654` |
-| `HandshakeGuard` | counts `handshakes` + high-water | per accepted conn until auth/data-hello | `server/session.rs:135-156`, `562`, `661`, `775`, `948`, `1081`, `1094` |
-| `sessions` map + `SessionGuard` | `policy.limits.sessions` (128) | whole server | `server/control.rs:131-138`, `1448-1478` |
-| `connection_admission` | `policy.limits.active_connections_per_session` (128) | per session (pending-wait + relay) | `server/control.rs:130-132`, `1330-1335` |
-| `pending` map | `policy.limits.pending_per_session` (128) | per session | `server/service.rs:94-102` |
+| `admission` | `policy.limits.accepted_handshakes` (64) | whole server, unauthenticated conns | `server/accept.rs:49,66-75,133,204` |
+| `HandshakeGuard` | counts `handshakes` + high-water | per accepted conn until auth/data-hello | `server/session.rs:145-163`, `server/accept.rs:139,213`, `server/control.rs:138` |
+| `sessions` map + `SessionGuard` | `policy.limits.sessions` (128) | whole server | `server/control.rs:157-163`, `server/session.rs:62-74,95-106` |
+| `connection_admission` | `policy.limits.active_connections_per_session` (128) | per session (pending-wait + relay) | `server/control.rs:151-153` |
+| `pending` map | `policy.limits.pending_per_session` (128) | per session | `server/service.rs:91-101` |
 | `ActiveConnectionGuard` | counts `active_connections` + high-water | per relay task (holds permit) | `server/service.rs:30-57` |
-| `stream_admission` (QUIC) | `max_active_data_streams` (default active-per-session) or test override | per QUIC connection | `server/accept.rs:388-396`, `762-766` |
-| `open_tx/open_rx` | `policy.limits.control_queue` (128) | per session control→writer | `server/control.rs:145-146`, `1352` |
+| `stream_admission` (QUIC) | `max_active_data_streams` (default active-per-session) or test override | per QUIC connection | `server/accept.rs:430,464-468` |
+| `open_tx/open_rx` | `policy.limits.control_queue` (128) | per session control→writer | `server/control.rs:171-172` |
 
 `SessionGuard::drop` also reconciles `services` from the binds list length
-delta (`server/session.rs:112-126`) — a deliberate single-source-of-truth choice
+delta (`server/session.rs:116-130`) — a deliberate single-source-of-truth choice
 (`binds` is authoritative for service count on session exit).
 
 ### 5.4 Shutdown with `shutdown_grace` (default 1 s)
 
-TCP (`server/accept.rs:96-145`) and QUIC (`server/accept.rs:147-212`) share `AcceptContext::drain` (`server/accept.rs:77-95`):
+TCP (`server/accept.rs:163-165`) and QUIC (`server/accept.rs:235-237`) share
+`AcceptContext::drain` (`server/accept.rs:79-113`):
 
 1. Break accept loop on `cancel`.
-2. Upgrade weak sessions → `active`; `try_send(Drain{deadline_ms: grace_ms})`
-   to each `control_tx` (bounded, so never blocks shutdown).
-3. `sleep(policy.timeouts.shutdown_grace)` — gives clients 1 s to observe `Drain`.
+2. Loop until the grace deadline: upgrade weak sessions → `active`,
+   `try_send(Drain{deadline_ms: grace_ms})` to each not-yet-notified
+   `control_tx` (bounded, so never blocks shutdown; a full queue logs
+   `drain_queue_full`), re-collecting every 25 ms so a Session that appears
+   mid-grace still gets notified.
+3. `sleep` until `timeouts.shutdown_grace` — gives clients 1 s to observe `Drain`.
 4. Cancel every session token (cascades via `child_token` to services/relays).
 5. `handlers.abort_all()` + drain `join_next` (records panics).
 
-`serve_control` teardown (`server/control.rs:226-250`) first honors a negotiated peer drain deadline (capability 2, §3.2), then cancels services,
+`serve_control` teardown (`server/control.rs:275-285`) first honors a negotiated peer drain deadline (capability 2, §3.2), then cancels services,
 `abort_all`s children, drains completions, then `remove_all_pending`.
-`run_service` exit (`server/service.rs:141-143`) aborts relays, drains them, then
+`run_service` exit (`server/service.rs:144-146`) aborts relays, drains them, then
 `remove_service_pending`. `server_shutdown_cancels_incomplete_tls_and_authentication_handshakes`
-(`server_tests/tcp.rs:1440-1494`) proves `active_handshakes` returns to 0 and no
+(`server_tests/tcp.rs:1440-1492`) proves `active_handshakes` returns to 0 and no
 session is left behind.
 
 ### 5.5 `JoinError` panic accounting
 
-`Counters::record_join_result` (`common.rs:428-433`): `is_panic` →
+`Counters::record_join_result` (`common.rs:463-468`): `is_panic` →
 `task_panics++`, `last_termination = Internal`. Call sites:
-`server_loop` (`server/accept.rs:137-139`), QUIC loops (`server/accept.rs:137-139`),
-`serve_control` children (`server/control.rs:210-212`), `run_service` relays
-(`server/service.rs:136-138`), QUIC streams (`server/accept.rs:441-443`). The QUIC
+`server_loop` (`server/accept.rs:158-160`), QUIC loop (`server/accept.rs:230-232`),
+`serve_control` children (`server/control.rs:254-256`), `run_service` relays
+(`server/service.rs:139-141`), QUIC streams (`server/accept.rs:477-479,485-487`). The QUIC
 control task additionally distinguishes panic vs cancel explicitly
-(`server/accept.rs:414-424`). Covered by
+(`server/accept.rs:450-459`). Covered by
 `owned_task_panic_is_counted_as_internal_termination`
-(`server_tests/tcp.rs:1427-1439`).
+(`server_tests/tcp.rs:1427-1437`).
 
 ---
 
@@ -493,53 +524,56 @@ control task additionally distinguishes panic vs cancel explicitly
 
 ### 6.1 Constants (all finite ceilings live in `RuntimePolicy`)
 
-`server/auth.rs:20-27` holds only the auth-throttle constants plus two
-`cfg(test)` aliases:
+`server/auth.rs:22-28` holds only the auth-throttle constants (no
+`cfg(test)` aliases — `MAX_SESSIONS`/`MAX_HANDSHAKES` live in
+`server_tests.rs:35-36`):
 
 | Constant | Value | Where it is used |
 |---|---|---|
-| `AUTH_FAILURES_PER_SOURCE` | 10 | `AuthFailureLimiter`, `server/accept.rs:103-107`, `636-640` |
-| `AUTH_FAILURE_WINDOW` | 60 s | sliding window prune, `server/auth.rs:75-92` |
-| `MAX_AUTH_SOURCES` | 1024 | bounded table, `server/accept.rs:103-107` |
-| `AUTH_FAILURE_DELAY` | 100 ms | after each failed token check, `server/control.rs:107` |
+| `AUTH_FAILURES_PER_SOURCE` | 10 | `AuthFailureLimiter::new`, `server/accept.rs:50-54` |
+| `AUTH_FAILURE_WINDOW` | 60 s | sliding window prune, `server/auth.rs:23,94-104` |
+| `MAX_AUTH_SOURCES` | 1024 | bounded table, `server/accept.rs:50-54` |
+| `AUTH_FAILURE_DELAY` | 100 ms | after each failed token check, `server/auth.rs:25,123` |
 | `MAX_SESSIONS` (`cfg(test)` only) | 128 | test-only alias of `limits.sessions` |
 | `MAX_HANDSHAKES` (`cfg(test)` only) | 64 | test-only alias of `limits.accepted_handshakes` |
 
 Admission ceilings and timeouts are `RuntimePolicy`
-(`common.rs:196-316`; `ResourceLimits` `common.rs:196-245`,
-`TimeoutPolicy` `common.rs:250-302`, `RuntimePolicy` `common.rs:304-316`):
+(`common.rs:213-333`; `ResourceLimits` `common.rs:213-261`,
+`TimeoutPolicy` `common.rs:267-319`, `RuntimePolicy` `common.rs:323-333`):
 
 | Policy field | Default | Enforced at |
 |---|---|---|
-| `limits.sessions` | 128 | `serve_control` insert, `server/control.rs:137` |
-| `limits.pending_per_session` | 128 | `run_service` insert, `server/service.rs:94` |
+| `limits.sessions` | 128 | `SessionContext::register`, `server/control.rs:157-159`, `server/session.rs:62-74` |
+| `limits.pending_per_session` | 128 | `run_service` insert, `server/service.rs:93` |
 | `limits.active_connections_per_session` | 128 | `connection_admission` + QUIC `stream_admission` |
-| `limits.control_queue` | 128 | per-session `open_tx/open_rx`, `server/control.rs:145` |
-| `limits.accepted_handshakes` | 64 | accept-loop `admission`, `server/accept.rs:102,167` |
-| `limits.services_per_session` | 64 | registration ceiling with `BindPolicy`, `server/control.rs:253` |
-| `timeouts.handshake` | 10 s | TLS accept, WSS upgrade, first-frame read, `Auth` read, QUIC control/data first frames (`server/accept.rs:234,891,900,926,245,234-241,804-808`) |
-| `timeouts.control_idle` | 90 s | whole control session; reset on Register/Unregister/OpenReject/Ping (`server/control.rs:150-153,165,165,165,165`) |
-| `timeouts.pending_connection` | 30 s | pending entry expiry + `data_rx` wait (`server/service.rs:93,115`) |
-| `timeouts.relay_drain` | 15 s | `relay_with_options` bounded drain (`server/service.rs:121`) |
-| `timeouts.shutdown_grace` | 1 s | `Drain` → cancel gap (`server/accept.rs:86,700`) |
+| `limits.control_queue` | 128 | per-session `open_tx/open_rx`, `server/control.rs:171` |
+| `limits.accepted_handshakes` | 64 | accept-loop `admission`, `server/accept.rs:49,133,204` |
+| `limits.services_per_session` | 64 | registration ceiling with `BindPolicy`, `server/control.rs:312-315` |
+| `timeouts.handshake` | 10 s | TLS accept, WSS upgrade, first-frame read, `Auth` read, QUIC control/data first frames (`server/accept.rs:256-269,330,338,379-385,411-418,502-505`, `server/control.rs:111,121`) |
+| `timeouts.control_idle` | 90 s | whole control session; reset on Register/Unregister/OpenReject/Ping and on outbound `open_rx` writes (`server/control.rs:176-178,193,209,220,232,251`) |
+| `timeouts.pending_connection` | 30 s | pending entry expiry + `data_rx` wait (`server/service.rs:92,116`) |
+| `timeouts.relay_drain` | 15 s | `relay_with_options` bounded drain (`server/service.rs:124`) |
+| `timeouts.shutdown_grace` | 1 s | `Drain` → cancel gap (`server/accept.rs:80-82,101-106`, `server/control.rs:267`) |
 
 `validate_config` additionally caps TLS PEMs at `MAX_FRAME_BYTES`
-(`client.rs:650-660`).
+(`server/config.rs:133-147`).
 
 ### 6.2 Per-source auth throttle
 
-`AuthFailureLimiter` (`server/auth.rs:30-86`): `Mutex<HashMap<IpAddr,
+`AuthFailureLimiter` (`server/auth.rs:33-105`): `Mutex<HashMap<IpAddr,
 VecDeque<Instant>>>` + `threshold/window/max_sources`. `prune` evicts
 entries older than the window and drops empty deques, so the table cannot
 grow unboundedly and never delays successful auth (doc comment
-`server/auth.rs:30-31`).
+`server/auth.rs:30-32`). `record_failure_at` additionally caps each in-window
+deque at `threshold` entries, dropping the oldest, so a single-IP flood inside
+one window cannot grow the table (`server/auth.rs:87-91`).
 
-- `is_blocked(source)` (`server/auth.rs:51-60`): prune, then: known source with
+- `is_blocked` (`server/auth.rs:50-64`): prune, then: known source with
   `len >= 10` → blocked. An **unknown** source is never blocked, including when
   the table is full: the ceiling bounds memory, and treating saturation as a
   verdict let an attacker fill the table with spoofed addresses and lock out
   legitimate new peers.
-- `record_failure(source)` (`server/auth.rs:62-76`): prune, then: unknown +
+- `record_failure` (`server/auth.rs:66-92`): prune, then: unknown +
   full → drop (no insert, `auth_source_table_saturated` debug log); else push
   timestamp.
 - Enforcement (`server/control.rs`): the blocklist check runs **after**
@@ -562,15 +596,15 @@ expiry prunes to an empty table).
 
 | Trigger | Response | Accounting |
 |---|---|---|
-| `admission.try_acquire` fails (TCP) | skip accept | `rejected++`, `ResourceExhausted` (`server/accept.rs:112-117`) |
-| `admission.try_acquire` fails (QUIC) | close QUIC conn `"handshake limit reached"` | same (`server/accept.rs:112-117`) |
-| `active.len() >= policy.limits.sessions` | reject session after auth | `ResourceExhausted` termination, `Authorization` error (`server/control.rs:137-139`); stale weaks pruned first (`server/control.rs:132`) |
-| `pending.len() >= policy.limits.pending_per_session` | drop external accept | `rejected++`, `ResourceExhausted` (`server/service.rs:94-98`) |
+| `admission.try_acquire` fails (TCP) | skip accept | `rejected++`, `ResourceExhausted` (`server/accept.rs:66-75,133`) |
+| `admission.try_acquire` fails (QUIC) | close QUIC conn `"handshake limit reached"` | same (`server/accept.rs:204-207`) |
+| `active.len() >= policy.limits.sessions` | reject session after auth | `ResourceExhausted` termination, `Authorization` error (`server/control.rs:157-162`); stale weaks pruned first (`server/session.rs:67-68`) |
+| `pending.len() >= policy.limits.pending_per_session` | drop external accept | `rejected++`, `ResourceExhausted` (`server/service.rs:93-97`) |
 | `connection_admission.try_acquire` fails | drop external accept | same (`server/service.rs:81-85`) |
-| QUIC `stream_admission.try_acquire` fails | skip stream (no `DataHello` read) | same (`server/accept.rs:428-432`) |
-| `opens.try_send` fails (control queue full) | remove just-created pending | `pending--`, `rejected++` (`server/service.rs:103-107`) |
-| `services.len() >= bind_policy.max ⩓ policy.limits.services_per_session` | `Error{code:5}` | `rejected++`, `ResourceExhausted` (`server/control.rs:253-259`) |
-| `ConnectionId::generate` fails (no entropy) | drop external accept | `rejected++` (`server/service.rs:87-90`) |
+| QUIC `stream_admission.try_acquire` fails | skip stream (no `DataHello` read) | same (`server/accept.rs:464-468`) |
+| `opens.try_send` fails (control queue full) | remove just-created pending | `pending--`, `rejected++` (`server/service.rs:102-107`) |
+| `services.len() >= bind_policy.max ⩓ policy.limits.services_per_session` | `Error{code:5}` | `rejected++`, `ResourceExhausted` (`server/control.rs:312-329`) |
+| `ConnectionId::generate` fails (no entropy) | drop external accept | `rejected++` (`server/service.rs:86-89`) |
 
 `rejected_connections` is the single funnel for all of the above plus every
 `accept_data_hello` rejection and every registration denial — check it first
@@ -580,31 +614,31 @@ when triaging `last_termination = ResourceExhausted`.
 
 ## 7. mTLS profile: bearer-still-required, leaf SHA-256 principal
 
-Feature `mtls` (`docs/SECURITY.md:32-39`):
+Feature `mtls` (`docs/SECURITY.md:52-59`):
 
 - Trust roots are explicit server input (`client_ca_pem` on `ServerBuilder`,
-  `server/config.rs:96-101`; `bind_mtls[*]`, `server/config.rs:77-122`); client still
+  `server/config.rs:103-106`; `bind_mtls[*]`, `server.rs:175-202`); client still
   validates server name + system/configured roots. No
   enrollment/revocation service.
 - **Bearer token is still required.** mTLS adds identity; it does not replace
   `Auth`. `mtls_requires_trusted_client_certificate_and_keeps_server_name_validation`
-  (`server_tests/mtls.rs:5-136`, `mtls`) proves trusted-cert + correct token registers while
+  (`server_tests/mtls.rs:5-133`, `mtls`) proves trusted-cert + correct token registers while
   rogue-CA, wrong-SNI, and cert-less clients never register.
-- Principal = `SHA-256(leaf DER)` (`server/tls.rs:35-63`), extracted from the
-  first peer certificate in `handle_connection` (`server/accept.rs:240-246`) and
-  stored in `ConnectionContext.principal` → `SessionContext.principal`
-  (`server/accept.rs:255`, `1102-1112`).
+- Principal = `SHA-256(leaf DER)` (`server/tls.rs:60-67`), extracted from the
+  first peer certificate in `accept_tls` (`server/accept.rs:340-346`) and
+  carried as `ControlAdmission.principal` (`server/accept.rs:257,298`) →
+  `SessionContext.principal` (`server/control.rs:148`).
 - Enforcement is on **both** planes: `accept_data_hello` rejects
   `session.principal != data principal` as `Authentication`
-  (`server/pending.rs:52-61`). `None != Some([..])` also rejects, so a cert-less
+  (`server/pending.rs:51-60`). `None != Some([..])` also rejects, so a cert-less
   data dial cannot attach to a pinned session and vice versa.
   `mtls_principal_mismatch_cannot_attach_data_stream`
   (`server_tests/mtls.rs:137-187`, `mtls`) proves the pending entry survives a principal
   mismatch (no consumption, no decrement).
 - QUIC has no mTLS: `handle_quic_connection` / `handle_quic_data_stream`
-  hardcode `principal: None` (`server/accept.rs:192`, `773`, `800-816`), the
+  hardcode `principal: None` (`server/accept.rs:442,515`), the
   profile gate `validate_server_profile` rejects QUIC+mTLS
-  (`server/config.rs:165-169`), and the client rejects QUIC+mTLS combinations
+  (`server/config.rs:165-176`), and the client rejects QUIC+mTLS combinations
   (see `client.md`).
 
 Reviewer note: only the **first** peer certificate is pinned; intermediates
@@ -615,132 +649,152 @@ new leaf → new principal → new session (old pendings are unusable).
 
 ## 8. Observability: snapshot fields the server updates
 
-`Snapshot` / `Counters` live in `common.rs:136-160`, `319-344`
-(`snapshot()` at `common.rs:355-395`).
-The server updates every field except `connected`/`reconnects`/`open_tasks`
+`Snapshot` / `Counters` live in `common.rs:154-177`, `337-361`
+(`snapshot()` at `common.rs:372-414`).
+The server updates every field except `connected`, `reconnects`,
+`active_client_open_tasks` / `high_water_client_open_tasks`, and `heartbeat`
 (client-side concerns):
 
 | Snapshot field | Server writer |
 |---|---|
-| `active_sessions` / `high_water_sessions` | `fetch_add` on admit (`server/control.rs:138-144`), `fetch_sub` in `SessionGuard::drop` (`server/session.rs:108-111`) |
-| `registered_services` / `high_water_services` | `fetch_add` on `RegisterAck` (`server/control.rs:326-327`), `fetch_sub` on `Unregister` (`server/control.rs:184`) and session-exit reconcile (`server/session.rs:123-126`) |
-| `pending_connections` / `high_water_pending` | `fetch_add` on insert (`server/service.rs:101-102`), `fetch_sub` on consume (`server/pending.rs:73-76`), relay-task GC (`server/service.rs:117-119`), `remove_service/all_pending` (`server/pending.rs:99-121`), `SessionContext::drop` (`server/session.rs:45-52`); unit-pinned in `server_tests/tcp.rs:1248-1376` |
-| `active_connections` / `high_water_active` | `ActiveConnectionGuard::new/drop` (`server/service.rs:35-57`) |
-| `active_handshakes` / `high_water_handshakes` | `HandshakeGuard::new/drop` (`server/session.rs:137-156`) |
+| `active_sessions` / `high_water_sessions` | `SessionGuard::new` on admit (`server/session.rs:95-106`, called from `server/control.rs:163`), `fetch_sub` in `SessionGuard::drop` (`server/session.rs:112-115`) |
+| `registered_services` / `high_water_services` | `fetch_add` on `RegisterAck` (`server/control.rs:431-437`), `fetch_sub` on `Unregister` (`server/control.rs:214`) and session-exit reconcile (`server/session.rs:127-130`) |
+| `pending_connections` / `high_water_pending_connections` | `fetch_add` on insert (`server/service.rs:98-100`), `fetch_sub` on consume (`server/pending.rs:64-69`), relay-task GC (`server/service.rs:118-121`), `remove_service/all_pending` (`server/pending.rs:104-126`), `SessionContext::drop` (`server/session.rs:49-56`); unit-pinned in `server_tests/tcp.rs:1248-1374` |
+| `active_connections` / `high_water_active_connections` | `ActiveConnectionGuard::new/drop` (`server/service.rs:36-57`) |
+| `active_handshakes` / `high_water_handshakes` | `HandshakeGuard::new/drop` (`server/session.rs:145-163`) |
 | `task_panics`, `last_termination` | `record_join_result` on every `JoinSet` drain (§5.5); `record_termination` on handler errors, admission-full, session-full, service-ceiling |
 | `rejected_connections` | every auth/reg/pending/data-hello/admission denial (§6.3) |
-| `bytes_upstream/downstream` | relay reports incl. failure partials (`server/service.rs:122-131`) |
-| `effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>` | push on register (`server/control.rs:307`), retain on unregister (`server/control.rs:307`), retain on session exit (`server/session.rs:120`); CLI polls it every 250 ms |
-| `resource_limits` | `policy.limits` (`common.rs:377`) — echoes the **selected** `RuntimePolicy` (128/64/128/128/64/128/128/32 incl. `client_command_queue: 32` by default, `common.rs:232-245`), pinned by `server_tests/tcp.rs:882` |
+| `bytes_upstream/downstream` | relay reports incl. failure partials (`server/service.rs:125-134`) |
+| `effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>` | push on register (`server/control.rs:408-412`), retain on unregister (`server/control.rs:213`), retain on session exit (`server/session.rs:124`); CLI polls it every 250 ms |
+| `resource_limits` | `policy.limits` (`common.rs:394`) — echoes the **selected** `RuntimePolicy` (128/64/128/128/64/128/128/32 incl. `client_command_queue: 32` by default, `common.rs:249-261`), pinned by `server_tests/tcp.rs:882` |
 
 `last_termination` retains only the most recent category, never history or
-error text (`docs/OPERATIONS.md:34-35`). `Snapshot` never carries secrets;
+error text (`common.rs:390-393,417-420`). `Snapshot` never carries secrets;
 proxy credentials and tokens are redacted from diagnostics
-(`docs/SECURITY.md:76-78`).
+(`docs/SECURITY.md:93-97`).
 
 ---
 
 ## 9. Test inventory (`server_tests.rs` + `server_tests/`)
 
-Harness (`crates/eggtunnel/src/server_tests.rs`, 232 lines): `test_session`
-(`server_tests.rs:17-40`) builds an isolated `SessionContext` + weak map +
-counters; `test_data_stream` (`server_tests.rs:42-45`) is a 32-byte duplex;
-`builder` (`server_tests.rs:47-57`) is a `ServerBuilder` with dummy cert/key;
-`certificate` / `mtls_certificates` (`server_tests.rs:108-177`) mint rcgen
-fixtures; `roundtrip` (`server_tests.rs:179-189`) writes + shutdown +
+Harness (`crates/eggtunnel/src/server_tests.rs`, 329 lines): `test_session`
+(`server_tests.rs:38-61`) builds an isolated `SessionContext` + weak map +
+counters; `test_data_stream` (`server_tests.rs:63-66`) is a 32-byte duplex;
+`builder` (`server_tests.rs:68-78`) is a `ServerBuilder` with dummy cert/key;
+`certificate` / `mtls_certificates` (`server_tests.rs:153-158,161-222`) mint rcgen
+fixtures; `roundtrip` (`server_tests.rs:274-284`) writes + shutdown +
 `read_to_end` against an effective bind. `ServerBuilder::validate` matrix
-(`server_tests.rs:59-106`): TCP default ok, QUIC ok, WebSocket ok, TCP+mTLS
-ok, QUIC+mTLS rejected, WebSocket+mTLS rejected. Module wiring
-(`server_tests.rs:218-232`): `tcp` always; `mtls` / `quic` / `websocket` /
-`proxy` behind their features.
+(`server_tests.rs:80-151`): TCP default ok, public-bind/policy sync ok, empty +
+oversize TLS material rejected, QUIC ok, WebSocket ok, TCP+mTLS
+ok, QUIC+mTLS rejected, WebSocket+mTLS rejected. Harness-local units:
+`token_comparison_is_exact_across_lengths_and_contents`
+(`server_tests.rs:224-247`) and
+`session_guard_removes_its_registry_entry_on_every_path`
+(`server_tests.rs:249-272`). Module wiring
+(`server_tests.rs:313-328`): `tcp` always; `mtls` / `quic` / `websocket` /
+`proxy` behind their features — the QUIC and WebSocket suites need both halves
+of the role slice (`quic-client` + `quic-server`, `websocket-client` +
+`websocket-server`) because they exercise client and server together.
 
-`server_tests/tcp.rs` (1657 lines) — core TCP/TLS lifecycle:
+`server_tests/tcp.rs` (1952 lines) — core TCP/TLS lifecycle:
 
-1. `tcp_tls_reverse_session_registers_and_relays_data` (`tcp.rs:800-933`)
+1. `tcp_tls_reverse_session_registers_and_relays_data` (`tcp.rs:800-930`)
    — canonical end-to-end: 2 services register (2 `effective_binds`),
    parallel echo roundtrips, byte counters > 0 on both ends,
    `resource_limits.sessions == 128`, high-waters for
    services/active/pending/handshakes, `Unregister` shrinks binds to 1,
    client shutdown drains the active relay to 0/0.
-2. `bad_token_does_not_create_a_registered_session` (`tcp.rs:976-1020`)
+2. `bad_token_does_not_create_a_registered_session` (`tcp.rs:976-1018`)
    — wrong bearer → `rejected++`, `last_termination == Authentication`, 0
    sessions, client never reconnects (auth is non-retryable).
 3. `public_service_bind_is_denied_without_explicit_policy`
-   (`tcp.rs:1063-1111`) — `RequestedBind::Ip{2001:db8::1, 9000}` with
+   (`tcp.rs:1063-1109`) — `RequestedBind::Ip{2001:db8::1, 9000}` with
    default policy → `rejected++`, 0 services, empty `effective_binds`.
 4. `data_hello_is_session_service_bound_and_single_use`
-   (`tcp.rs:1248-1308`) — unit: wrong `SessionId` → `Authentication` and
+   (`tcp.rs:1248-1306`) — unit: wrong `SessionId` → `Authentication` and
    pending survives; correct triple consumes via `data_tx`; replay of the
    same triple → `Authorization` (single-use proven without sockets).
 5. `wrong_service_and_expired_data_hellos_consume_and_reject_pending_state`
-   (`tcp.rs:1309-1376`) — unit: wrong `ServiceId` and expired entries are
+   (`tcp.rs:1309-1374`) — unit: wrong `ServiceId` and expired entries are
    consumed (map + counter return to 0), closing the reuse window.
 6. `unauthenticated_handshake_admission_caps_at_limit_and_recovers`
-   (`tcp.rs:1495-1538`) — 65 bare TCP connects → `active_handshakes ==
+   (`tcp.rs:1495-1536`) — 65 bare TCP connects → `active_handshakes ==
    64` + `rejected > 0`; dropping peers returns handshakes to 0 (no leak).
 7. `auth_failure_limiter_is_per_source_bounded_and_expires`
-   (`tcp.rs:1539-1562`) — pure unit: threshold blocks per-source, full
+   (`tcp.rs:1539-1563`) — pure unit: threshold blocks per-source, full
    table (max 1) rejects an unknown source, window expiry prunes to empty.
 8. `bind_policy_enforces_address_port_and_ephemeral_rules`
-   (`tcp.rs:1563-1623`) — unit over `bind_to_socket`: allowlisted
+   (`tcp.rs:1566-1618`) plus `loopback_binds_respect_the_address_allowlist`
+   (`tcp.rs:1621-1647`) — unit over `bind_to_socket`: allowlisted
    addr+port ok; ephemeral-off, out-of-range port, and non-allowlisted addr
-   all err.
+   all err; a `Loopback` request is gated by the same allowlist.
 9. `server_shutdown_cancels_incomplete_tls_and_authentication_handshakes`
-   (`tcp.rs:1440-1494`) — bare TCP + post-`ServerHello` control peer
+   (`tcp.rs:1440-1492`) — bare TCP + post-`ServerHello` control peer
    hold 2 handshakes; `shutdown()` returns both handshake and session counts
    to 0.
 10. `repeated_client_server_start_stop_returns_runtime_counts_to_zero`
-    (`tcp.rs:1377-1426`) — 3 bind/start/shutdown cycles leave sessions,
+    (`tcp.rs:1377-1424`) — 3 bind/start/shutdown cycles leave sessions,
     services, pending, active, handshakes all at 0 (no cross-cycle leak).
 11. `refused_target_rejects_external_connection_and_releases_pending_capacity`
-    (`tcp.rs:1112-1179`, `OpenReject` path),
+    (`tcp.rs:1112-1177`, `OpenReject` path),
     `client_reconnects_and_restores_services_in_a_new_session_generation`
-    (`tcp.rs:1180-1247`, new `SessionId` after server restart),
+    (`tcp.rs:1180-1245`, new `SessionId` after server restart),
     `owned_task_panic_is_counted_as_internal_termination`
-    (`tcp.rs:1427-1439`, panic accounting).
+    (`tcp.rs:1427-1437`, panic accounting).
 12. Dynamic-registration + policy surface: `acknowledged_dynamic_service_…`
-    (`tcp.rs:4-134`), `dynamic_registration_maps_server_service_limit_…`
-    (`tcp.rs:135-192`), custom-policy/timeout probes
-    (`tcp.rs:527-799`: pending-limit saturation, pending-timeout expiry,
+    (`tcp.rs:4-132`), `dynamic_registration_maps_server_service_limit_…`
+    (`tcp.rs:135-189`), custom-policy/timeout probes
+    (`tcp.rs:527-797`: pending-limit saturation, pending-timeout expiry,
     handshake-timeout, control-idle-timeout).
+13. Negotiation / drain units over a raw control socket
+    (`tcp.rs:1770-1940`): the three capability shapes and
+    `negotiated_drain_deadline_waits_before_forced_teardown`
+    (`tcp.rs:1844-1920`); also `wrong_tls_server_name_is_rejected_before_authentication`
+    (`tcp.rs:1021-1060`), `application_target_connector_relays_without_loopback_target`
+    (`tcp.rs:405-456`), and `client_cancellation_releases_pending_direct_connector_and_external_peer`
+    (`tcp.rs:459-524`). Ignored soak:
+    `qualification_tcp_tls_reconnect_and_connection_churn_soak`
+    (`tcp.rs:193-402`).
 
 `server_tests/mtls.rs` (187 lines, `mtls`):
 `mtls_requires_trusted_client_certificate_and_keeps_server_name_validation`
-(`mtls.rs:5-136`) — trusted leaf registers; rogue CA, wrong SNI, and missing
+(`mtls.rs:5-133`) — trusted leaf registers; rogue CA, wrong SNI, and missing
 cert never register;
 `mtls_principal_mismatch_cannot_attach_data_stream` (`mtls.rs:137-187`) —
 mismatched data principal is rejected and the pending slot survives.
 
-`server_tests/quic.rs` (893 lines, `quic`):
+`server_tests/quic.rs` (940 lines, `quic-client` + `quic-server`):
 `quic_session_multiplexes_isolated_data_streams_for_two_services`
-(`quic.rs:6-93`),
+(`quic.rs:6-89`),
 `quic_wrong_session_data_hello_is_rejected_and_pending_entry_survives`
-(`quic.rs:287-405`), `quic_replay_data_hello_on_second_stream_is_rejected`
-(`quic.rs:406-529`),
+(`quic.rs:361-476`), `quic_replay_data_hello_on_second_stream_is_rejected`
+(`quic.rs:480-600`),
 `quic_stale_old_generation_data_hello_is_rejected_after_reconnect`
-(`quic.rs:530-640`),
+(`quic.rs:604-711`),
 `quic_stream_saturation_recovers_capacity_and_keeps_unrelated_streams_alive`
-(`quic.rs:641-792`, uses `bind_quic_with_admission_for_test`,
-`server/config.rs:65-77`),
+(`quic.rs:715-831`, uses `bind_quic_with_admission_for_test`,
+`server.rs:106-173`),
 `quic_connection_replacement_creates_new_session_and_reregisters_services`
-(`quic.rs:213-286`), `quic_half_close_preserves_response_after_request_eof`
-(`quic.rs:816-893`), plus the ignored
-`qualification_quic_stream_churn_soak` (`quic.rs:94-212`).
+(`quic.rs:287-357`), `quic_concurrent_dynamic_registrations_correlate`
+(`quic.rs:216-283`), `quic_half_close_preserves_response_after_request_eof`
+(`quic.rs:863-940`), plus the ignored
+`qualification_quic_stream_churn_soak` (`quic.rs:94-213`).
 
-`server_tests/websocket.rs` (347 lines, `websocket`):
+`server_tests/websocket.rs` (405 lines, `websocket-client` + `websocket-server`):
 `websocket_tls_session_registers_and_relays_data_paths`
-(`websocket.rs:17-76`), `wss_peer_close_during_active_relay_terminates_cleanly`
-(`websocket.rs:195-273`),
+(`websocket.rs:75-130`), `wss_peer_close_during_active_relay_terminates_cleanly`
+(`websocket.rs:253-328`),
 `wss_payload_larger_than_message_cap_roundtrips_multiple_frames`
-(`websocket.rs:274-347`), plus the ignored
-`qualification_wss_connection_churn_soak` (`websocket.rs:77-194`).
+(`websocket.rs:332-405`), `websocket_concurrent_dynamic_registrations_correlate`
+(`websocket.rs:19-71`), plus the ignored
+`qualification_wss_connection_churn_soak` (`websocket.rs:135-249`).
 
-`server_tests/proxy.rs` (905 lines, `outbound-proxy`, client-side paths —
-see `client.md` for the matrix): HTTP CONNECT (`proxy.rs:5-90`), SOCKS5
-(`proxy.rs:91-188`), refused-endpoint secrecy (`proxy.rs:189-252`),
-handshake-timeout (`proxy.rs:253-322`), cancellation (`proxy.rs:323-380`),
-HTTP/SOCKS5 auth success + failure (`proxy.rs:381-772`), two-hop
-SOCKS5→HTTP chain (`proxy.rs:773-905`).
+`server_tests/proxy.rs` (899 lines, `outbound-proxy`, client-side paths —
+see `client.md` for the matrix): HTTP CONNECT (`proxy.rs:5-87`), SOCKS5
+(`proxy.rs:91-186`), refused-endpoint secrecy (`proxy.rs:189-243`),
+handshake-timeout (`proxy.rs:247-313`), cancellation (`proxy.rs:317-371`),
+HTTP/SOCKS5 auth success + failure (`proxy.rs:375-764`), two-hop
+SOCKS5→HTTP chain (`proxy.rs:767-899`).
 
 ---
 
@@ -748,16 +802,16 @@ SOCKS5→HTTP chain (`proxy.rs:773-905`).
 
 | # | Risk | Where to look | What good looks like / probe |
 |---|---|---|---|
-| 1 | **Listener hijack** — client requests a public/ephemeral bind it should not get | `server/control.rs:176-195`, `common.rs:491-531`, `server_tests/tcp.rs:1063-1111,1563-1623` | `bind_to_socket` runs **before** `TcpListener::bind`; default denies non-loopback; allowlist + port-range + ephemeral bits all enforced. Probe: register `Ip{0.0.0.0,80}` and ephemeral-0 under a restrictive policy; expect codes 2/3, no listener. |
-| 2 | **Session confusion** — data hello attaches to the wrong session/service | `server/pending.rs:30-95`, tests `server_tests/tcp.rs:1248-1376`, `server_tests/quic.rs:287-640` | triple `(session, service, connection)` checked in order; wrong-session → `Authentication` without consuming; wrong-service/expired → `Authorization` with consumption. Probe: cross-wire two concurrent sessions' ids; exactly one `rejected++`, no relay. |
-| 3 | **Pending exhaustion / GC** — attacker or churn fills 128 slots | `server/service.rs:94-107,115-119,99-121,45-52` | insert capped; `try_send` failure rolls back; relay timeout GCs; unregister/session-exit/`drop` reconcile counters. Probe: 128 hung externals + 1 more → `ResourceExhausted`; cancel session → `pending == 0`. Watch for double-`fetch_sub` (consume at `1009` vs relay-task GC at `1366` is guarded by `remove` return). |
-| 4 | **Throttle bypass behind NAT** — shared source IP, table-full behavior | `server/control.rs:83-124,30-86`, `docs/SECURITY.md:25-30` | throttle is per-source-IP, process-local; 10/60 s, 1024 sources, 100 ms delay, full-table rejects unknowns. Behind shared NAT one bad actor blocks the whole egress IP until the window expires — documented, not fixed. Probe: 10 fails from one IP blocks an innocent second client on the same IP; confirm ops runbook accounts for it. |
-| 5 | **Shutdown races** — `Drain` lost, relays dangling, counters stuck | `server/accept.rs:78-96,213-232,215-225,141-143`, tests `server_tests/tcp.rs:1377-1494` | `Drain{grace}` via `try_send`, grace sleep, session-cancel cascade, `abort_all` + drain; `serve_control`/`run_service` clear pendings; start/stop cycles return all counts to 0. Probe: kill server mid-relay with an active external; client must see `Drain`, external must see EOF, snapshot must settle to 0/0. |
-| 6 | **Handshake pile-up** — pre-auth work before admission | `server/accept.rs:112,112,135-156,234,891` | TCP+QUIC both `try_acquire` **before** spawning; `HandshakeGuard` counts until auth/data-hello; full → `rejected++` without reading. Residual: QUIC/TLS adapter work below Eggtunnel (Eggress caps 1024 conns / 4096 streams, `docs/SECURITY.md:49-62`). Probe: SYN/TLS flood → handshakes pinned at 64, sessions stay 0. |
-| 7 | **mTLS downgrade** — bearer-only data dial on a pinned session | `server/accept.rs:240-246,255,52-61,125-135` | principal pinned at session creation and rechecked on every `DataHello`; `None != Some` rejects. Probe: control with cert + data without → `Authentication`, pending survives. Confirm QUIC deployments do not expect mTLS (hard `None`). |
-| 8 | **Control-queue backpressure** — slow client stalls `Open` delivery | `server/control.rs:145,205-209,103-107` | `open_tx` is policy-bounded (default 128) with `try_send`; full → pending rolled back + `rejected++` rather than blocking the accept loop. Probe: register then stall control reads, burst 129 externals; last `Open` must fail open, not deadlock. |
-| 9 | **Idle vs relay liveness** — 90 s idle killing active relays | `server/control.rs:150-153,165-237` | idle timer is only reset by control frames and only breaks the **control** loop; relays live in `children`/`relays` JoinSets and are torn down explicitly. Long relays with no control traffic still hit the 90 s control timeout by design — confirm this matches ops expectations for quiet services. |
-| 10 | **Panic visibility** — child task panic silently dropping a service | `common.rs:428-433`, `server/accept.rs:137,137,210,136,441` | every `join_next` records `is_panic → task_panics++, Internal`. Probe: inject a relay panic; `task_panics == 1`, `last_termination == Internal`, sibling services unaffected. |
+| 1 | **Listener hijack** — client requests a public/ephemeral bind it should not get | `server/control.rs:312-406`, `common.rs:560-606`, `server_tests/tcp.rs:1063-1109,1566-1647` | `bind_to_socket` runs **before** `TcpListener::bind`; default denies non-loopback; allowlist + port-range + ephemeral bits all enforced. Probe: register `Ip{0.0.0.0,80}` and ephemeral-0 under a restrictive policy; expect codes 2/3, no listener. |
+| 2 | **Session confusion** — data hello attaches to the wrong session/service | `server/pending.rs:29-100`, tests `server_tests/tcp.rs:1248-1374`, `server_tests/quic.rs:361-711` | triple `(session, service, connection)` checked in order; wrong-session → `Authentication` without consuming; wrong-service/expired → `Authorization` with consumption. Probe: cross-wire two concurrent sessions' ids; exactly one `rejected++`, no relay. |
+| 3 | **Pending exhaustion / GC** — attacker or churn fills 128 slots | `server/service.rs:91-107,118-121`, `server/pending.rs:104-126`, `server/session.rs:49-56` | insert capped; `try_send` failure rolls back; relay timeout GCs; unregister/session-exit/`drop` reconcile counters. Probe: 128 hung externals + 1 more → `ResourceExhausted`; cancel session → `pending == 0`. Watch for double-`fetch_sub` (consume at `server/pending.rs:63-69` vs relay-task GC at `server/service.rs:118-121` is guarded by the `remove` return). |
+| 4 | **Throttle bypass behind NAT** — shared source IP, table-full behavior | `server/control.rs:121-137`, `server/auth.rs:33-105`, `docs/SECURITY.md:41-50` | throttle is per-source-IP, process-local; 10/60 s, 1024 sources, 100 ms delay, full-table rejects unknowns. Behind shared NAT one bad actor blocks the whole egress IP until the window expires — documented, not fixed. Probe: 10 fails from one IP blocks an innocent second client on the same IP; confirm ops runbook accounts for it. |
+| 5 | **Shutdown races** — `Drain` lost, relays dangling, counters stuck | `server/accept.rs:79-113,163-165,235-237,482-491`, `server/control.rs:259-285`, tests `server_tests/tcp.rs:1377-1492` | `Drain{grace}` via `try_send` in a bounded re-notify loop, grace sleep, session-cancel cascade, `abort_all` + drain; `serve_control`/`run_service` clear pendings; start/stop cycles return all counts to 0. Probe: kill server mid-relay with an active external; client must see `Drain`, external must see EOF, snapshot must settle to 0/0. |
+| 6 | **Handshake pile-up** — pre-auth work before admission | `server/accept.rs:49,66-75,133,139,204,213` | TCP+QUIC both `try_acquire` **before** spawning; `HandshakeGuard` counts until auth/data-hello; full → `rejected++` without reading. Residual: QUIC/TLS adapter work below Eggtunnel (Eggress caps 1024 conns / 4096 streams, `docs/SECURITY.md:71-73`). Probe: SYN/TLS flood → handshakes pinned at 64, sessions stay 0. |
+| 7 | **mTLS downgrade** — bearer-only data dial on a pinned session | `server/accept.rs:340-346,442,515`, `server/pending.rs:51-60`, `server_tests/mtls.rs:137-187` | principal pinned at session creation and rechecked on every `DataHello`; `None != Some` rejects. Probe: control with cert + data without → `Authentication`, pending survives. Confirm QUIC deployments do not expect mTLS (hard `None`). |
+| 8 | **Control-queue backpressure** — slow client stalls `Open` delivery | `server/control.rs:171,248-253`, `server/service.rs:102-107` | `open_tx` is policy-bounded (default 128) with `try_send`; full → pending rolled back + `rejected++` rather than blocking the accept loop. Probe: register then stall control reads, burst 129 externals; last `Open` must fail open, not deadlock. |
+| 9 | **Idle vs relay liveness** — 90 s idle killing active relays | `server/control.rs:176-178,182-258` | idle timer is only reset by control frames and only breaks the **control** loop; relays live in `children`/`relays` JoinSets and are torn down explicitly. Long relays with no control traffic still hit the 90 s control timeout by design — confirm this matches ops expectations for quiet services. |
+| 10 | **Panic visibility** — child task panic silently dropping a service | `common.rs:463-468`, `server/accept.rs:158-160,230-232,450-459,477-479`, `server/control.rs:254-256`, `server/service.rs:139-141` | every `join_next` records `is_panic → task_panics++, Internal`. Probe: inject a relay panic; `task_panics == 1`, `last_termination == Internal`, sibling services unaffected. |
 
 ---
 

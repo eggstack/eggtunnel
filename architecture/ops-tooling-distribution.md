@@ -33,7 +33,7 @@ Top level (`/`, see directory read):
 | Path | What it owns | Key review anchor |
 |---|---|---|
 | `Cargo.toml` | Workspace root: resolver 2, 3 members, shared `[workspace.package]` + `[workspace.dependencies]` | `Cargo.toml:1-35` |
-| `Cargo.lock` | Locked graph (225 packages at review time); exact Eggress checksums | `Cargo.lock` (eg. `eggress-transport-tls 1.0.8` checksum block) |
+| `Cargo.lock` | Locked graph (230 packages at review time); exact Eggress checksums | `Cargo.lock` (eg. `eggress-transport-tls 1.0.8` checksum block) |
 | `crates/eggtunnel-proto/` | Runtime-neutral wire DTOs + codec; published to crates.io | `crates/eggtunnel-proto/Cargo.toml:1-19` |
 | `crates/eggtunnel/` | Embeddable library; feature-gated client/server/transports; published to crates.io | `crates/eggtunnel/Cargo.toml:1-48` |
 | `crates/eggtunnel-cli/` | Private binary (`publish = false`); all-features consumer of the library | `crates/eggtunnel-cli/Cargo.toml:1-22` |
@@ -253,7 +253,7 @@ the archive's `LICENSE-MIT` plus upstream package metadata.
 
 ### 4.1 `Cargo.lock`
 
-- 225 locked dependencies at review time; every Eggress crate pinned to
+- 230 locked dependencies at review time; every Eggress crate pinned to
   `1.0.8` with registry checksums (eg. `eggress-transport-tls 1.0.8`).
 - CI and release both build with `--locked` (`ci.yml:16-20`,
   `release.yml:36`), so a lockfile drift fails loudly rather than resolving
@@ -324,7 +324,7 @@ Why exact (`=`) rather than caret:
   generic byte relay uses the Eggress boundary, optional components stay
   feature-gated, `eggress-embed` is not the boundary, Synvoid/i2pr are
   references only (`plans/registry.md:71-77`).
-- `SECURITY.md:41-48` documents the consequence: the TLS profile installs the
+- `SECURITY.md:61-63` documents the consequence: the TLS profile installs the
   Rustls ring provider as process default if unset, and the QUIC adapter's
   limits (platform roots only, no custom CA/mTLS) are inherited constraints,
   not Eggtunnel choices. Exact pinning makes such inherited behavior changes
@@ -343,19 +343,19 @@ Why exact (`=`) rather than caret:
 
 | Doc | Owns | Review anchor |
 |---|---|---|
-| `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-21` |
-| `PROTOCOL.md` | Wire v1.1 (15 stable IDs) with 1.0 fallback: 14-byte header table, 1 MiB cap, exact-consumption decoding, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.1`) | `docs/PROTOCOL.md:1-39` |
-| `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-84` |
-| `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-85` |
-| `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-52` |
-| `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring | `docs/OPERATIONS.md:1-49` |
-| `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:11-14`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-84` |
-| `API.md` | Crate roles + publication intent, recommended `default-features = false` dependency lines, client/server surface pointers, semver warning (breaking changes allowed pre-1.0) | `docs/API.md:1-53` |
-| `EMBEDDING.md` | Caller-owned runtime/tracing/config/connector recipe, `start_with_connector` variants, per-transport entry points, secret-store guidance | `docs/EMBEDDING.md:1-51` |
+| `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-23` |
+| `PROTOCOL.md` | Wire v1.1 (15 stable IDs) with 1.0 fallback: 14-byte header table, 1 MiB cap, exact-consumption decoding, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.1`) | `docs/PROTOCOL.md:1-80` |
+| `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-118` |
+| `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-120` |
+| `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-68` |
+| `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring | `docs/OPERATIONS.md:1-129` |
+| `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:11-14`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-94` |
+| `API.md` | Crate roles + publication intent, recommended `default-features = false` dependency lines, client/server surface pointers, semver warning (breaking changes allowed pre-1.0) | `docs/API.md:1-80` |
+| `EMBEDDING.md` | Caller-owned runtime/tracing/config/connector recipe, `start_with_connector` variants, per-transport entry points, secret-store guidance | `docs/EMBEDDING.md:1-86` |
 
 Cross-links: `README.md:11-13,24-26` points to CONFIGURATION/SECURITY/SUPPORT,
-the subsystem roadmap, and DISTRIBUTION; `overview.md:142-150` summarizes this
-whole ops layer.
+the subsystem roadmap, and DISTRIBUTION; `overview.md` §7 ("Ops, tooling,
+distribution") summarizes this whole ops layer.
 
 Doc-vs-code consistency risks (check these first in any behavior change):
 
@@ -458,7 +458,9 @@ suffices without the CLI, default features, or a library-owned runtime**
   the local loopback suite — verify the suite actually ran for the head under
   review (historical `006-status.md:56`: 39 lib + 8 proto tests; candidate
   `012-status.md:36-37`: 91 passed, 3 ignored workspace-wide plus the
-  14-slice matrix counts).
+  14-slice matrix counts). Current tree: library **131** passed + 3 ignored
+  (opt-in soak/fuzz), CLI bin **16**, CLI integration **7**, proto **11** —
+  the closure-record figures above are immutable history, not a live ceiling.
 - [ ] Checksums detect corruption against a trusted manifest; they are not
   signatures or authenticity proofs (`docs/DISTRIBUTION.md:41-45`).
   Attestations are build provenance, not independent code review.
@@ -538,6 +540,31 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [ ] Roadmap §19 milestone table duplicates `registry.md:41-55`. Status flips
   must land in roadmap, registry, and closure record together or the control
   surface lies.
+- [ ] **`architecture/*.md` numeric drift (recurring, highest-yield class).**
+  The deep dives quote `N lines` and `file:line` anchors for code that refactors
+  silently. A full audit on 2026-10-05 found *every* `docs/*.md` line range in
+  §5 stale, the CLI described as 1407 lines (actual 1548), `server.rs` as 324
+  (actual 353), `common.rs` as 706 (actual 714), and the `Cargo.lock` package
+  count as 225 (actual 230). The prose sections drifted while the summary tables
+  were updated, so **a green-looking table does not prove the prose below it**.
+  Re-derive counts with `wc -l` and open every anchor rather than trusting a
+  sibling table.
+- [ ] **One policy field, three consumers (QUIC stream ceiling).**
+  `active_connections_per_session` (default 128) feeds three different sites
+  with three different results: the QUIC transport knob is
+  `active_connections_per_session.saturating_add(1)` → **129**
+  (`server.rs:253-261`); the per-session data-stream semaphore is the raw
+  **128** (`server/accept.rs:176`); and the TCP `connection_admission`
+  semaphore is also **128** (`server/control.rs:152`). The client separately
+  passes `client_open_tasks` (128) as its QUIC `max_concurrent_streams`, so the
+  two sides are deliberately **not** symmetric. When grepping for one of these,
+  search the whole of `server.rs` as well as `server/` — scoping the search to
+  `server/accept.rs` and `server/control.rs` alone finds only the two 128s and
+  produces a false "the +1 is wrong" conclusion.
+- [ ] The 3 ignored library tests are the opt-in soak/fuzz targets from
+  `docs/OPERATIONS.md`, not dead tests. A reviewer seeing "3 ignored" should
+  confirm they are the intended ignored set and not a silently skipped
+  qualification.
 - [ ] `target/` cross-check triples observed on disk
   (`aarch64-unknown-linux-gnu`, `armv7-...`, `x86_64-pc-windows-gnu`, ...) are
   consistent with `006-status.md:37-41` build-only claims today — if new triple
