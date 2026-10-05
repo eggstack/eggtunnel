@@ -345,17 +345,19 @@ Why exact (`=`) rather than caret:
 |---|---|---|
 | `ARCHITECTURE.md` | One-paragraph ownership thesis: Eggtunnel = reverse-session behavior; Eggress = generic relay/transport; proto = runtime-neutral bounded DTOs/framing | `docs/ARCHITECTURE.md:1-23` |
 | `PROTOCOL.md` | Wire v1.1 (15 stable IDs) with 1.0 fallback: 14-byte header table, 1 MiB cap, exact-consumption decoding, field bounds, crate-vs-wire version split (current crate line `0.2.0`, wire `1.1`) | `docs/PROTOCOL.md:1-80` |
-| `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope | `docs/CONFIGURATION.md:1-118` |
+| `CONFIGURATION.md` | CLI TOML reference for client+server, `token_env` indirection, proxy URI/`__`-chain syntax, per-profile rejection rules, `eggtunnel check` scope, **server certificate requirements** (end-entity `CA:FALSE` cert, PKCS#8-only key, SAN/`tls_server_name` match) at `:57-124` | `docs/CONFIGURATION.md:1-150` |
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-120` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-68` |
-| `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring | `docs/OPERATIONS.md:1-129` |
+| `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring, **client-connect troubleshooting** (silent-retry behaviour and why `--json`/`RUST_LOG` cannot explain a pre-Session failure) at `:37-114` | `docs/OPERATIONS.md:1-156` |
 | `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:14-16`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-94` |
 | `API.md` | Crate roles + publication intent, recommended `default-features = false` dependency lines, client/server surface pointers, semver warning (breaking changes allowed pre-1.0) | `docs/API.md:1-80` |
 | `EMBEDDING.md` | Caller-owned runtime/tracing/config/connector recipe, `start_with_connector` variants, per-transport entry points, secret-store guidance | `docs/EMBEDDING.md:1-86` |
 
-Cross-links: the `README.md` docs table (`README.md:59-70`) indexes all nine
+Cross-links: the `README.md` docs table (`README.md:111-122`) indexes all nine
 guides; `overview.md` §7 ("Ops, tooling, distribution") summarizes this whole
-ops layer. The `architecture/` review layer and the `plans/` control surface are
+ops layer. The README is quickstart-first (install → 5-step runnable tunnel →
+library pointer) and deliberately carries no detail that belongs in a guide.
+The `architecture/` review layer and the `plans/` control surface are
 internal and deliberately not linked from the public README.
 
 Doc-vs-code consistency risks (check these first in any behavior change):
@@ -383,6 +385,19 @@ Doc-vs-code consistency risks (check these first in any behavior change):
    the current published line is `0.2.0`. Any edit that reverts to "candidate
    only" / "do not use as a dependency / do not tag" guards or claims `0.1.0`
    as the current published release is stale.
+7. **Server certificate + silent-client-failure facts** (`README.md` quickstart
+   step 1 and its callout, `docs/CONFIGURATION.md:57-124`,
+   `docs/OPERATIONS.md:37-114`, `AGENTS.md` gotchas). Verified by running a
+   real tunnel on 2026-10-05, and the sharpest user-facing trap in the repo:
+   the server certificate must be an **end-entity** cert (`CA:FALSE`) because
+   rustls rejects a presented `CA:TRUE` cert, and `openssl req -x509` emits
+   `CA:TRUE` by default; the private key must be **PKCS#8**, and
+   `openssl ecparam -genkey` writes the rejected SEC1 form. Either mistake
+   produces an **invisible** failure — the client retries forever printing only
+   `client started; waiting for authenticated session`, because the CLI
+   installs no tracing subscriber (`RUST_LOG` is inert) and `--json` emits no
+   `session_lost` before a Session exists. If a future change adds a tracing
+   subscriber or a pre-Session error event, update all four files together.
 
 ## 6. Plans system — how planning and evidence flow
 

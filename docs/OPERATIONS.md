@@ -34,6 +34,33 @@ bounded exponential backoff and jitter. Invalid authentication or service
 authorization stops retries. Client service registrations are restored after
 a new authenticated Session.
 
+## Troubleshooting a client that never connects
+
+A client that cannot connect is **silent**. It prints `client started; waiting
+for authenticated session` and then produces no further output, because:
+
+- connection, TLS, and protocol failures below the Session layer are retried
+  internally, and the CLI installs no tracing subscriber, so `RUST_LOG` has no
+  effect on the binary; and
+- a failure that occurs *before* a Session exists produces no `session_lost`
+  event. The `--json` `session_lost` event only covers a Session that was
+  established and then ended.
+
+To distinguish "still retrying" from "hung", check the process is alive and
+confirm the server is listening on `listen_addr`. Then work down this list:
+
+| Symptom | Likely cause |
+|---|---|
+| No output at all after the startup line, server sees repeated connects | TLS verification on the client. Confirm `ca_cert` matches the server certificate, that the certificate is an end-entity cert (`CA:FALSE`, not `CA:TRUE`), and that its SAN covers `tls_server_name` |
+| Server prints nothing, client silent | Wrong `server_addr`/`listen_addr` pair, or a firewall; the client is dialling but never completing a handshake |
+| Client stops retrying and exits | Non-retryable configuration or authorization failure; the error is printed to stderr as `Error: CliError { category, message }` |
+| Server prints `service ... listening on [addr]:port` and the client stays on the startup line | Session is up and the service is bound; this output is the expected steady state, not an error |
+
+`check` does not catch any of the TLS cases above: it is structural only and
+never opens a socket or parses a certificate. See
+[Server certificate requirements](CONFIGURATION.md#server-certificate-requirements)
+for the exact key and certificate forms Eggtunnel accepts.
+
 Use a trusted certificate whose subject alternative names include
 `tls_server_name`. Keep token and private-key files readable only by the
 service account. Service listeners are loopback-only unless public binding was

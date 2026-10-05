@@ -54,6 +54,38 @@ Service binds are loopback-only by default. `allow_public_service_binds = true`
 enables explicit non-loopback binds requested by authenticated clients. The
 control endpoint itself is TLS protected and requires the token after TLS.
 
+### Server certificate requirements
+
+`tls_cert` must be a PEM certificate chain and `tls_key` a PEM private key.
+Three constraints are easy to trip over, and all of them fail at startup or at
+connect time rather than during `check`:
+
+- The certificate must be an **end-entity** certificate, not a CA. Rustls
+  rejects a presented certificate whose `basicConstraints` asserts
+  `CA:TRUE`. `openssl req -x509` adds `CA:TRUE` by default, so a self-signed
+  test certificate needs an explicit
+  `-addext "basicConstraints=critical,CA:FALSE"`.
+- The private key must be **PKCS#8** (`-----BEGIN PRIVATE KEY-----`).
+  `openssl genpkey` and `openssl req -newkey rsa:2048` produce this form;
+  `openssl ecparam -genkey` produces the SEC1 form
+  (`-----BEGIN EC PRIVATE KEY-----`), which is rejected. Convert with
+  `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key-p8.pem`.
+- The certificate must carry a subject alternative name matching
+  `tls_server_name`, which is also the SNI name sent to the server.
+
+A working self-signed pair for a local trial:
+
+```sh
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out server-key.pem
+openssl req -x509 -new -key server-key.pem -out server-cert.pem -days 2 \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost" \
+  -addext "basicConstraints=critical,CA:FALSE"
+```
+
+Clients verify against the system roots unless `ca_cert` names a bundle, so a
+self-signed server also needs `ca_cert` pointed at the same certificate.
+
 The QUIC profile uses operating-system certificate roots and bearer-token
 authentication. The current Eggress QUIC adapter does not accept custom CA
 bundles or mTLS identity material; `eggtunnel check` rejects those combinations.
