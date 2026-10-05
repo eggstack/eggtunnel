@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+Post-`0.2.0` source work. **Not yet published** — no release tag exists for
+this state, and `Cargo.toml` still reads `0.2.0`, which is already on crates.io.
+Cutting a release requires a version bump plus a wire-version note (see
+`docs/PROTOCOL.md:13-15`).
+
+### Changed
+
+- **Wire protocol is now v1.1** (was `1.0` in the published `0.2.0` artifact),
+  with `1.0` fallback. Extension behavior is gated on negotiated capabilities
+  only, never on the minor number. The crate version is independent of the wire
+  version, so the crate number does not identify the wire behavior of a locally
+  built binary.
+  - Capability 1, correlated registration rejection: registration failures
+    arrive as `RegisterReject { service_id, code, diagnostic }`, so multiple
+    dynamic registrations may be in flight, bounded and generation-scoped.
+    Against a `1.0` peer the one-registration-at-a-time serial fallback still
+    applies exactly as before.
+  - Capability 2, drain deadline: `Drain.deadline_ms` is honored as
+    `min(peer, local shutdown ceiling)`, and can only shorten local shutdown.
+- CLI configuration is resolved once through a single
+  parse → override → resolve → validate path shared by `check` and startup,
+  with redacted `--json` output (`eggtunnel.events/v1`) and
+  `eggtunnel.check/v1`.
+- Runtime decomposition and role-sliced optional transports
+  (`quic-client`/`quic-server`, `websocket-client`/`websocket-server`), so an
+  embedder can compile one transport role without the other role's code.
+
+### Unchanged
+
+- No configuration or Rust API break for existing users: existing TOML files
+  remain valid, wire-`1.0` peers keep baseline semantics, and the transport
+  rejection matrix is unchanged.
+- Runtime limits and timeouts are unchanged and still configurable only through
+  the library `RuntimePolicy`. A standalone TOML surface for them is planned
+  (M020) and **not implemented**.
+
 ## 0.2.0 — 2026-09-24
 
 The post-0.1 line adds material additive capability to the public library API

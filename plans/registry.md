@@ -76,7 +76,10 @@ the hosted 4-target release, crates.io publication (proto then library),
 downstream registry-consumption, advisory/license review, and the supported
 platform claims. No high/medium correctness or security findings remain open.
 Post-0.1 M007-M012 are strictly closed and M013 records the completed 0.2.0
-publication event, and M014 records the post-0.2 consolidation, M015 the CLI operational surface, and M016 the 1.1 capability evolution. No executable milestone is pending. The historical
+publication event, and M014 records the post-0.2 consolidation, M015 the CLI
+operational surface, and M016 the 1.1 capability evolution. The current
+executable milestone is M017 (see "Active and ready implementation plans");
+M018, M019, and M020 remain gated as listed under "Blocked / future work". The historical
 C001 corrective roadmap is archived; its closure evidence remains authoritative.
 
 ### M010 client runtime modularization (closed)

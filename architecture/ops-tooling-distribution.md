@@ -38,14 +38,14 @@ Top level (`/`, see directory read):
 | `crates/eggtunnel/` | Embeddable library; feature-gated client/server/transports; published to crates.io | `crates/eggtunnel/Cargo.toml:1-48` |
 | `crates/eggtunnel-cli/` | Private binary (`publish = false`); all-features consumer of the library | `crates/eggtunnel-cli/Cargo.toml:1-22` |
 | `docs/` | 9 user-facing guides (see §5) | `docs/` directory listing |
-| `plans/` | Canonical spec + roadmaps + ADRs + implementation/closure evidence (see §6) | `plans/registry.md:1-95` |
-| `architecture/` | Review layer: `overview.md` index + per-module deep dives (proto, core, client, server, transports, CLI, this file) | `architecture/overview.md:1-275` (index table at `:19-27`) |
+| `plans/` | Canonical spec + roadmaps + ADRs + implementation/closure evidence (see §6) | `plans/registry.md:1-128` |
+| `architecture/` | Review layer: `overview.md` index + per-module deep dives (proto, core, client, server, transports, CLI, this file) | `architecture/overview.md:1-338` (module index table at `:47-57`) |
 | `examples/` | `client.toml`, `server.toml` starter configs | `examples/` |
 | `fixtures/embedder/` | Downstream-shaped embedder proof (see §7); own `Cargo.toml` + `Cargo.lock`, excluded from workspace via `[workspace]` empty table | `fixtures/embedder/Cargo.toml:1-12`, `fixtures/embedder/src/main.rs:1-70` |
 | `scripts/` | `generate-third-party-notices.py`, `test-install.sh` only | `scripts/` |
 | `install.sh` | Install-only bootstrap script shipped as a release asset | `install.sh:1-60` |
 | `.github/workflows/` | `ci.yml` (per-push/PR gates), `release.yml` (tag-triggered 4-target build) | `.github/workflows/ci.yml:1-25`, `.github/workflows/release.yml:1-91` |
-| `.agents/skills/` (+ `.opencode/skills/` symlinks) | Agent skills (`verify`, `release`) in per-skill `SKILL.md` dirs; canonical files under `.agents/`, relative symlinks under `.opencode/` for dual discovery | `.agents/skills/verify/SKILL.md`, `.agents/skills/release/SKILL.md` |
+| `.agents/skills/` (+ `.opencode/skills/` symlinks) | Agent skills in per-skill `SKILL.md` dirs; canonical files under `.agents/`, relative symlinks under `.opencode/` for dual discovery. Four skills: `verify` (CI gate + expected counts), `plan` (registry/roadmap/milestone/closure workflow + status rules), `docs-sync` (doc ownership + cross-file sync points), `release` (tag/archive/publish order) | `.agents/skills/*/SKILL.md` |
 | `deny.toml` | `cargo-deny` license policy + 4 `clarify` exceptions | `deny.toml:1-58` |
 | `target/` | **Build cache, never committed.** `.gitignore:1-4` ignores `/target`, `target/`, `**/target/`. At review time it contained cross-check outputs (`aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, `x86_64-pc-windows-gnu`, `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `debug`, `release`, `doc`) — these are local `cargo check` artifacts, not release evidence (cf. `plans/closure/reverse-session/006-status.md:37-41`). Do not review `target/` contents as source. |
 | `LICENSE-MIT`, `THIRD_PARTY_NOTICES.md` (generated) | License + per-release dependency inventory staged into every archive | `docs/DISTRIBUTION.md:32-33`, `scripts/generate-third-party-notices.py:40-52` |
@@ -58,7 +58,7 @@ Workspace membership and shared metadata:
   (current published crates.io line per §0),
   edition `2024`, `rust-version = "1.89"`, `license = "MIT"`. The library's
   versioned dependency on the proto crate pins the same line
-  (`crates/eggtunnel/Cargo.toml:26`: `eggtunnel-proto ... version = "0.2.0"`).
+  (`crates/eggtunnel/Cargo.toml:35`: `eggtunnel-proto ... version = "0.2.0"`).
 - `fixtures/embedder` is deliberately **not** a workspace member
   (`fixtures/embedder/Cargo.toml:7` empty `[workspace]` severs membership), so
   CI checks it separately as a downstream stand-in
@@ -83,14 +83,14 @@ full all-features run remains required alongside the slices.
 Provenance: M007 introduced the seven-slice matrix, the Rust 1.89 MSRV job,
 and the minimal-client dependency guard, and replaced direct `rustls-pemfile`
 use with Rustls pki-types PEM parsing
-(`plans/closure/reverse-session/007-status.md`; `plans/registry.md:48`).
+(`plans/closure/reverse-session/007-status.md`; `plans/registry.md:54`).
 M010 kept the same CI shape while modularizing the client runtime
-(`plans/closure/reverse-session/010-status.md`; `plans/registry.md:44`).
+(`plans/closure/reverse-session/010-status.md`; `plans/registry.md:50`).
 M011 added the separate, developer-invoked sustained qualification path
 documented in `docs/OPERATIONS.md` — a standalone `fuzz/` decoder workspace,
 a fixed-seed Service-state sequence, and ignored TCP/TLS, QUIC-stream, and
 WSS churn runs — and re-passed exact-head hosted CI
-(`plans/closure/reverse-session/011-status.md`; `plans/registry.md:45`).
+(`plans/closure/reverse-session/011-status.md`; `plans/registry.md:51`).
 M012 re-ran the full gate (fmt, workspace check/test/clippy, rustdoc
 `-D warnings`, embedder check, audit, deny, all 14 feature slices, MSRV,
 dependency guard) locally on the `0.2.0` candidate plus exact-head hosted CI
@@ -349,13 +349,14 @@ Why exact (`=`) rather than caret:
 | `SECURITY.md` | Threat-relevant claims: TLS-before-auth, constant-time token compare, bind policy, ConnectionId lifecycle, handshake/auth throttle numbers, mTLS principal binding, per-transport caveats (QUIC pre-session admission, WSS close semantics, proxy redaction/no-fallback) | `docs/SECURITY.md:1-120` |
 | `SUPPORT.md` | Transport matrix (TCP/TLS, QUIC, WSS, outbound-proxy) + **release-target evidence table** (the qualification half of the support claim) + inherited M004/M005 gaps | `docs/SUPPORT.md:1-68` |
 | `OPERATIONS.md` | Runtime operator view: start/stop, Drain, snapshot counters, retry/backoff, file-permission hygiene, resource ceilings (64 handshakes / 128 sessions / 64 services / 128 pending+active / 128 open tasks+queues), proxy env wiring | `docs/OPERATIONS.md:1-129` |
-| `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:11-14`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-94` |
+| `DISTRIBUTION.md` | Release state (**published `0.2.0`** at `docs/DISTRIBUTION.md:5-9` + historical `0.1.0` line at `:14-16`), 4-target table, archive contents/integrity semantics, installer scope, Eggpack deferral rationale (no released/adopted end-to-end CI orchestration interface), publication order, audit/license outcomes | `docs/DISTRIBUTION.md:1-94` |
 | `API.md` | Crate roles + publication intent, recommended `default-features = false` dependency lines, client/server surface pointers, semver warning (breaking changes allowed pre-1.0) | `docs/API.md:1-80` |
 | `EMBEDDING.md` | Caller-owned runtime/tracing/config/connector recipe, `start_with_connector` variants, per-transport entry points, secret-store guidance | `docs/EMBEDDING.md:1-86` |
 
-Cross-links: `README.md:11-13,24-26` points to CONFIGURATION/SECURITY/SUPPORT,
-the subsystem roadmap, and DISTRIBUTION; `overview.md` §7 ("Ops, tooling,
-distribution") summarizes this whole ops layer.
+Cross-links: the `README.md` docs table (`README.md:59-70`) indexes all nine
+guides; `overview.md` §7 ("Ops, tooling, distribution") summarizes this whole
+ops layer. The `architecture/` review layer and the `plans/` control surface are
+internal and deliberately not linked from the public README.
 
 Doc-vs-code consistency risks (check these first in any behavior change):
 
@@ -378,7 +379,7 @@ Doc-vs-code consistency risks (check these first in any behavior change):
    stability promise the code does not keep. Wire stays `1.1` (with `1.0` fallback) while the crate
    line is `0.2.0` — never conflate the two numbers.
 6. **Published language** (`docs/DISTRIBUTION.md:5-9`, `docs/SUPPORT.md:48-51`,
-   `CHANGELOG.md:3-43`, `plans/closure/reverse-session/012-status.md:5-22`):
+   `CHANGELOG.md:41-98`, `plans/closure/reverse-session/012-status.md:5-22`):
    the current published line is `0.2.0`. Any edit that reverts to "candidate
    only" / "do not use as a dependency / do not tag" guards or claims `0.1.0`
    as the current published release is stale.
@@ -393,23 +394,26 @@ contract (`003:16`).
 | Layer | Files | Role |
 |---|---|---|
 | Canonical direction | `plans/000-long-term-specification.md`, `plans/001-terminology-and-domain-model.md`, `plans/002-long-term-roadmap.md`, `plans/003-planning-process.md` | Normative MUST/SHOULD end-state, vocabulary, phase order, handoff rules. Amendable only on direction change, contradiction, ADR, or explicit user direction (`003:27-34`) |
-| ADRs | `plans/adrs/ADR-0001-session-transport-and-egress-boundary.md` | Required for protocol/API/dependency/transport/trust/storage/security/release/non-goal changes (`003:38-50`); must carry status, context, alternatives, decision, consequences (`003:52-60`) |
-| Control surface | `plans/registry.md` | Compact status table: subsystem roadmaps, implementation plans, closure records, architecture constraints (`registry.md:69-86`), deferred work (`:87-95`). Reviewers start here |
-| Subsystem roadmaps | `plans/subsystems/reverse-session-roadmap.md` (M001–M012, §§1–19), `plans/subsystems/reverse-session-post-closure-corrective-addendum.md` (C001, archived) | Own invariants (§2: protocol/correlation/listener/runtime/embedding), dependency graph (§5: M001→M002→M003→{M004,M005}→M006→M007→M008→M009→M010→M011→M012), per-milestone objectives/exit criteria (§§6–11+), risks (§17), deferred work (§18), status table (§19) |
-| Implementation plans | `plans/implementation/reverse-session/001..012-*.md` + `plans/implementation/reverse-session-post-closure-corrective/001-*.md` | Bounded executable work vs a named baseline (eg. M006 baseline `448c615`, `006-*.md:9-11`; M012 baseline `0c8830e`, candidate `7aa3064`) |
-| Closure records | `plans/closure/reverse-session/001..013-status.md` + `plans/closure/reverse-session-post-closure-corrective/001-status.md` | Evidence that exit criteria held: requirement tables, platform tables, verification command logs, dependency/license evidence, findings disposition. M006 (`006-status.md:1-82`) is the `0.1.0` release qualification record; M012 (`012-status.md:1-87`) is the `0.2.0` candidate qualification record; M013 (`013-status.md`) is the `0.2.0` publication event. C001 supplements M004/M005 without rewriting their historical closures (`registry.md:59-64`) |
+| ADRs | `plans/adrs/ADR-0001-session-transport-and-egress-boundary.md`, `plans/adrs/ADR-0002-capability-negotiated-minor-protocol-evolution.md` | Required for protocol/API/dependency/transport/trust/storage/security/release/non-goal changes (`003:38-50`); must carry status, context, alternatives, decision, consequences (`003:52-60`). ADR-0002 is load-bearing in code: it defines the capability-1 `RegisterReject` and capability-2 `Drain` deadline extensions behind `CAPABILITY_REGISTER_REJECT`/`CAPABILITY_DRAIN_DEADLINE` (`crates/eggtunnel-proto/src/lib.rs:28,32`). Accepted ADR history stays visible; a later ADR supersedes rather than rewrites (`003:63`) |
+| Control surface | `plans/registry.md` (128 lines) | Compact status table: canonical refs + status vocabulary (`:11-27`), active subsystem roadmaps (`:29-33`), dependency-ready plans (`:35-39`), closed plans (`:41-61`), closure narrative (`:63-100`), architecture constraints (`:101-118`), blocked/deferred work (`:119-128`). Reviewers start here |
+| Subsystem roadmaps | `plans/subsystems/reverse-session-roadmap.md` (M001–M020, §§1–19), `plans/subsystems/reverse-session-post-closure-corrective-addendum.md` (C001, archived) | Own invariants (§2: protocol/correlation/listener/runtime/embedding), dependency graph (§5: M001→M002→M003→{M004,M005}→M006→M007→…→M016→M017→{M018,M020}+M019), per-milestone objectives/exit criteria (§§6–11+ and the post-0.1 §"Post-0.1 maintenance and evolution" M007–M020 block), risks (§17), deferred work (§18), status table (§19). Header line 3 carries the authoritative current-status line |
+| Implementation plans | `plans/implementation/reverse-session/001..012-*.md` + `014..020-*.md` + `plans/implementation/reverse-session-post-closure-corrective/001-*.md` | Bounded executable work vs a named baseline (eg. M006 baseline `448c615`, `006-*.md:9-11`; M012 baseline `0c8830e`, candidate `7aa3064`). **There is no `013-*.md`**: M013 was a publication *event* recorded against plan `012` (`registry.md:48`), so the numbering gap is intentional, not a missing document |
+| Closure records | `plans/closure/reverse-session/001..016-status.md` + `plans/closure/reverse-session-post-closure-corrective/001-status.md` | Evidence that exit criteria held: requirement tables, platform tables, verification command logs, dependency/license evidence, findings disposition. M006 (`006-status.md:1-82`) is the `0.1.0` release qualification record; M012 (`012-status.md:1-87`) is the `0.2.0` candidate qualification record; M013 (`013-status.md`) is the `0.2.0` publication event; M016 (`016-status.md`) closes the wire-1.1 capability evolution. C001 supplements M004/M005 without rewriting their historical closures (`registry.md:65-70`) |
 
 Flow: canonical spec → roadmap milestone → implementation plan (baseline-pinned)
 → code+tests → closure record (commands + hashes + tables) → `registry.md`
-status flip. Statuses use the fixed vocabulary at `registry.md:16-26`
+status flip. Statuses use the fixed vocabulary at `registry.md:19-27`
 (proposed/ready/active/blocked/closing/closed/conditionally closed/superseded/
-archived). Today: M001–M011 closed, M012/M013 closed, corrective
-addendum archived for traceability (`registry.md:28-55,72-91`); no later
-reverse-session plan is registered behind M013. The qualification/publish
-flow for `0.2.0` ends at `plans/closure/reverse-session/013-status.md`,
-which captures tag, four-target tag workflow, proto-then-library
-publication, clean registry consumer, and a documentation closure commit
-with rerun CI.
+archived). Today: M001–M016 and C001 closed; **M017 is `ready`**; M018
+(Eggress 1.0.11), M019 (WebSocket dependency closure, also cross-repo gated),
+and M020 (standalone RuntimePolicy/BindPolicy TOML) are `blocked`
+(`registry.md:29-39,119-128`; roadmap header `:3`). Landing code moves a
+milestone to `closing`, not `closed` (`003:18`). Registry and roadmap status
+tables are duplicated and **must be flipped together** or the control surface
+lies. The qualification/publish flow for `0.2.0` ended at
+`plans/closure/reverse-session/013-status.md`, which captures tag, four-target
+tag workflow, proto-then-library publication, clean registry consumer, and a
+documentation closure commit with rerun CI.
 
 ## 7. Fixtures — `fixtures/embedder`
 
@@ -470,7 +474,7 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [ ] GitHub release notes are `--generate-notes` auto-text; no curated
   narrative is attached to the tag release (`release.yml:91`,
   `006-status.md:73`). The user-facing release narrative lives in
-  `CHANGELOG.md:3-43` (M012 requirement evidence, `012-status.md:31`,
+  `CHANGELOG.md:41-98` (M012 requirement evidence, `012-status.md:31`,
   publication event in `013-status.md`); confirm a process owner
   promotes/curates it at publication time rather than treating auto-notes
   as the changelog.
@@ -533,13 +537,17 @@ suffices without the CLI, default features, or a library-owned runtime**
 - [x] `README.md:25-26` said "candidate release targets and qualification
   state" — fixed to "supported release targets" to match DISTRIBUTION/SUPPORT
   after M006 qualification.
-- [ ] `plans/registry.md:28-55`: M001–M011 read `closed`, M012 reads
-  `conditionally closed`, the corrective addendum is `archived`. Any new
-  corrective work needs a fresh plan/ADR rather than reopening the archived
-  addendum or rewriting a closed milestone's historical closure.
-- [ ] Roadmap §19 milestone table duplicates `registry.md:41-55`. Status flips
-  must land in roadmap, registry, and closure record together or the control
-  surface lies.
+- [ ] `plans/registry.md:41-61`: M001–M016 and C001 read `closed`; the
+  corrective addendum is `archived`. Any new corrective work needs a fresh
+  plan/ADR rather than reopening the archived addendum or rewriting a closed
+  milestone's historical closure. Watch for prose that re-freezes a snapshot of
+  the table: a leftover "no executable milestone is pending" sentence once sat
+  in the §"Closure work" narrative while M017 was already registered `ready`
+  (`registry.md:79-82`), so a reader landing in the narrative rather than the
+  table concluded there was no work to pick up.
+- [ ] Roadmap §19 milestone table duplicates `registry.md:29-39` (active) and
+  `registry.md:41-61` (closed). Status flips must land in roadmap, registry, and
+  closure record together or the control surface lies.
 - [ ] **`architecture/*.md` numeric drift (recurring, highest-yield class).**
   The deep dives quote `N lines` and `file:line` anchors for code that refactors
   silently. A full audit on 2026-10-05 found *every* `docs/*.md` line range in
@@ -575,7 +583,7 @@ suffices without the CLI, default features, or a library-owned runtime**
   `docs/SUPPORT.md:48-51` (crates published at `0.2.0`),
   `docs/PROTOCOL.md:3-6` (crate `0.2.0` / wire `1.1` with `1.0` fallback),
   `docs/API.md:19,68-73` + `docs/EMBEDDING.md:9` (snippets pinned at `0.2`),
-  `CHANGELOG.md:3-43` (released entry), and
+  `CHANGELOG.md:41-98` (released entry), and
   `plans/closure/reverse-session/013-status.md` (tag, GitHub release,
   crates.io publication, clean registry consumer) must all agree on the
   current published line. Re-flip them together plus rerun CI if any future
@@ -588,3 +596,18 @@ suffices without the CLI, default features, or a library-owned runtime**
   a released downloader/bootstrap/CI interface since would reopen the
   installer-vs-shared-updater decision (which currently needs an ADR, not a
   script patch).
+- [ ] **A release requires a version bump, and the bump is not one file.**
+  `v0.1.0` and `v0.2.0` are already tagged and on crates.io, while the root
+  `Cargo.toml:6` still reads `version = "0.2.0"` — so the tag gate in §3.1
+  passes for a version that cannot be published again. Bump
+  `Cargo.toml:6` **and** `scripts/test-install.sh:5`, which hardcodes
+  `version=0.2.0` and exposes only `EGGTUNNEL_TEST_TARGET` (no version
+  override). Miss the second file and the local install smoke test builds and
+  `grep -F`-asserts the *previous* version string, so it still goes green
+  (`scripts/test-install.sh:5,17,25`). Grep the tree for the literal `0.2.0`
+  before tagging rather than trusting the manifest.
+- [ ] **Crate line vs wire version in release notes.** The published `0.2.0`
+  artifact shipped wire `1.0`; this source implements wire `1.1` (M016). A new
+  release therefore changes what the same-version-shaped tree does on the wire,
+  and `docs/PROTOCOL.md:13-15` says so explicitly. State the shipped wire
+  version in the changelog — the crate number does not identify it.

@@ -60,6 +60,7 @@ on Ctrl-C.
 
 | Guide | Covers |
 |---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Ownership split: Eggtunnel vs Eggress vs proto |
 | [Configuration](docs/CONFIGURATION.md) | TOML reference, transports, `check`, CLI overrides |
 | [Operations](docs/OPERATIONS.md) | Running server/client, events, limits, proxies |
 | [Security](docs/SECURITY.md) | Threat model, auth, bind policy, mTLS |

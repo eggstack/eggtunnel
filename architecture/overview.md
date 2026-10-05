@@ -98,12 +98,13 @@ vocabulary. The facade re-exports **11** common types plus `Endpoint`
   non-authoritative metadata — the server never rewrites a client target.
 - `BindPolicy` default (`common.rs:131-140`): loopback-only
   (`allow_public_addresses: false`), ephemeral ports allowed,
-  `max_services_per_session: 64`. `validate()` (`common.rs:116-125`) caps it at
+  `max_services_per_session: 64`. `validate()` (`common.rs:116-128`) caps it at
   65536 and bounds the address allowlist at 1024 — decoupled from the
   services-per-session ceiling. `bind_to_socket()` / `permits_*` are server-only.
 - `RuntimePolicy` = `ResourceLimits` + `TimeoutPolicy`, composed and owned by
   `Counters` as `Arc<RuntimePolicy>`.
-  - `ResourceLimits` (`common.rs:213-249`): 8 ceilings, defaults
+  - `ResourceLimits` (struct `common.rs:213-222`, defaults `common.rs:249-262`):
+    8 ceilings, defaults
     `sessions` 128, `services_per_session` 64, `pending_per_session` 128,
     `active_connections_per_session` 128, `accepted_handshakes` 64,
     `client_open_tasks` 128, `control_queue` 128, `client_command_queue` 32.
@@ -135,8 +136,9 @@ listens.** `client.rs` is the orchestrator; composable logic lives in
 (probe), and `client/open.rs` (data path).
 
 - Composition is builder-first: `ClientBuilder` (`client/config.rs:84`) is the
-  canonical surface; the 12 legacy `Client::start*` variants
-  (`client.rs:218-312`) delegate through it.
+  canonical surface; the 12 legacy `Client::start*` variants (10 at
+  `client.rs:218-321`, plus the 2 mTLS constructors at `client.rs:412-434`)
+  delegate through it.
 - `TargetConnector` + `TargetContext` let embedders supply in-process
   `ApplicationStream` targets instead of TCP.
 - **Dynamic Services** enter reconnect desired state only after a matching
@@ -264,9 +266,19 @@ the only party that binds. `server.rs` is the coordinator; the runtime lives in
   generated artifact and is not committed.
 - `plans/closure/` records are **immutable historical evidence** — never rewrite
   a closed milestone, only add a new record. `docs/` guides are living.
-- Agent skills live in `.agents/skills/` (`verify`, `release`), with
-  `.opencode/skills/<name>` as relative symlinks to the same directories. Keep
-  the symlink structure; edit the real files under `.agents/`.
+- Planning state: M001–M016 + C001 closed, **M017 ready**, M018/M019/M020
+  blocked. `plans/registry.md` is the control surface; the roadmap status table
+  duplicates it and both must flip together. M020 (standalone
+  `RuntimePolicy`/`BindPolicy` TOML) is planned but **not implemented** — the CLI
+  still installs `RuntimePolicy::default()`. Do not document planned work in
+  `docs/`, `README.md`, or `AGENTS.md`.
+- Agent skills live in `.agents/skills/` (`verify`, `plan`, `docs-sync`,
+  `release`), with `.opencode/skills/<name>` as relative symlinks to the same
+  directories. Keep the symlink structure; edit the real files under
+  `.agents/`. The skills carry operational rules that this review layer only
+  summarizes — notably that a release **requires a version bump** (`v0.1.0` and
+  `v0.2.0` are already tagged and published while `Cargo.toml:6` still reads
+  `0.2.0`) and that `scripts/test-install.sh:5` hardcodes its own version copy.
 
 ## 8. How everything fits together
 
