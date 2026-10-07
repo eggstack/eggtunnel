@@ -355,9 +355,35 @@ pub(crate) struct Counters {
     pub rejected: Arc<AtomicU64>,
     pub bytes_upstream: Arc<AtomicU64>,
     pub bytes_downstream: Arc<AtomicU64>,
-    pub binds: Arc<std::sync::Mutex<Vec<(SessionId, ServiceId, EffectiveBind)>>>,
+    /// Effective binds for every live `(Session, Service)`.
+    ///
+    /// Copy-on-write behind the mutex: readers clone the `Arc` and copy the
+    /// `Vec` outside the critical section, so a periodic reader never blocks
+    /// registration/unregistration for the length of a full bind-table clone.
+    pub binds: Arc<BindTable>,
     pub session_generation: Arc<AtomicU64>,
     heartbeat: Arc<std::sync::Mutex<HeartbeatState>>,
+}
+
+/// One effective bind per live `(Session, Service)`, shared copy-on-write.
+pub(crate) type BindTable = std::sync::Mutex<Arc<Vec<BindEntry>>>;
+pub(crate) type BindEntry = (SessionId, ServiceId, EffectiveBind);
+
+/// Mutate the live bind table in place. `Arc::make_mut` copies only when a
+/// reader still holds the current table, so the uncontended path allocates
+/// nothing.
+pub(crate) fn with_bind_table_mut<R>(
+    binds: &BindTable,
+    mutate: impl FnOnce(&mut Vec<BindEntry>) -> R,
+) -> R {
+    let mut table = binds.lock().unwrap_or_else(|p| p.into_inner());
+    mutate(Arc::make_mut(&mut *table))
+}
+
+/// Shared handle on the live bind table: clones the `Arc`, not the data, so the
+/// caller can copy the `Vec` after the critical section has ended.
+pub(crate) fn bind_table_shared(binds: &BindTable) -> Arc<Vec<BindEntry>> {
+    Arc::clone(&binds.lock().unwrap_or_else(|p| p.into_inner()))
 }
 
 #[cfg(any(feature = "client", feature = "server"))]
@@ -370,6 +396,9 @@ impl Counters {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        // Taken before the struct literal so the `binds` critical section is
+        // released before the (potentially large) table is copied.
+        let binds = bind_table_shared(&self.binds);
         Snapshot {
             connected: self.connected.load(Ordering::Relaxed) > 0,
             active_sessions: self.sessions.load(Ordering::Relaxed),
@@ -411,7 +440,7 @@ impl Counters {
             rejected_connections: self.rejected.load(Ordering::Relaxed),
             bytes_upstream: self.bytes_upstream.load(Ordering::Relaxed),
             bytes_downstream: self.bytes_downstream.load(Ordering::Relaxed),
-            effective_binds: self.binds.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            effective_binds: binds.as_ref().clone(),
         }
     }
 

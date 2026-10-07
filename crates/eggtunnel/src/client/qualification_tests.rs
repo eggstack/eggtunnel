@@ -66,6 +66,15 @@ async fn deterministic_service_state_sequence_preserves_invariants_for_10000_ste
                 } else {
                     1
                 };
+                // `unregister` cancels an in-flight registration for the same
+                // id, which resolves that waiter with `Cancelled`. The model
+                // must mirror it: the transaction really is gone.
+                if state
+                    .pending()
+                    .is_some_and(|pending| pending.service.id == ServiceId(id))
+                {
+                    waiter = None;
+                }
                 state.unregister(ServiceId(id));
             }
             5 => {

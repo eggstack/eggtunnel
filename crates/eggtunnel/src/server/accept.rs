@@ -82,6 +82,13 @@ impl AcceptContext {
         let deadline = tokio::time::Instant::now() + self.counters.policy.timeouts.shutdown_grace;
         let mut notified = HashSet::new();
         loop {
+            // Interest is registered before enumerating, so a Session that
+            // registers concurrently is always seen by this or a later pass:
+            // the drain wakes on the registration event instead of polling the
+            // registry every 25 ms for the whole grace period.
+            let changed = self.sessions.changed();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let active = SessionContext::live(&self.sessions);
             for session in &active {
                 if !notified.insert(session.id) {
@@ -98,10 +105,7 @@ impl AcceptContext {
                     );
                 }
             }
-            if tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_millis(25)))
-                .await
-                .is_err()
-            {
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
                 break;
             }
         }

@@ -34,8 +34,7 @@ pub(super) async fn accept_data_hello(
     counters: &Counters,
 ) -> Result<(), TunnelError> {
     let session = sessions
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entries()
         .get(&hello.session_id)
         .and_then(std::sync::Weak::upgrade);
     let Some(session) = session else {

@@ -100,11 +100,7 @@ impl ReconnectSupervisor {
         counters
             .services
             .store(0, std::sync::atomic::Ordering::Relaxed);
-        counters
-            .binds
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        crate::common::with_bind_table_mut(&counters.binds, |binds| binds.clear());
         match result {
             // `ResourceExhausted` is a local, unrecoverable condition (the
             // Session generation counter is spent); retrying it forever would

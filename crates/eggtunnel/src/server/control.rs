@@ -210,7 +210,7 @@ pub(super) async fn serve_control(admission: ControlAdmission) -> Result<(), Tun
                         if let Some(entry) = services.remove(&service_id) {
                             entry.cancel.cancel();
                             names.remove(entry.name.as_str());
-                            counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(sid, id, _)| *sid != session_id || *id != service_id);
+                            crate::common::with_bind_table_mut(&counters.binds, |binds| binds.retain(|(sid, id, _)| *sid != session_id || *id != service_id));
                             counters.services.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             remove_service_pending(&context, service_id).await;
                             tracing::info!(service_id = service_id.0, "Service listener removed");
@@ -405,11 +405,9 @@ where
         }
     };
     tracing::info!(service_id = service_id.0, service_name = register.name.as_str(), effective_address = %std::net::Ipv6Addr::from(effective.address), effective_port = effective.port, "Service listener bound");
-    counters
-        .binds
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .push((context.id, service_id, effective.clone()));
+    crate::common::with_bind_table_mut(&counters.binds, |binds| {
+        binds.push((context.id, service_id, effective.clone()));
+    });
     let service_cancel = context.cancel.child_token();
     let name = register.name.clone();
     children.spawn(run_service(

@@ -11,7 +11,8 @@ use std::{
 };
 
 use eggtunnel_proto::SessionId;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+use tokio::sync::futures::Notified;
+use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{Counters, TerminationCategory, TunnelError};
@@ -27,11 +28,33 @@ pub(super) type Principal = Option<[u8; 32]>;
 ///
 /// The map is guarded by a standard mutex: every critical section is a
 /// non-awaiting map operation, and `SessionGuard::drop` must be able to remove
-/// its entry deterministically.
-pub(super) type SessionRegistry = Arc<std::sync::Mutex<HashMap<SessionId, Weak<SessionContext>>>>;
+/// its entry deterministically. Registration also signals `changed` so
+/// shutdown drain can wake on the exact event rather than re-polling.
+pub(super) struct SessionRegistryInner {
+    entries: std::sync::Mutex<HashMap<SessionId, Weak<SessionContext>>>,
+    changed: Notify,
+}
+
+pub(super) type SessionRegistry = Arc<SessionRegistryInner>;
+
+impl SessionRegistryInner {
+    pub(super) fn entries(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<SessionId, Weak<SessionContext>>> {
+        self.entries.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Fires when a Session registers.
+    pub(super) fn changed(&self) -> Notified<'_> {
+        self.changed.notified()
+    }
+}
 
 pub(super) fn new_session_registry() -> SessionRegistry {
-    Arc::new(std::sync::Mutex::new(HashMap::new()))
+    Arc::new(SessionRegistryInner {
+        entries: std::sync::Mutex::new(HashMap::new()),
+        changed: Notify::new(),
+    })
 }
 
 /// Per-Session ownership record. One instance exists per authenticated control
@@ -64,20 +87,23 @@ impl SessionContext {
         registry: &SessionRegistry,
         max_sessions: usize,
     ) -> Result<(), TunnelError> {
-        let mut active = registry.lock().unwrap_or_else(|p| p.into_inner());
+        let mut active = registry.entries();
         active.retain(|_, weak| weak.strong_count() > 0);
         if active.len() >= max_sessions {
             return Err(TunnelError::ResourceExhausted);
         }
         active.insert(context.id, Arc::downgrade(context));
+        // Signalled with the lock released so a woken drain loop never
+        // contends with the registering control loop.
+        drop(active);
+        registry.changed.notify_waiters();
         Ok(())
     }
 
     /// Live Sessions with a strong reference, used by server shutdown drain.
     pub(super) fn live(registry: &SessionRegistry) -> Vec<Arc<SessionContext>> {
         registry
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .entries()
             .values()
             .filter_map(Weak::upgrade)
             .collect()
@@ -114,15 +140,11 @@ impl Drop for SessionGuard {
             .sessions
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         let removed = {
-            let mut binds = self
-                .context
-                .counters
-                .binds
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            let before = binds.len();
-            binds.retain(|(sid, _, _)| *sid != self.context.id);
-            before - binds.len()
+            crate::common::with_bind_table_mut(&self.context.counters.binds, |binds| {
+                let before = binds.len();
+                binds.retain(|(sid, _, _)| *sid != self.context.id);
+                before - binds.len()
+            })
         };
         self.context
             .counters
@@ -130,10 +152,7 @@ impl Drop for SessionGuard {
             .fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
         // The registry entry is removed here, on every exit path: a contended
         // drop must not leave a stale entry behind.
-        self.sessions
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.context.id);
+        self.sessions.entries().remove(&self.context.id);
     }
 }
 

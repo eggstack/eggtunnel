@@ -84,10 +84,24 @@ pub(super) async fn handle_open(open: Open, service: ClientService, context: Ope
     if let Err(error) = result {
         tracing::debug!(service_id = service.id.0, termination = ?error.termination_category(), "client data Open ended");
         if !cancel.is_cancelled() {
-            let _ = out.try_send(Message::OpenReject(OpenReject {
+            // A full control queue silently strands the server's pending
+            // entry — and its admission permit — until `pending_connection`
+            // expires. Count it so the condition is observable instead of
+            // looking like a healthy reject.
+            if let Err(send_error) = out.try_send(Message::OpenReject(OpenReject {
                 connection_id: open.connection_id,
                 code: 1,
-            }));
+            })) {
+                counters
+                    .rejected
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::debug!(
+                    service_id = service.id.0,
+                    category = "open_reject_dropped",
+                    ?send_error,
+                    "OpenReject was not queued"
+                );
+            }
         }
     }
 }

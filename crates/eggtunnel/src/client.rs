@@ -779,11 +779,9 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
         .await?;
         match handshake_read(&mut stream, counters.policy.timeouts.handshake).await? {
             Message::RegisterAck(ack) if ack.service_id == service.id => {
-                counters
-                    .binds
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push((session_id, service.id, ack.effective_bind.clone()));
+                crate::common::with_bind_table_mut(&counters.binds, |binds| {
+                    binds.push((session_id, service.id, ack.effective_bind.clone()));
+                });
                 tracing::info!(service_id = service.id.0, service_name = service.name.as_str(), effective_address = %std::net::Ipv6Addr::from(ack.effective_bind.address), effective_port = ack.effective_bind.port, "initial Service registered");
             }
             // Initial registration stays sequential in both modes; any
@@ -926,7 +924,9 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                             }
                             AckDisposition::Commit(service, reply) => (service, reply),
                         };
-                        counters.binds.lock().unwrap_or_else(|p| p.into_inner()).push((session_id, service.id, ack.effective_bind.clone()));
+                        crate::common::with_bind_table_mut(&counters.binds, |binds| {
+                            binds.push((session_id, service.id, ack.effective_bind.clone()));
+                        });
                         service_state.commit(service.clone());
                         counters.services.store(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
                         counters.high_water_services.fetch_max(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
@@ -1071,7 +1071,7 @@ async fn run_session(mut stream: BoxStream, context: SessionRun<'_>) -> Result<(
                         let was_present = service_state.unregister(id);
                         if was_present {
                             counters.services.store(service_state.active().len(), std::sync::atomic::Ordering::Relaxed);
-                            counters.binds.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, service_id, _)| *service_id != id);
+                            crate::common::with_bind_table_mut(&counters.binds, |binds| binds.retain(|(_, service_id, _)| *service_id != id));
                             tracing::info!(service_id = id.0, session_generation = generation, "Service unregistered");
                             write_control(&mut writer, &Message::UnregisterService(eggtunnel_proto::UnregisterService { service_id: id }), counters.policy.timeouts.handshake).await?;
                         } else {

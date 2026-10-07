@@ -320,13 +320,26 @@ impl ServiceState {
         }
     }
     pub fn unregister(&mut self, id: ServiceId) -> bool {
-        if let Some(pending) = self
+        // The legacy slot must be released, not just disarmed: leaving a
+        // reply-less `Some` behind would make `begin()` answer
+        // `ResourceExhausted` forever and would let its retained deadline
+        // force a whole-Session timeout. The generation is tombstoned so the
+        // late Ack for this id is benign cleanup instead of a terminal
+        // `Unexpected`.
+        if self
             .pending
-            .as_mut()
-            .filter(|pending| pending.service.id == id)
-            && let Some(reply) = pending.reply.take()
+            .as_ref()
+            .is_some_and(|pending| pending.service.id == id)
+            && let Some(mut pending) = self.pending.take()
         {
-            let _ = reply.send(Err(TunnelError::Cancelled));
+            let generation = pending.generation;
+            if let Some(reply) = pending.reply.take() {
+                let _ = reply.send(Err(TunnelError::Cancelled));
+            }
+            if self.abandoned.len() >= 256 {
+                self.abandoned.clear();
+            }
+            self.abandoned.insert(id, generation);
         }
         if let Some(mut txn) = self.in_flight.remove(&id)
             && let Some(reply) = txn.reply.take()
@@ -567,6 +580,39 @@ mod tests {
         ));
         assert!(matches!(first_rx.await.unwrap(), Err(TunnelError::Timeout)));
         assert_eq!(state.unacknowledged(), 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_releases_the_legacy_slot_while_a_transaction_is_in_flight() {
+        let mut state = ServiceState::new(vec![service(1, "initial")]);
+        let (reply, rx) = oneshot::channel();
+        state.begin(service(2, "inflight"), 4, reply).unwrap();
+        // The write already armed the acknowledgement deadline.
+        state.pending_mut().unwrap().deadline =
+            Some(Instant::now() + std::time::Duration::from_secs(10));
+        state.unregister(ServiceId(2));
+        assert!(matches!(rx.await.unwrap(), Err(TunnelError::Cancelled)));
+
+        // The slot is released: an unrelated registration is accepted again
+        // and the ceiling no longer counts a phantom transaction.
+        assert_eq!(state.unacknowledged(), 0);
+        let (reply, _rx) = oneshot::channel();
+        state.begin(service(3, "after"), 4, reply).unwrap();
+        // The abandoned deadline cannot force a Session-level timeout.
+        assert!(state.next_deadline().is_none());
+        assert!(matches!(state.expire_overdue(Instant::now()), Expiry::None));
+        // The late Ack for the cancelled id is benign cleanup.
+        assert!(matches!(
+            state.take_ack(ServiceId(2), 4),
+            AckDisposition::Abandoned
+        ));
+        // The in-flight transaction is still resolvable and commits normally.
+        let committed = match state.take_ack(ServiceId(3), 4) {
+            AckDisposition::Commit(s, _) => s,
+            _ => panic!("unrelated ack must still commit"),
+        };
+        state.commit(committed);
+        assert_eq!(state.desired().len(), 2);
     }
 
     #[tokio::test]

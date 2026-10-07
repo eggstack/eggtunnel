@@ -39,7 +39,7 @@ mod tests {
         session_id: SessionId,
     ) -> (
         Arc<SessionContext>,
-        Arc<std::sync::Mutex<HashMap<SessionId, std::sync::Weak<SessionContext>>>>,
+        crate::server::session::SessionRegistry,
         Counters,
     ) {
         let counters = Counters::default();
@@ -52,10 +52,9 @@ mod tests {
             control_tx: Mutex::new(None),
             counters: counters.clone(),
         });
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = crate::server::session::new_session_registry();
         sessions
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .entries()
             .insert(session_id, Arc::downgrade(&context));
         (context, sessions, counters)
     }
@@ -256,16 +255,13 @@ mod tests {
             SessionContext::register(&context, &registry, MAX_SESSIONS)
                 .unwrap();
             let _guard = crate::server::session::SessionGuard::new(context.clone(), registry.clone());
-            assert_eq!(registry.lock().unwrap_or_else(|p| p.into_inner()).len(), 1);
+            assert_eq!(registry.entries().len(), 1);
             context
         };
         // The guard is gone, and the registry entry it owned is gone with it.
         drop(live);
         assert!(
-            registry
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .is_empty(),
+            registry.entries().is_empty(),
             "a dropped Session must not leave a registry entry behind"
         );
         assert_eq!(live_counters.sessions.load(std::sync::atomic::Ordering::Relaxed), 0);

@@ -1051,3 +1051,79 @@ async fn control_writes_are_bounded_by_their_budget() {
         crate::common::TerminationCategory::Timeout
     );
 }
+
+/// A connector that always refuses, so `handle_open` takes the error path that
+/// owes the server an `OpenReject`.
+struct RefusingConnector;
+
+impl TargetConnector for RefusingConnector {
+    fn connect(&self, _service: ClientService, _context: TargetContext) -> TargetFuture {
+        Box::pin(async { Err(TargetError::Refused) })
+    }
+}
+
+fn open_context(out: mpsc::Sender<Message>, counters: Counters) -> OpenContext {
+    OpenContext {
+        transport: ClientDataTransport::TcpTls {
+            endpoint: Endpoint::parse("127.0.0.1:1").unwrap(),
+            server_name: "localhost".to_owned(),
+            tls: super::build_tls_config(None).unwrap(),
+            websocket: false,
+            #[cfg(feature = "outbound-proxy")]
+            outbound: None,
+        },
+        connector: Arc::new(RefusingConnector),
+        session_id: eggtunnel_proto::SessionId([1; 16]),
+        cancel: CancellationToken::new(),
+        out,
+        counters,
+    }
+}
+
+fn refused_open() -> (Open, ClientService) {
+    let service = ClientService::new(
+        ServiceId(7),
+        ServiceName::new("refused").unwrap(),
+        RequestedBind::Loopback { port: 0 },
+        TcpTarget::new("127.0.0.1", 80).unwrap(),
+    );
+    (
+        Open {
+            service_id: service.id,
+            connection_id: eggtunnel_proto::ConnectionId([9; 16]),
+        },
+        service,
+    )
+}
+
+#[tokio::test]
+async fn open_reject_is_queued_when_the_control_queue_has_room() {
+    let counters = Counters::default();
+    let (out, mut rx) = mpsc::channel(1);
+    let (open, service) = refused_open();
+    handle_open(open, service, open_context(out, counters.clone())).await;
+    assert!(matches!(rx.try_recv(), Ok(Message::OpenReject(_))));
+    assert_eq!(
+        counters.rejected.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a delivered OpenReject is not a rejection"
+    );
+}
+
+#[tokio::test]
+async fn undeliverable_open_reject_is_counted_instead_of_dropped_silently() {
+    let counters = Counters::default();
+    let (out, _rx) = mpsc::channel::<Message>(1);
+    // Saturate the queue so the `OpenReject` cannot be handed to the control
+    // loop: the server keeps its pending entry and admission permit until
+    // `pending_connection` expires, so the loss must be observable.
+    out.try_send(Message::Ping(eggtunnel_proto::Ping { nonce: 1 }))
+        .expect("queue has room for the sentinel");
+    let (open, service) = refused_open();
+    handle_open(open, service, open_context(out, counters.clone())).await;
+    assert_eq!(
+        counters.rejected.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "an OpenReject that could not be queued must be counted"
+    );
+}

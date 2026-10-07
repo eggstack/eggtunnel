@@ -55,6 +55,9 @@ configuration limits are in [the support matrix](SUPPORT.md).
 Use `ServerConfig`, `Server::bind`, and `ServerHandle`. The server owns
 requested service listeners and authorizes binds through `BindPolicy`.
 `ServerHandle::snapshot` reports current and high-water resource counts.
+`ServerHandle::effective_binds` returns just the live
+`(Session, Service, EffectiveBind)` set, for callers that poll only for bind
+changes and do not want the rest of the snapshot rebuilt each time.
 `Server::shutdown().await` sends a bounded drain before joining the server
 task. `Server::bind_mtls` is available with the `mtls` feature.
 

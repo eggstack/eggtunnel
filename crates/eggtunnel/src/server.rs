@@ -20,6 +20,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{BindPolicy, Counters, RuntimePolicy, TunnelError};
+use eggtunnel_proto::{EffectiveBind, ServiceId, SessionId};
 
 mod accept;
 mod auth;
@@ -54,6 +55,16 @@ pub struct ServerHandle {
 impl ServerHandle {
     pub fn snapshot(&self) -> crate::common::Snapshot {
         self.counters.snapshot()
+    }
+    /// The live `(Session, Service, EffectiveBind)` set on its own.
+    ///
+    /// Equivalent to `snapshot().effective_binds` but without building the
+    /// rest of the snapshot, so a caller that polls only for bind changes does
+    /// not take the termination and heartbeat locks several times a second.
+    pub fn effective_binds(&self) -> Vec<(SessionId, ServiceId, EffectiveBind)> {
+        crate::common::bind_table_shared(&self.counters.binds)
+            .as_ref()
+            .clone()
     }
     pub fn shutdown(&self) {
         self.cancel.cancel();

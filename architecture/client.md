@@ -162,13 +162,16 @@ cancel token, counters, and command channel.
   - `unregister_service(id)` (`client.rs:91-101`) → sends
     `ClientCommand::Unregister{ id, reply }` and awaits the reply;
     `Err(Cancelled)` on local cancel, `Err(Disconnected)` if the loop is
-    gone. Semantics: `ServiceState::unregister` (`service_state.rs:322-338`)
+    gone. Semantics: `ServiceState::unregister` (`service_state.rs:322-351`)
     prunes the id from `desired` *and* `active` (so it is not re-registered
     on reconnect) and cancels a matching pending registration with
-    `Cancelled`. In legacy-serial mode the slot survives with
-    `pending.reply = None`, so its late ack resolves as `Abandoned`
-    (`service_state.rs:275-281`) and is unregistered on the wire without
-    mutating desired state (`client.rs:920-926`). The Session loop
+    `Cancelled`. In legacy-serial mode the transaction is *released*, not
+    merely disarmed: the slot is cleared and its generation tombstoned, so
+    the late ack resolves as `Abandoned` (`service_state.rs:256-283`) and is
+    unregistered on the wire without mutating desired state
+    (`client.rs:920-926`). Releasing matters — leaving a reply-less `Some`
+    would make every later `begin()` answer `ResourceExhausted` and would let
+    the retained deadline end the whole Session. The Session loop
     additionally prunes the `services` counter and `binds` and writes
     `UnregisterService` (`client.rs:1070-1085`). Replies `Ok(())` even if
     the id was unknown (still writes the frame, best-effort).
@@ -370,12 +373,13 @@ Dynamic ack detail (`crates/eggtunnel/src/client.rs:916-954`):
 
 Ordering subtlety: in correlated mode `unregister` removes an in-flight
 transaction outright without leaving a tombstone
-(`client/service_state.rs:331-335`), so a late `RegisterAck`/`RegisterReject`
+(`client/service_state.rs:344-348`), so a late `RegisterAck`/`RegisterReject`
 for it is `Unexpected`/`Unknown` and fails the Session closed. The
 write-timeout path is the one that tombstones (`abandon`,
 `client/service_state.rs:310-321`, bounded at 256 entries and cleared per
-Session switch), and only the legacy `pending` slot survives `unregister`
-with `reply = None` (`client/service_state.rs:322-330`).
+Session switch). `unregister` tombstones too, but only for the legacy
+`pending` slot (`client/service_state.rs:322-343`), whose late ack must
+therefore be `Abandoned` rather than `Unexpected`.
 
 `OpenReject` codes are client-originated advisory signals (1 = refused /
 unknown / target failure; 2 = overloaded). The client also *receives* no
@@ -585,9 +589,9 @@ drives:
 | `connected` | `client.rs:799-801` (set 1), cleared `client/reconnect.rs:97-99` (set 0) | Bool view over atomic. |
 | `registered_services` (`services`) | `client.rs:802-805`, `client.rs:931,1073`, cleared `client/reconnect.rs:100-102` | Set from `active.len()` on initial ready + dynamic commits; decremented on `Unregister`; zeroed on reconnect. High-water via `high_water_services` (`client.rs:932`). |
 | `active_sessions` (`sessions`) | `client.rs:806-808` + `CounterGuard` zero on exit | Always 0/1 for a client (single session). |
-| `effective_binds` | `client.rs:782-786,929`, pruned `client.rs:1074`, cleared `client/reconnect.rs:103-107` | `(SessionId, ServiceId, EffectiveBind)` — the only place the client learns server-chosen addresses. CLI/`check` flows poll this. |
+| `effective_binds` | `client.rs:782-784,927-929`, pruned `client.rs:1074`, cleared `client/reconnect.rs:103` | `(SessionId, ServiceId, EffectiveBind)` — the only place the client learns server-chosen addresses. Copy-on-write behind the mutex (`common.rs:376-388`), so the snapshot copies outside the lock. |
 | `reconnects` | `client/reconnect.rs:150-152` (shared `backoff`, all transports) | Incremented per failed session (not on clean cancel). `client_reconnects_and_restores_services_in_a_new_session_generation` (`server_tests/tcp.rs:1180`) asserts `>0`. |
-| `rejected_connections` (`rejected`) | `client.rs:875, 883` (Open-path unknown-service + overload only) | `handle_open` failures do *not* bump `rejected` **and** do not call `record_termination` — they only trace and send `OpenReject code=1`. Gap: a target or data-dial failure is invisible in `Snapshot`; see §4 step 5. |
+| `rejected_connections` (`rejected`) | `client.rs:873,881` (Open-path unknown-service + overload), `client/open.rs:96-97` (`OpenReject` that could not be queued) | A target/data-dial failure still does *not* bump `rejected` — it traces and sends `OpenReject code=1`. The one exception is delivery failure: a full control queue means the server keeps its pending entry and admission permit until `pending_connection` expires, so that drop is now counted (and logged as `open_reject_dropped`) rather than silent. A *delivered* reject is not counted. |
 | `bytes_upstream/downstream` | `client/open.rs:74-79` (both success and failure reports) | Bounded `u64` totals; asserted `>0` in roundtrip tests. |
 | `active_client_open_tasks` + high-water | `OpenTaskGuard` (constructed `client.rs:891-894`, guard `client.rs:1209-1226`) | `fetch_add` + `fetch_max`; asserted `>=1` after relay. |
 | `heartbeat` (`HeartbeatSnapshot`) | `record_heartbeat_missed` (`client.rs:842, 848`), `record_heartbeat_pong` (`client.rs:913`), reset per generation in `begin_session` (`common.rs:441`) | Bounded per-Session view only: `session_generation`, `last_pong_age_ms`, `latest_rtt_ms`, `missed_heartbeats` (`common.rs:179-186`, `common.rs:395-409`). At most one Ping outstanding (`client/heartbeat.rs:5-43`). `docs/EMBEDDING.md:80-82` states the same contract. |

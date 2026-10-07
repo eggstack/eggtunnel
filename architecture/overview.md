@@ -258,7 +258,7 @@ the only party that binds. `server.rs` is the coordinator; the runtime lives in
   `quic-server`, `websocket-client`, `websocket-server` slices), `msrv` (1.89),
   and `minimal-dependencies` (proves minimal slices pull no unrequested
   quic/websocket/outbound deps).
-- Test volume on the current tree: library **131** passed + 3 ignored (opt-in
+- Test volume on the current tree: library **134** passed + 3 ignored (opt-in
   soak/fuzz), CLI bin **16**, CLI integration **7**, proto **11**.
 - Supply chain: Eggress pinned `=1.0.8`, `deny.toml` enforces permissive-only
   licenses (GPL/AGPL/LGPL denied; 10-entry allow, 4 clarifies), and

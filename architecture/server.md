@@ -487,15 +487,19 @@ delta (`server/session.rs:116-130`) — a deliberate single-source-of-truth choi
 ### 5.4 Shutdown with `shutdown_grace` (default 1 s)
 
 TCP (`server/accept.rs:163-165`) and QUIC (`server/accept.rs:235-237`) share
-`AcceptContext::drain` (`server/accept.rs:79-113`):
+`AcceptContext::drain` (`server/accept.rs:79-116`):
 
 1. Break accept loop on `cancel`.
 2. Loop until the grace deadline: upgrade weak sessions → `active`,
    `try_send(Drain{deadline_ms: grace_ms})` to each not-yet-notified
    `control_tx` (bounded, so never blocks shutdown; a full queue logs
-   `drain_queue_full`), re-collecting every 25 ms so a Session that appears
-   mid-grace still gets notified.
-3. `sleep` until `timeouts.shutdown_grace` — gives clients 1 s to observe `Drain`.
+   `drain_queue_full`), re-collecting on each `SessionRegistryInner::changed`
+   signal (`server/session.rs:47-49`, fired by `register` at
+   `server/session.rs:99`) so a Session that appears mid-grace still gets
+   notified without polling the registry. Interest is registered with
+   `Notified::enable` *before* the sweep, so a registration racing the sweep
+   cannot be missed.
+3. Wait until `timeouts.shutdown_grace` — gives clients 1 s to observe `Drain`.
 4. Cancel every session token (cascades via `child_token` to services/relays).
 5. `handlers.abort_all()` + drain `join_next` (records panics).
 
@@ -665,7 +669,7 @@ The server updates every field except `connected`, `reconnects`,
 | `task_panics`, `last_termination` | `record_join_result` on every `JoinSet` drain (§5.5); `record_termination` on handler errors, admission-full, session-full, service-ceiling |
 | `rejected_connections` | every auth/reg/pending/data-hello/admission denial (§6.3) |
 | `bytes_upstream/downstream` | relay reports incl. failure partials (`server/service.rs:125-134`) |
-| `effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>` | push on register (`server/control.rs:408-412`), retain on unregister (`server/control.rs:213`), retain on session exit (`server/session.rs:124`); CLI polls it every 250 ms |
+| `effective_binds: Vec<(SessionId, ServiceId, EffectiveBind)>` | copy-on-write behind the mutex (`common.rs:376-395`) so the snapshot copies the table *outside* the critical section; push on register (`server/control.rs:408-410`), retain on unregister (`server/control.rs:213`), retain on session exit (`server/session.rs:143`), cleared on client reconnect (`client/reconnect.rs:103`); the server CLI polls it every 250 ms via `ServerHandle::effective_binds` (`server.rs:64`) rather than a full snapshot |
 | `resource_limits` | `policy.limits` (`common.rs:394`) — echoes the **selected** `RuntimePolicy` (128/64/128/128/64/128/128/32 incl. `client_command_queue: 32` by default, `common.rs:249-261`), pinned by `server_tests/tcp.rs:882` |
 
 `last_termination` retains only the most recent category, never history or

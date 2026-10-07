@@ -29,6 +29,37 @@ Cutting a release requires a version bump plus a wire-version note (see
   (`quic-client`/`quic-server`, `websocket-client`/`websocket-server`), so an
   embedder can compile one transport role without the other role's code.
 
+### Fixed
+
+- `ClientHandle::unregister_service` no longer wedges the legacy-serial
+  registration slot. Unregistering a Service while its registration was still
+  in flight against a `1.0` peer used to leave the slot occupied with no reply
+  channel: every later dynamic registration on that Session was refused with
+  `ResourceExhausted`, one slot of the per-Session service ceiling was consumed
+  for the rest of the Session, and the retained acknowledgement deadline
+  eventually ended the whole Session and reconnected all Services. The
+  transaction is now released and its generation tombstoned, so a late
+  acknowledgement is benign cleanup.
+- An `OpenReject` the client could not queue (full control queue) is now
+  counted in `Snapshot::rejected_connections` and logged as
+  `open_reject_dropped`. It was previously discarded silently while the server
+  kept the pending entry — and its admission permit — until
+  `pending_connection` expired.
+- `eggtunnel server` and `eggtunnel client` register the Ctrl-C handler once
+  instead of rebuilding the signal future on every 250 ms tick, which left
+  brief windows with no live listener.
+
+### Performance
+
+- The effective-bind table is copy-on-write behind its mutex, so `Snapshot`
+  copies it outside the critical section instead of blocking service
+  registration and unregistration for the length of a full table clone.
+- Added `ServerHandle::effective_binds` for callers that poll only for bind
+  changes, and the default (non-`--json`) client CLI path no longer builds a
+  full `Snapshot` four times a second. Additive: no existing API changed.
+- Server shutdown drain wakes on Session registration instead of re-enumerating
+  the Session registry every 25 ms for the whole grace period.
+
 ### Unchanged
 
 - No configuration or Rust API break for existing users: existing TOML files

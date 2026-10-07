@@ -146,10 +146,9 @@ use super::*;
             control_tx: Mutex::new(None),
             counters: counters.clone(),
         });
-        let sessions = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let sessions = crate::server::session::new_session_registry();
         sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entries()
             .insert(session_id, Arc::downgrade(&session));
         let connection_id = eggtunnel_proto::ConnectionId([12; 16]);
         let (data_tx, _data_rx) = oneshot::channel();

@@ -995,11 +995,16 @@ async fn run_server(
     let mut printed = std::collections::HashSet::new();
     let mut refresh = tokio::time::interval(std::time::Duration::from_millis(250));
     let mut snapshot_tick = futures_time_tick(snapshot_every);
+    // One signal registration for the whole loop: rebuilding it per tick
+    // churns a signal handler 4x/second and leaves a window in which a
+    // delivered SIGINT has no live listener.
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
+            _ = &mut ctrl_c => break,
             _ = refresh.tick() => {
-                let binds = handle.snapshot().effective_binds;
+                let binds = handle.effective_binds();
                 // Prune ended Sessions so `printed` stays bounded across
                 // churn instead of growing forever.
                 let live: std::collections::HashSet<_> = binds
@@ -1082,30 +1087,42 @@ async fn run_client(
         println!("client started; waiting for authenticated session");
     }
     let handle = client.handle();
-    let mut refresh = tokio::time::interval(std::time::Duration::from_millis(250));
     let mut snapshot_tick = futures_time_tick(snapshot_every);
     let mut was_connected = false;
+    // The refresh tick exists solely to emit `session_ready`/`session_lost`
+    // under `--json`; on the default path it produced no output at all, so it
+    // is not polled and the periodic full snapshot disappears with it.
+    // `snapshot_tick` still drives the unconditional `--json` snapshot stream.
+    let mut refresh = json.then(|| tokio::time::interval(std::time::Duration::from_millis(250)));
+    // One signal registration for the whole loop: rebuilding it per tick
+    // churns a signal handler 4x/second and leaves a window in which a
+    // delivered SIGINT has no live listener.
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = refresh.tick() => {
+            _ = &mut ctrl_c => break,
+            _ = async {
+                match refresh.as_mut() {
+                    Some(ticker) => ticker.tick().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 let snapshot = handle.snapshot();
-                if json {
-                    if snapshot.connected && !was_connected {
-                        print_json(&serde_json::json!({
-                            "schema": EVENT_SCHEMA,
-                            "event": "session_ready",
-                            "generation": snapshot.heartbeat.session_generation,
-                            "registered_services": snapshot.registered_services,
-                        }));
-                    } else if !snapshot.connected && was_connected {
-                        print_json(&serde_json::json!({
-                            "schema": EVENT_SCHEMA,
-                            "event": "session_lost",
-                            "termination": snapshot.last_termination.map(|t| format!("{t:?}")),
-                            "reconnects": snapshot.reconnects,
-                        }));
-                    }
+                if snapshot.connected && !was_connected {
+                    print_json(&serde_json::json!({
+                        "schema": EVENT_SCHEMA,
+                        "event": "session_ready",
+                        "generation": snapshot.heartbeat.session_generation,
+                        "registered_services": snapshot.registered_services,
+                    }));
+                } else if !snapshot.connected && was_connected {
+                    print_json(&serde_json::json!({
+                        "schema": EVENT_SCHEMA,
+                        "event": "session_lost",
+                        "termination": snapshot.last_termination.map(|t| format!("{t:?}")),
+                        "reconnects": snapshot.reconnects,
+                    }));
                 }
                 was_connected = snapshot.connected;
             }
