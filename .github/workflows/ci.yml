@@ -18,7 +18,7 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
       - run: cargo check --locked --manifest-path fixtures/embedder/Cargo.toml
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-audit,cargo-deny
       - run: cargo audit
