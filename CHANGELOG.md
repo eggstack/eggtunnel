@@ -9,6 +9,11 @@ Cutting a release requires a version bump plus a wire-version note (see
 
 ### Changed
 
+- Dependency and CI action updates (Dependabot batch): `toml` 1.1 for the CLI,
+  `serde_json` 1.0.154, `tokio` 1.53.3, `tokio-rustls` 0.26.6, `zeroize` 1.9.1,
+  `actions/upload-artifact` 7.0.2, `actions/download-artifact` 8.0.2,
+  `taiki-e/install-action` 2.90.2; `rustls` 0.23.46, `webpki-roots` 1.0.11, and
+  related transitive bumps so `cargo audit` stays clean.
 - **Wire protocol is now v1.1** (was `1.0` in the published `0.2.0` artifact),
   with `1.0` fallback. Extension behavior is gated on negotiated capabilities
   only, never on the minor number. The crate version is independent of the wire
